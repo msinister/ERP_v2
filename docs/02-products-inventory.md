@@ -50,30 +50,49 @@ Products with multi-level packaging (e.g., kratom tablets):
 
 ## Variants
 
-**Flat model.** Each color/flavor/size = its own SKU. Optional `variant_group` field for displaying grouped on customer-facing surfaces. Inventory and costing are always per-SKU.
+**Parent product + child variant model.** A `Product` is the grouping/display record (name, descriptions, brand, category, images, weight/dims, base price). Each sellable color/flavor/size is a `ProductVariant` row that belongs to a parent `Product`.
+
+**Why this differs from the original spec.** The original spec called for a flat model where each color/flavor/size was its own top-level SKU joined only by a `variant_group` field. The implemented model uses a real parent/child relationship. Reasons:
+- Catalog screens need a single product entry with its variants nested under it (matches Shopify's product/variant model — keeps sync simple).
+- Shared marketing fields (name, long description, images, brand, category, weight, dims) live on the parent and aren't duplicated across every variant.
+- Variant-specific fields (color, flavor, size, variant-level SKU, optional `variantGroup`) live on the child.
+
+**Inventory and costing still operate at the variant level.** Each `ProductVariant` is its own SKU for stock purposes:
+- `InventoryItem` is keyed on `(variantId, warehouseId)` — one onHand/reserved row per variant per warehouse.
+- `InventoryMovement` (the ledger) records every receive/consume/adjust/transfer at the variant level.
+- FIFO layers and WAC, when added, will also be keyed per variant per warehouse.
+- Pricing resolver runs per variant.
+
+**The parent `Product` is a grouping/display record only**, not an inventory or costing entity. Querying "stock of product X" means summing across the product's variants; stock of a specific SKU is a single variant lookup.
+
+A simple product with no variant axes still has exactly one `ProductVariant` child (one-to-one in practice). This keeps a single code path for inventory/movements/pricing.
 
 ## Product attributes
 
-| Field | Purpose |
-|-------|---------|
-| SKU | Primary identifier, follows vendor SKU when possible |
-| Manufacturer part number | Vendor reference |
-| Title / name | Display |
-| Long description | Detailed product info |
-| Short description | Card / list view |
-| Brand | Filter / category |
-| Category | Filter / hierarchy |
-| Tags | Free-form categorization |
-| Images | Multiple, primary flag |
-| Weight | For shipping calc |
-| Dimensions (L × W × H) | For shipping calc + dimensional weight |
-| Country of origin | Customs / 1099 |
-| HS code | Customs |
-| Hazmat flag | Shipping restrictions |
-| Color, flavor, size, etc. | Variant attributes |
-| Production tag | Free-text (e.g., "12-14 DAY PRODUCTION", "EXPRESS"); prints on docs |
-| Vendor | Primary vendor (single, with case-by-case multi-vendor handling) |
-| Active / draft | Synced from Shopify (only `active` flows into ERP) |
+Fields below split between **Product** (parent, grouping/display) and **Variant** (child, per-SKU). Where unmarked, the field lives on the parent.
+
+| Field | Lives on | Purpose |
+|-------|----------|---------|
+| SKU | Variant | Primary identifier per sellable unit, follows vendor SKU when possible |
+| Manufacturer part number | Variant | Vendor reference |
+| Title / name | Product | Display |
+| Variant name | Variant | Per-variant display label (e.g., "Red / 2oz") |
+| Long description | Product | Detailed product info |
+| Short description | Product | Card / list view |
+| Brand | Product | Filter / category |
+| Category | Product | Filter / hierarchy |
+| Tags | Product | Free-form categorization |
+| Images | Product | Multiple, primary flag (variant-specific images deferred) |
+| Weight | Product | For shipping calc (variant-level override deferred) |
+| Dimensions (L × W × H) | Product | For shipping calc + dimensional weight |
+| Country of origin | Product | Customs / 1099 |
+| HS code | Product | Customs |
+| Hazmat flag | Product | Shipping restrictions |
+| Color, flavor, size | Variant | Variant attributes |
+| `variantGroup` | Variant | Optional grouping label for customer-facing surfaces |
+| Production tag | Product | Free-text (e.g., "12-14 DAY PRODUCTION", "EXPRESS"); prints on docs |
+| Vendor | Product | Primary vendor (single, with case-by-case multi-vendor handling) |
+| Active / draft | Product + Variant | Each can be independently active; Shopify only flows `active` into ERP |
 
 **SKU convention:** follow vendor's SKU. On collision, manually create unique SKU and contact vendor to flag.
 

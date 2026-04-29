@@ -20,6 +20,35 @@ enum InventoryMovementType {
   CONSUME
   TRANSFER_OUT
   TRANSFER_IN
+  RECEIVE_REVERSE
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  CONFIRMED
+  PARTIALLY_RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+enum ReceiptStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  STATUS_CHANGE
+  VOID
+  REVERSE
+  REFUND
+  PERMISSION_CHANGE
+  CONFIG_CHANGE
+  LOGIN
+  LOGOUT
 }
 
 model Product {
@@ -64,9 +93,11 @@ model ProductVariant {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  product   Product             @relation(fields: [productId], references: [id])
-  inventory InventoryItem[]
-  movements InventoryMovement[]
+  product            Product             @relation(fields: [productId], references: [id])
+  inventory          InventoryItem[]
+  movements          InventoryMovement[]
+  purchaseOrderLines PurchaseOrderLine[]
+  receiptLines       ReceiptLine[]
 
   @@index([productId])
 }
@@ -80,8 +111,11 @@ model Warehouse {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  inventory InventoryItem[]
-  movements InventoryMovement[]
+  inventory          InventoryItem[]
+  movements          InventoryMovement[]
+  purchaseOrderLines PurchaseOrderLine[]
+  receipts           Receipt[]
+  receiptLines       ReceiptLine[]
 }
 
 model InventoryItem {
@@ -112,11 +146,157 @@ model InventoryMovement {
   createdById     String?
   createdAt       DateTime              @default(now())
 
-  variant   ProductVariant @relation(fields: [variantId], references: [id])
-  warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
+  variant     ProductVariant @relation(fields: [variantId], references: [id])
+  warehouse   Warehouse      @relation(fields: [warehouseId], references: [id])
+  receiptLine ReceiptLine?
 
   @@index([variantId, warehouseId, createdAt])
   @@index([type, createdAt])
   @@index([reference])
   @@index([transferGroupId])
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  userId     String?
+  action     AuditAction
+  entityType String
+  entityId   String
+  beforeJson Json?
+  afterJson  Json?
+  reason     String?
+  ipAddress  String?
+  createdAt  DateTime    @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+}
+// Generic monotonic sequence with optional annual reset. Allocate via
+// SELECT ... FOR UPDATE inside a transaction (lib/sequences/sequences.ts).
+// Reused by PO numbering, Receipt numbering, and (later) Bill, SO, Invoice.
+model Sequence {
+  name         String   @id
+  currentValue Int      @default(0)
+  year         Int?
+  updatedAt    DateTime @updatedAt
+}
+
+// Minimal vendor stub. Full Vendor master (contacts, payment methods, terms,
+// drop-ship/stock flags, commission rate, shadow-customer link, etc.) lands
+// in its own slice (see docs/04-vendors-purchasing.md). For now POs and
+// Receipts need *something* to FK against — this row holds the bare minimum.
+// EXPAND LATER.
+model Vendor {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  name      String
+  active    Boolean   @default(true)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+  receipts       Receipt[]
+}
+
+model PurchaseOrder {
+  id                  String              @id @default(cuid())
+  number              String              @unique
+  vendorId            String
+  status              PurchaseOrderStatus @default(DRAFT)
+  expectedReceiveDate DateTime?
+  currency            String?             @default("USD")
+  notes               String?
+  createdById         String?
+  confirmedAt         DateTime?
+  closedAt            DateTime?
+  cancelledAt         DateTime?
+  deletedAt           DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  vendor Vendor              @relation(fields: [vendorId], references: [id])
+  lines  PurchaseOrderLine[]
+
+  @@index([vendorId, status])
+  @@index([status, expectedReceiveDate])
+  @@index([deletedAt])
+}
+
+model PurchaseOrderLine {
+  id                     String    @id @default(cuid())
+  purchaseOrderId        String
+  variantId              String
+  warehouseId            String
+  qtyOrdered             Decimal   @db.Decimal(18, 5)
+  qtyReceived            Decimal   @default(0) @db.Decimal(18, 5)
+  unitCost               Decimal   @db.Decimal(18, 5)
+  vendorSku              String?
+  manufacturerPartNumber String?
+  notes                  String?
+  deletedAt              DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  purchaseOrder PurchaseOrder  @relation(fields: [purchaseOrderId], references: [id])
+  variant       ProductVariant @relation(fields: [variantId], references: [id])
+  warehouse     Warehouse      @relation(fields: [warehouseId], references: [id])
+  receiptLines  ReceiptLine[]
+
+  @@index([purchaseOrderId])
+  @@index([variantId])
+  @@index([warehouseId])
+}
+
+model Receipt {
+  id          String        @id @default(cuid())
+  number      String        @unique
+  vendorId    String
+  warehouseId String
+  status      ReceiptStatus @default(DRAFT)
+  receivedAt  DateTime?
+  postedById  String?
+  notes       String?
+  deletedAt   DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  vendor    Vendor        @relation(fields: [vendorId], references: [id])
+  warehouse Warehouse     @relation(fields: [warehouseId], references: [id])
+  lines     ReceiptLine[]
+
+  @@index([vendorId, status])
+  @@index([warehouseId, receivedAt])
+  @@index([deletedAt])
+}
+
+// PO ↔ Receipt M:N is realized by: many ReceiptLines pointing at one POLine
+// (a PO line can be received in multiple shipments) and a single Receipt
+// having ReceiptLines pointing at POLines from different POs (one shipment
+// covering multiple POs). No separate join table is needed.
+model ReceiptLine {
+  id                  String    @id @default(cuid())
+  receiptId           String
+  purchaseOrderLineId String?
+  variantId           String
+  warehouseId         String
+  qtyReceived         Decimal   @db.Decimal(18, 5)
+  unitCost            Decimal   @db.Decimal(18, 5)
+  inventoryMovementId String?   @unique
+  notes               String?
+  deletedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  receipt           Receipt            @relation(fields: [receiptId], references: [id])
+  purchaseOrderLine PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id])
+  variant           ProductVariant     @relation(fields: [variantId], references: [id])
+  warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
+  inventoryMovement InventoryMovement? @relation(fields: [inventoryMovementId], references: [id])
+
+  @@index([receiptId])
+  @@index([purchaseOrderLineId])
+  @@index([variantId, warehouseId])
 }

@@ -34,6 +34,13 @@ export const consumeInputSchema = z.object({
   qty: positiveDecimal,
 });
 
+// reverseReceive accepts a positive qty (the amount to reverse) and writes a
+// movement with signed quantity = -qty under type RECEIVE_REVERSE.
+export const reverseReceiveInputSchema = z.object({
+  ...baseFields,
+  qty: positiveDecimal,
+});
+
 export const transferInputSchema = z
   .object({
     variantId: z.string().min(1),
@@ -53,3 +60,4 @@ export type AdjustmentInput = z.infer<typeof adjustmentInputSchema>;
 export type ReceiveInput = z.infer<typeof receiveInputSchema>;
 export type ConsumeInput = z.infer<typeof consumeInputSchema>;
 export type TransferInput = z.infer<typeof transferInputSchema>;
+export type ReverseReceiveInput = z.infer<typeof reverseReceiveInputSchema>;
