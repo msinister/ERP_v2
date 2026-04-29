@@ -14,6 +14,17 @@ enum ProductType {
   SERVICE
 }
 
+enum InventoryMovementType {
+  RECEIPT
+  SALE
+  RETURN
+  ADJUSTMENT
+  TRANSFER_OUT
+  TRANSFER_IN
+  BUILD_CONSUME
+  BUILD_RECEIPT
+}
+
 model Product {
   id               String      @id @default(cuid())
   sku              String      @unique
@@ -56,8 +67,9 @@ model ProductVariant {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  product   Product         @relation(fields: [productId], references: [id])
+  product   Product             @relation(fields: [productId], references: [id])
   inventory InventoryItem[]
+  movements InventoryMovement[]
 
   @@index([productId])
 }
@@ -72,6 +84,7 @@ model Warehouse {
   updatedAt DateTime  @updatedAt
 
   inventory InventoryItem[]
+  movements InventoryMovement[]
 }
 
 model InventoryItem {
@@ -88,4 +101,23 @@ model InventoryItem {
 
   @@unique([variantId, warehouseId])
   @@index([warehouseId])
+}
+
+model InventoryMovement {
+  id          String                @id @default(cuid())
+  variantId   String
+  warehouseId String
+  type        InventoryMovementType
+  qty         Decimal               @db.Decimal(18, 5)
+  reference   String?
+  notes       String?
+  createdById String?
+  createdAt   DateTime              @default(now())
+
+  variant   ProductVariant @relation(fields: [variantId], references: [id])
+  warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
+
+  @@index([variantId, warehouseId, createdAt])
+  @@index([type, createdAt])
+  @@index([reference])
 }
