@@ -47,6 +47,14 @@ These drive worklists and dashboards, not filterable statuses.
 - **At Closed:** On Hand decreases, Reserved decreases (stock physically leaves)
 - **Drop-ship lines:** no inventory effect at any stage
 
+### Pickup orders skip Dispatched
+
+Customer-pickup orders go directly `CONFIRMED → CLOSED` without passing through
+`DISPATCHED` (no warehouse pick/pack cycle is needed — the customer takes the
+goods at the counter). The close path treats the two source statuses
+identically: it consumes inventory and zeroes out reservations the same way.
+`DISPATCHED` is reserved for orders that go through the pick/pack workflow.
+
 ## Auto-split at Confirmed (drop-ship)
 
 When an order has mixed your-stock + drop-ship lines:
