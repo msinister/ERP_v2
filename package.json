@@ -8,7 +8,8 @@
       "lint": "next lint",
       "typecheck": "tsc --noEmit",
       "prisma:generate:tenant": "prisma generate --schema prisma/tenant/schema.prisma",
-      "prisma:migrate:tenant": "prisma migrate dev --schema prisma/tenant/schema.prisma"
+      "prisma:migrate:tenant": "prisma migrate dev --schema prisma/tenant/schema.prisma",
+      "db:seed:tenant": "tsx --env-file=.env prisma/tenant/seed.ts"
     },
     "dependencies": {
       "next": "^15.0.0",
