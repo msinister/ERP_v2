@@ -345,109 +345,124 @@ export async function closeSalesOrder(
   ctx?: AuditContext,
 ): Promise<SalesOrderWithLines> {
   const data = closeSalesOrderInputSchema.parse(input ?? {});
-  return db.$transaction(async (tx) => {
-    const before = await tx.salesOrder.findUnique({
-      where: { id },
-      include: { lines: { where: { deletedAt: null } } },
-    });
-    if (!before) throw new Error(`SalesOrder not found: ${id}`);
-    // Pickup orders skip DISPATCHED — accept both as legal source statuses.
-    // See docs/05-sales-orders.md "Pickup orders skip Dispatched".
-    if (
-      before.status !== SalesOrderStatus.CONFIRMED &&
-      before.status !== SalesOrderStatus.DISPATCHED
-    ) {
-      throw new Error(`Cannot close SalesOrder in status ${before.status}`);
-    }
-    if (before.lines.length === 0) {
-      throw new Error('Cannot close a SalesOrder with no lines');
-    }
 
-    const bins = uniqueBins(before.lines);
-    for (const b of bins) {
-      await lockBin(tx, b.variantId, b.warehouseId);
-    }
+  // If the close fails because of insufficient stock, the inner tx rolls
+  // back — we write this audit row AFTER the rollback (against the outer
+  // db client) so the visibility signal survives. Spec: strict guard for
+  // pilot, but we want to know how often we'd hit "warn-not-block" later.
+  let pendingInsufficientAudit: {
+    salesOrderNumber: string;
+    salesOrderLineId: string;
+    variantId: string;
+    warehouseId: string;
+    qtyRequested: string;
+    error: string;
+  } | null = null;
 
-    // Consume each line. consumeInventoryTx already handles its own audit
-    // row for the movement, the per-bin lock (no-op since we re-take it),
-    // and the strict insufficient-stock guard. We catch that specific error
-    // and emit an INSUFFICIENT_STOCK_AT_CLOSE audit row before re-throwing,
-    // so we get visibility into how often the spec's "warn-not-block" path
-    // would have fired. Loosening later = changing this catch to a warn.
-    for (const line of before.lines) {
-      try {
-        await consumeInventoryTx(
-          tx,
-          {
-            variantId: line.variantId,
-            warehouseId: line.warehouseId,
-            qty: line.qtyOrdered.toString(),
-            reference: before.number,
-            createdById: ctx?.userId ?? undefined,
-          },
-          ctx,
-        );
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (msg.startsWith('Insufficient stock')) {
-          await audit(tx, {
-            action: AuditAction.INSUFFICIENT_STOCK_AT_CLOSE,
-            entityType: 'SalesOrder',
-            entityId: id,
-            after: {
+  try {
+    return await db.$transaction(async (tx) => {
+      const before = await tx.salesOrder.findUnique({
+        where: { id },
+        include: { lines: { where: { deletedAt: null } } },
+      });
+      if (!before) throw new Error(`SalesOrder not found: ${id}`);
+      // Pickup orders skip DISPATCHED — accept both as legal source statuses.
+      // See docs/05-sales-orders.md "Pickup orders skip Dispatched".
+      if (
+        before.status !== SalesOrderStatus.CONFIRMED &&
+        before.status !== SalesOrderStatus.DISPATCHED
+      ) {
+        throw new Error(`Cannot close SalesOrder in status ${before.status}`);
+      }
+      if (before.lines.length === 0) {
+        throw new Error('Cannot close a SalesOrder with no lines');
+      }
+
+      const bins = uniqueBins(before.lines);
+      for (const b of bins) {
+        await lockBin(tx, b.variantId, b.warehouseId);
+      }
+
+      for (const line of before.lines) {
+        try {
+          await consumeInventoryTx(
+            tx,
+            {
+              variantId: line.variantId,
+              warehouseId: line.warehouseId,
+              qty: line.qtyOrdered.toString(),
+              reference: before.number,
+              createdById: ctx?.userId ?? undefined,
+            },
+            ctx,
+          );
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.startsWith('Insufficient stock')) {
+            pendingInsufficientAudit = {
               salesOrderNumber: before.number,
               salesOrderLineId: line.id,
               variantId: line.variantId,
               warehouseId: line.warehouseId,
               qtyRequested: line.qtyOrdered.toString(),
               error: msg,
-            },
-            ctx,
-          });
+            };
+          }
+          throw e;
         }
-        throw e;
+
+        await tx.salesOrderLine.update({
+          where: { id: line.id },
+          data: { qtyShipped: line.qtyOrdered, qtyReserved: new Prisma.Decimal(0) },
+        });
       }
 
-      await tx.salesOrderLine.update({
-        where: { id: line.id },
-        data: { qtyShipped: line.qtyOrdered, qtyReserved: new Prisma.Decimal(0) },
+      const updateData: Prisma.SalesOrderUpdateInput = {
+        status: SalesOrderStatus.CLOSED,
+        closedAt: new Date(),
+      };
+      if (data.shippingAmount !== undefined) {
+        updateData.shippingAmount = new Prisma.Decimal(data.shippingAmount);
+      }
+      if (data.handlingAmount !== undefined) {
+        updateData.handlingAmount = new Prisma.Decimal(data.handlingAmount);
+      }
+
+      const after = await tx.salesOrder.update({
+        where: { id },
+        data: updateData,
+        include: { lines: true },
+      });
+
+      // Recompute reserved per bin AFTER status flip so the new CLOSED status
+      // (which is excluded from the reservation roll-up) is reflected.
+      for (const b of bins) {
+        await recomputeReservedForBin(tx, b.variantId, b.warehouseId);
+      }
+
+      await audit(tx, {
+        action: AuditAction.STATUS_CHANGE,
+        entityType: 'SalesOrder',
+        entityId: id,
+        before: { status: before.status },
+        after: { status: after.status },
+        ctx,
+      });
+      return after;
+    });
+  } catch (e) {
+    if (pendingInsufficientAudit) {
+      // Outer-db write so the audit row survives the inner rollback.
+      await audit(db, {
+        action: AuditAction.INSUFFICIENT_STOCK_AT_CLOSE,
+        entityType: 'SalesOrder',
+        entityId: id,
+        after: pendingInsufficientAudit,
+        ctx,
       });
     }
-
-    // Apply optional shipping/handling overrides supplied at close.
-    const updateData: Prisma.SalesOrderUpdateInput = {
-      status: SalesOrderStatus.CLOSED,
-      closedAt: new Date(),
-    };
-    if (data.shippingAmount !== undefined) {
-      updateData.shippingAmount = new Prisma.Decimal(data.shippingAmount);
-    }
-    if (data.handlingAmount !== undefined) {
-      updateData.handlingAmount = new Prisma.Decimal(data.handlingAmount);
-    }
-
-    const after = await tx.salesOrder.update({
-      where: { id },
-      data: updateData,
-      include: { lines: true },
-    });
-
-    // Recompute reserved per bin AFTER status flip so the new CLOSED status
-    // (which is excluded from the reservation roll-up) is reflected.
-    for (const b of bins) {
-      await recomputeReservedForBin(tx, b.variantId, b.warehouseId);
-    }
-
-    await audit(tx, {
-      action: AuditAction.STATUS_CHANGE,
-      entityType: 'SalesOrder',
-      entityId: id,
-      before: { status: before.status },
-      after: { status: after.status },
-      ctx,
-    });
-    return after;
-  });
+    throw e;
+  }
 }
 
 export async function cancelSalesOrder(
