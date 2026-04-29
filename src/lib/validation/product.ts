@@ -1,9 +1,5 @@
 import { z } from 'zod';
-
-const decimalString = z
-  .union([z.string(), z.number()])
-  .transform((v) => String(v))
-  .refine((v) => /^-?\d+(\.\d+)?$/.test(v), 'Must be a decimal number');
+import { decimalString } from './common';
 
 export const productCreateSchema = z.object({
   sku: z.string().min(1).max(64),
