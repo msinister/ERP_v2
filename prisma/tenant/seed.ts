@@ -1,4 +1,4 @@
-import { PrismaClient } from '../../src/generated/tenant';
+import { PrismaClient, InventoryMovementType } from '../../src/generated/tenant';
 
 const db = new PrismaClient();
 
@@ -32,6 +32,32 @@ async function main() {
     },
   });
 
+  const existingSeedMovement = await db.inventoryMovement.findFirst({
+    where: {
+      variantId: variant.id,
+      warehouseId: warehouse.id,
+      type: InventoryMovementType.RECEIVE,
+      reference: 'SEED',
+    },
+  });
+  if (!existingSeedMovement) {
+    await db.inventoryMovement.create({
+      data: {
+        variantId: variant.id,
+        warehouseId: warehouse.id,
+        type: InventoryMovementType.RECEIVE,
+        qty: '10',
+        reference: 'SEED',
+      },
+    });
+  }
+
+  const agg = await db.inventoryMovement.aggregate({
+    where: { variantId: variant.id, warehouseId: warehouse.id },
+    _sum: { qty: true },
+  });
+  const onHand = agg._sum.qty ?? 0;
+
   const inventory = await db.inventoryItem.upsert({
     where: {
       variantId_warehouseId: {
@@ -42,9 +68,9 @@ async function main() {
     create: {
       variantId: variant.id,
       warehouseId: warehouse.id,
-      onHand: '10',
+      onHand,
     },
-    update: { onHand: '10', reserved: '0' },
+    update: { onHand },
   });
 
   console.log({

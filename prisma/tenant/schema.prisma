@@ -15,14 +15,11 @@ enum ProductType {
 }
 
 enum InventoryMovementType {
-  RECEIPT
-  SALE
-  RETURN
-  ADJUSTMENT
+  ADJUST
+  RECEIVE
+  CONSUME
   TRANSFER_OUT
   TRANSFER_IN
-  BUILD_CONSUME
-  BUILD_RECEIPT
 }
 
 model Product {
@@ -104,15 +101,16 @@ model InventoryItem {
 }
 
 model InventoryMovement {
-  id          String                @id @default(cuid())
-  variantId   String
-  warehouseId String
-  type        InventoryMovementType
-  qty         Decimal               @db.Decimal(18, 5)
-  reference   String?
-  notes       String?
-  createdById String?
-  createdAt   DateTime              @default(now())
+  id              String                @id @default(cuid())
+  variantId       String
+  warehouseId     String
+  type            InventoryMovementType
+  qty             Decimal               @db.Decimal(18, 5)
+  reference       String?
+  transferGroupId String?
+  notes           String?
+  createdById     String?
+  createdAt       DateTime              @default(now())
 
   variant   ProductVariant @relation(fields: [variantId], references: [id])
   warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
@@ -120,4 +118,5 @@ model InventoryMovement {
   @@index([variantId, warehouseId, createdAt])
   @@index([type, createdAt])
   @@index([reference])
+  @@index([transferGroupId])
 }
