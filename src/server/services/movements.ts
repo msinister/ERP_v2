@@ -1,7 +1,8 @@
 import { Prisma, AuditAction, InventoryMovementType } from '@/generated/tenant';
 import type { InventoryMovement, PrismaClient } from '@/generated/tenant';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { audit, type AuditContext } from '@/lib/audit/audit';
+import { lockBin, lockBinsOrdered } from '@/server/services/locks';
 import {
   adjustmentInputSchema,
   receiveInputSchema,
@@ -14,37 +15,6 @@ import {
   type TransferInput,
   type ReverseReceiveInput,
 } from '@/lib/validation/inventory';
-
-// Hash a string to a signed 32-bit int suitable for the (int4, int4) form of
-// pg_advisory_xact_lock. We use the two-int form so the lock key is the pair
-// (variantId, warehouseId) rather than a single bigint, which makes lock
-// contention map cleanly to the per-bin granularity we want.
-function lockKey(s: string): number {
-  return createHash('sha256').update(s).digest().readInt32BE(0);
-}
-
-async function lockBin(
-  tx: Prisma.TransactionClient,
-  variantId: string,
-  warehouseId: string,
-): Promise<void> {
-  const v = lockKey(variantId);
-  const w = lockKey(warehouseId);
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${v}::int4, ${w}::int4)`;
-}
-
-// For transfers we lock two bins in deterministic order to avoid deadlocks
-// between simultaneous A→B and B→A transfers of the same variant.
-async function lockBinsOrdered(
-  tx: Prisma.TransactionClient,
-  variantId: string,
-  warehouseA: string,
-  warehouseB: string,
-): Promise<void> {
-  const [first, second] = [warehouseA, warehouseB].sort();
-  await lockBin(tx, variantId, first);
-  await lockBin(tx, variantId, second);
-}
 
 async function recomputeOnHand(
   tx: Prisma.TransactionClient,
