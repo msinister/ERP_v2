@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../src/generated/tenant"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("TENANT_DATABASE_URL")
+}
+
+enum ProductType {
+  SIMPLE
+  DROP_SHIP
+  SERVICE
+}
+
+model Product {
+  id               String      @id @default(cuid())
+  sku              String      @unique
+  name             String
+  shortDescription String?
+  longDescription  String?
+  brand            String?
+  category         String?
+  type             ProductType @default(SIMPLE)
+  tracksInventory  Boolean     @default(true)
+  basePrice        Decimal?    @db.Decimal(18, 5)
+  weight           Decimal?    @db.Decimal(18, 5)
+  lengthDim        Decimal?    @db.Decimal(18, 5)
+  widthDim         Decimal?    @db.Decimal(18, 5)
+  heightDim        Decimal?    @db.Decimal(18, 5)
+  shopifyProductId String?
+  active           Boolean     @default(true)
+  deletedAt        DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  variants ProductVariant[]
+
+  @@index([category])
+  @@index([brand])
+  @@index([shopifyProductId])
+}
+
+model ProductVariant {
+  id           String    @id @default(cuid())
+  productId    String
+  sku          String    @unique
+  name         String?
+  variantGroup String?
+  color        String?
+  flavor       String?
+  size         String?
+  active       Boolean   @default(true)
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  product   Product         @relation(fields: [productId], references: [id])
+  inventory InventoryItem[]
+
+  @@index([productId])
+}
+
+model Warehouse {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  name      String
+  active    Boolean   @default(true)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  inventory InventoryItem[]
+}
+
+model InventoryItem {
+  id          String   @id @default(cuid())
+  variantId   String
+  warehouseId String
+  onHand      Decimal  @default(0) @db.Decimal(18, 5)
+  reserved    Decimal  @default(0) @db.Decimal(18, 5)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  variant   ProductVariant @relation(fields: [variantId], references: [id])
+  warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
+
+  @@unique([variantId, warehouseId])
+  @@index([warehouseId])
+}
