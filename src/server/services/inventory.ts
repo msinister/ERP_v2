@@ -1,4 +1,4 @@
- import type { PrismaClient, InventoryItem } from '@/generated/tenant';                                                                                                                                                                          
+import type { PrismaClient, InventoryItem } from '@/generated/tenant';                                                                                                                                                                          
   // Read-only in this slice. Movement APIs (receive, consume, adjust)
   // land with the costing engine.
 
