@@ -15,19 +15,33 @@ export type ResolvedPrice = {
   rule: PriceResolutionRule;
 };
 
-// Pilot scaffold for the pricing resolver. Today only two branches are wired:
-//   1. MANUAL_OVERRIDE — caller supplied a unitPrice (any non-negative value)
-//   2. BASE_PRICE      — fall back to the variant's parent product basePrice
+// Pricing resolver. The spec (docs/05-sales-orders.md) ultimately wants:
+// "system runs all applicable rules, picks lowest, logs which rule fired."
 //
-// The remaining rules from docs/02-products-inventory.md and docs/05-sales
-// -orders.md (CUSTOMER_SPECIFIC, QTY_BREAK, TIER_DISCOUNT, PROMO, COST_PLUS)
-// land alongside the customer master + promo + qty-break + cost-plus slices.
-// They slot in here without changing the call site, which is why every
-// callers route through this single function — never read basePrice directly.
+// Today we wire three branches in priority order:
+//   1. MANUAL_OVERRIDE   — caller supplied a unitPrice (any non-negative)
+//   2. CUSTOMER_SPECIFIC — non-deleted CustomerPriceOverride for (customer, variant)
+//   3. BASE_PRICE        — fall back to the variant's parent product basePrice
+//
+// MANUAL_OVERRIDE always wins (it's the explicit human decision on the line).
+// CUSTOMER_SPECIFIC wins over BASE_PRICE. Soft-deleted CustomerPriceOverride
+// rows are treated as if they don't exist — the resolver falls through to
+// BASE_PRICE.
+//
+// TODO: lowest-of-all-applicable behavior. The remaining rules
+// (QTY_BREAK, TIER_DISCOUNT, PROMO, COST_PLUS) land in their own slices.
+// When at least two of those are wired, switch this from priority-order
+// to "evaluate every applicable rule, return the lowest, record which
+// rule fired" per the spec — the call signature won't change.
+//
+// The resolver is intentionally side-effect-free. The audit trail of
+// which rule fired is recorded by the SO line creation site
+// (server/services/salesOrders.ts) via SalesOrderLine.priceRule.
 export async function resolvePrice(
   tx: Prisma.TransactionClient,
   input: ResolvePriceInput,
 ): Promise<ResolvedPrice> {
+  // 1. MANUAL_OVERRIDE
   if (input.manualUnitPrice != null) {
     if (input.manualUnitPrice.lessThan(0)) {
       throw new Error(
@@ -40,6 +54,25 @@ export async function resolvePrice(
     };
   }
 
+  // 2. CUSTOMER_SPECIFIC — single findUnique on the (customerId, variantId)
+  //    composite unique. Soft-deleted overrides are treated as absent so
+  //    the resolver falls through to BASE_PRICE on the same call.
+  const override = await tx.customerPriceOverride.findUnique({
+    where: {
+      customerId_variantId: {
+        customerId: input.customerId,
+        variantId: input.variantId,
+      },
+    },
+  });
+  if (override && override.deletedAt == null) {
+    return {
+      unitPrice: new Prisma.Decimal(override.unitPrice),
+      rule: PriceResolutionRule.CUSTOMER_SPECIFIC,
+    };
+  }
+
+  // 3. BASE_PRICE
   const variant = await tx.productVariant.findUnique({
     where: { id: input.variantId },
     select: {
