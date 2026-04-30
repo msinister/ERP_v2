@@ -253,7 +253,7 @@ npm run typecheck
 
 ## Operational notes
 
-- **Dev DB migration history reconciled (2026-04-30):** the `_prisma_migrations` table was missing in `erp_tenant_dev` even though every prior migration's tables were present (most likely a previous `prisma db push` that bypasses history, possibly compounded by a Dropbox sync rollback of the `.git` folder). The 6 migrations through `20260429194054_add_sales_orders` were resolved as `--applied` (non-destructive history reconciliation, no SQL re-run) before the `expand_customer_master` migration was applied. If you see migration drift again, prefer `prisma migrate resolve --applied` over `prisma migrate reset` unless the actual table shapes are wrong.
+- **Migration history (post-reset baseline, 2026-04-30):** Dev DB was originally built via `prisma db push`, which doesn't write to `_prisma_migrations`. The dev DB was reset on 2026-04-30 to establish a clean migration history. From this point forward, every migration runs through `prisma migrate dev` and the history table is the source of truth. If drift detection ever fires again, do NOT run `--applied` loops — investigate the cause.
 - **Crypto key rotation is not implemented.** `src/lib/crypto/index.ts` assumes a single static `TENANT_FIELD_ENCRYPTION_KEY` for the lifetime of an instance. Rotation requires a key id stored alongside ciphertext + a resolver registry + a re-encrypt sweep, none of which exist yet. Acceptable for pilot; add before scaling to multiple production tenants or before the first key compromise drill.
 
 ---
