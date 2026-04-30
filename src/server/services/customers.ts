@@ -2,11 +2,11 @@ import { AuditAction } from '@/generated/tenant';
 import type { Customer, PrismaClient } from '@/generated/tenant';
 import { audit, type AuditContext } from '@/lib/audit/audit';
 import {
-  createCustomerInputSchema,
-  updateCustomerInputSchema,
-  type CreateCustomerInput,
-  type UpdateCustomerInput,
-} from '@/lib/validation/sales';
+  createCustomerStubInputSchema as createCustomerInputSchema,
+  updateCustomerStubInputSchema as updateCustomerInputSchema,
+  type CreateCustomerStubInput as CreateCustomerInput,
+  type UpdateCustomerStubInput as UpdateCustomerInput,
+} from '@/lib/validation/customers';
 
 // Customer stub service. Strict mirror of the Vendor stub. EXPAND LATER.
 // The full Customer master (contacts, addresses, terms, tax exemption,

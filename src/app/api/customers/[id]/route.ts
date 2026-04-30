@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { updateCustomerInputSchema } from '@/lib/validation/sales';
+import { updateCustomerStubInputSchema as updateCustomerInputSchema } from '@/lib/validation/customers';
 import {
   getCustomer,
   softDeleteCustomer,

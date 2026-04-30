@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { createCustomerInputSchema } from '@/lib/validation/sales';
+import { createCustomerStubInputSchema as createCustomerInputSchema } from '@/lib/validation/customers';
 import {
   createCustomer,
   listCustomers,

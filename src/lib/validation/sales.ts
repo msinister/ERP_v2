@@ -114,18 +114,6 @@ export type CreateSalesOrderInput = z.infer<typeof createSalesOrderInputSchema>;
 export type UpdateSalesOrderInput = z.infer<typeof updateSalesOrderInputSchema>;
 export type CancelSalesOrderInput = z.infer<typeof cancelSalesOrderInputSchema>;
 export type CloseSalesOrderInput = z.infer<typeof closeSalesOrderInputSchema>;
-
-// Customer stub validation — mirrors the Vendor stub pattern.
-export const createCustomerInputSchema = z.object({
-  code: z.string().min(1).max(64),
-  name: z.string().min(1).max(255),
-  active: z.boolean().optional(),
-});
-
-export const updateCustomerInputSchema = z.object({
-  name: z.string().min(1).max(255).optional(),
-  active: z.boolean().optional(),
-});
-
-export type CreateCustomerInput = z.infer<typeof createCustomerInputSchema>;
-export type UpdateCustomerInput = z.infer<typeof updateCustomerInputSchema>;
+// Customer stub validation moved to src/lib/validation/customers.ts as
+// part of the Customer master expansion slice — see that file for the
+// full master schemas + the transition-phase stub shim.

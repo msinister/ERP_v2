@@ -33,6 +33,12 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
  *     ciphertext on CustomerDocument.encryptedValueIv).
  *   - decrypt() throws if the auth tag fails verification (tampered
  *     ciphertext or wrong IV), per GCM semantics.
+ *
+ * TODO: key rotation — see CLAUDE.md operational notes. Today this
+ * helper assumes a single static key; production rotation will require
+ * (a) a key id stored alongside ciphertext, (b) a key registry that
+ * resolves id → key, and (c) a re-encrypt sweep on rotation events.
+ * Not blocking for pilot.
  */
 
 const ALGO = 'aes-256-gcm' as const;
