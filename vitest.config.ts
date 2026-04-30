@@ -7,7 +7,10 @@ export default defineConfig({
     testTimeout: 30000,
     hookTimeout: 30000,
     pool: 'forks',
-    setupFiles: ['./tests/helpers/setup.ts'],
+    // Order matters: setupGlobalEnv runs first to install
+    // TENANT_FIELD_ENCRYPTION_KEY before any test module loads
+    // src/lib/crypto/index.ts (which validates the key at module load).
+    setupFiles: ['./tests/helpers/setupGlobalEnv.ts', './tests/helpers/setup.ts'],
   },
   resolve: {
     alias: {

@@ -251,6 +251,12 @@ npm run typecheck
 
 ---
 
+## Operational notes
+
+- **Dev DB migration history reconciled (2026-04-30):** the `_prisma_migrations` table was missing in `erp_tenant_dev` even though every prior migration's tables were present (most likely a previous `prisma db push` that bypasses history, possibly compounded by a Dropbox sync rollback of the `.git` folder). The 6 migrations through `20260429194054_add_sales_orders` were resolved as `--applied` (non-destructive history reconciliation, no SQL re-run) before the `expand_customer_master` migration was applied. If you see migration drift again, prefer `prisma migrate resolve --applied` over `prisma migrate reset` unless the actual table shapes are wrong.
+
+---
+
 ## Current build phase
 
 **Pilot target:** Naked Kratom
