@@ -195,6 +195,23 @@ export const createRmaInputSchema = z
     }
   });
 
+export const creditFromRmaInputSchema = z.object({
+  // Per-line quantities to credit. Each invoiceLineId must match an
+  // RmaLine on the RMA, and qty must be <= the matching RmaLine.qty.
+  // The service enforces this; the schema is structural only.
+  lines: z
+    .array(
+      z.object({
+        invoiceLineId: z.string().min(1),
+        qty: positiveDecimal,
+        unitPrice: nonNegativeDecimal,
+        description: z.string().min(1).max(500),
+      }),
+    )
+    .min(1),
+  reason: z.string().max(2000).optional(),
+});
+
 export const transitionRmaInputSchema = z
   .object({
     rmaId: z.string().min(1),
@@ -228,3 +245,4 @@ export type ConfirmCreditMemoInput = z.infer<typeof confirmCreditMemoInputSchema
 export type VoidCreditMemoInput = z.infer<typeof voidCreditMemoInputSchema>;
 export type CreateRmaInput = z.infer<typeof createRmaInputSchema>;
 export type TransitionRmaInput = z.infer<typeof transitionRmaInputSchema>;
+export type CreditFromRmaInput = z.infer<typeof creditFromRmaInputSchema>;

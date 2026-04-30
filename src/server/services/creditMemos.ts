@@ -57,11 +57,15 @@ const AUTO_APPLY_ON_CONFIRM_MARKER = '__auto_apply_on_confirm__';
 export type CreditMemoWithLines = CreditMemo & { lines: CreditMemoLine[] };
 
 // ---------------------------------------------------------------------------
-// createCreditMemoDraft
+// createCreditMemoDraft (Tx variant + public wrapper)
 // ---------------------------------------------------------------------------
 
-export async function createCreditMemoDraft(
-  db: PrismaClient,
+/**
+ * Tx variant. Used by the RMA service's creditFromRma flow to compose
+ * draft + confirm into one atomic transaction with the RMA transition.
+ */
+export async function createCreditMemoDraftTx(
+  tx: Prisma.TransactionClient,
   input: CreateCreditMemoInput,
   ctx?: AuditContext,
 ): Promise<CreditMemoWithLines> {
@@ -78,8 +82,7 @@ export async function createCreditMemoDraft(
   }
 
   // Cross-record math check: SUM(line.qty * line.unitPrice) must equal
-  // amount + restockingFee within the documented tolerance. Validated
-  // here at the service layer per the schema's comment block.
+  // amount + restockingFee within the documented tolerance.
   const lineSum = data.lines.reduce(
     (acc, l) =>
       acc.plus(new Prisma.Decimal(l.qty).times(new Prisma.Decimal(l.unitPrice))),
@@ -93,75 +96,81 @@ export async function createCreditMemoDraft(
     );
   }
 
-  return db.$transaction(async (tx) => {
-    const customer = await tx.customer.findFirst({
-      where: { id: data.customerId, deletedAt: null },
-    });
-    if (!customer) throw new Error(`Customer not found: ${data.customerId}`);
-
-    const category = await tx.creditMemoCategory.findFirst({
-      where: { id: data.categoryId, deletedAt: null },
-    });
-    if (!category) throw new Error(`CreditMemoCategory not found: ${data.categoryId}`);
-    if (!category.active) {
-      throw new Error(`CreditMemoCategory ${category.code} is inactive`);
-    }
-
-    if (data.invoiceId) {
-      const invoice = await tx.invoice.findUnique({ where: { id: data.invoiceId } });
-      if (!invoice) throw new Error(`Invoice not found: ${data.invoiceId}`);
-      if (invoice.deletedAt) throw new Error('Invoice is soft-deleted');
-      if (invoice.customerId !== data.customerId) {
-        throw new Error(
-          `Cross-customer credit memo: customer ${data.customerId} != invoice customer ${invoice.customerId}`,
-        );
-      }
-      // Voided invoices CAN be referenced — refund-via-CM flows hang
-      // CMs against invoices that were later voided. Documented here.
-    }
-
-    const seq = await getNextSequence(tx, {
-      name: CM_SEQUENCE_NAME,
-      prefix: CM_PREFIX,
-      useYear: true,
-    });
-
-    const cm = await tx.creditMemo.create({
-      data: {
-        number: seq.formatted,
-        customerId: data.customerId,
-        invoiceId: data.invoiceId ?? null,
-        categoryId: data.categoryId,
-        status: CreditMemoStatus.DRAFT,
-        amount,
-        restockingFee,
-        netCredit,
-        currency: data.currency ?? 'USD',
-        reason: data.reason,
-        lines: {
-          create: data.lines.map((l) => ({
-            invoiceLineId: l.invoiceLineId ?? null,
-            variantId: l.variantId,
-            qty: new Prisma.Decimal(l.qty),
-            unitPrice: new Prisma.Decimal(l.unitPrice),
-            lineTotal: new Prisma.Decimal(l.qty).times(new Prisma.Decimal(l.unitPrice)),
-            description: l.description,
-          })),
-        },
-      },
-      include: { lines: true },
-    });
-
-    await audit(tx, {
-      action: AuditAction.CREATE,
-      entityType: 'CreditMemo',
-      entityId: cm.id,
-      after: cm,
-      ctx,
-    });
-
-    return cm;
+  const customer = await tx.customer.findFirst({
+    where: { id: data.customerId, deletedAt: null },
   });
+  if (!customer) throw new Error(`Customer not found: ${data.customerId}`);
+
+  const category = await tx.creditMemoCategory.findFirst({
+    where: { id: data.categoryId, deletedAt: null },
+  });
+  if (!category) throw new Error(`CreditMemoCategory not found: ${data.categoryId}`);
+  if (!category.active) {
+    throw new Error(`CreditMemoCategory ${category.code} is inactive`);
+  }
+
+  if (data.invoiceId) {
+    const invoice = await tx.invoice.findUnique({ where: { id: data.invoiceId } });
+    if (!invoice) throw new Error(`Invoice not found: ${data.invoiceId}`);
+    if (invoice.deletedAt) throw new Error('Invoice is soft-deleted');
+    if (invoice.customerId !== data.customerId) {
+      throw new Error(
+        `Cross-customer credit memo: customer ${data.customerId} != invoice customer ${invoice.customerId}`,
+      );
+    }
+    // Voided invoices CAN be referenced — refund-via-CM flows hang
+    // CMs against invoices that were later voided.
+  }
+
+  const seq = await getNextSequence(tx, {
+    name: CM_SEQUENCE_NAME,
+    prefix: CM_PREFIX,
+    useYear: true,
+  });
+
+  const cm = await tx.creditMemo.create({
+    data: {
+      number: seq.formatted,
+      customerId: data.customerId,
+      invoiceId: data.invoiceId ?? null,
+      categoryId: data.categoryId,
+      status: CreditMemoStatus.DRAFT,
+      amount,
+      restockingFee,
+      netCredit,
+      currency: data.currency ?? 'USD',
+      reason: data.reason,
+      lines: {
+        create: data.lines.map((l) => ({
+          invoiceLineId: l.invoiceLineId ?? null,
+          variantId: l.variantId,
+          qty: new Prisma.Decimal(l.qty),
+          unitPrice: new Prisma.Decimal(l.unitPrice),
+          lineTotal: new Prisma.Decimal(l.qty).times(new Prisma.Decimal(l.unitPrice)),
+          description: l.description,
+        })),
+      },
+    },
+    include: { lines: true },
+  });
+
+  await audit(tx, {
+    action: AuditAction.CREATE,
+    entityType: 'CreditMemo',
+    entityId: cm.id,
+    after: cm,
+    ctx,
+  });
+
+  return cm;
+}
+
+export async function createCreditMemoDraft(
+  db: PrismaClient,
+  input: CreateCreditMemoInput,
+  ctx?: AuditContext,
+): Promise<CreditMemoWithLines> {
+  return db.$transaction((tx) => createCreditMemoDraftTx(tx, input, ctx));
 }
 
 // ---------------------------------------------------------------------------
@@ -181,28 +190,32 @@ export async function createCreditMemoDraft(
  * those activity rows to create FIFO restock layers at the original
  * sale's cost.
  */
-export async function confirmCreditMemo(
-  db: PrismaClient,
+/**
+ * Tx variant — used by the RMA service's creditFromRma flow to compose
+ * confirm into the same transaction as draft creation and the RMA
+ * status transition.
+ */
+export async function confirmCreditMemoTx(
+  tx: Prisma.TransactionClient,
   creditMemoId: string,
   ctx?: AuditContext,
 ): Promise<CreditMemoWithLines> {
-  return db.$transaction(async (tx) => {
-    // Lock the row so concurrent confirms serialize.
-    await tx.$executeRaw`SELECT 1 FROM "CreditMemo" WHERE "id" = ${creditMemoId} FOR UPDATE`;
+  // Lock the row so concurrent confirms serialize.
+  await tx.$executeRaw`SELECT 1 FROM "CreditMemo" WHERE "id" = ${creditMemoId} FOR UPDATE`;
 
-    const before = await tx.creditMemo.findUnique({
-      where: { id: creditMemoId },
-      include: { lines: true, category: true },
-    });
-    if (!before) throw new Error(`CreditMemo not found: ${creditMemoId}`);
-    if (before.deletedAt) throw new Error('CreditMemo is soft-deleted');
-    if (before.status !== CreditMemoStatus.DRAFT) {
-      throw new Error(
-        `Cannot confirm credit memo in status ${before.status} (only DRAFT can be confirmed)`,
-      );
-    }
+  const before = await tx.creditMemo.findUnique({
+    where: { id: creditMemoId },
+    include: { lines: true, category: true },
+  });
+  if (!before) throw new Error(`CreditMemo not found: ${creditMemoId}`);
+  if (before.deletedAt) throw new Error('CreditMemo is soft-deleted');
+  if (before.status !== CreditMemoStatus.DRAFT) {
+    throw new Error(
+      `Cannot confirm credit memo in status ${before.status} (only DRAFT can be confirmed)`,
+    );
+  }
 
-    // Post the GL JE. Math matches docs/08-gl-costing-reporting.md:
+  // Post the GL JE. Math matches docs/08-gl-costing-reporting.md:
     //
     //   DR 4500 Sales Returns       amount
     //   CR 1210 AR                  amount
@@ -229,107 +242,114 @@ export async function confirmCreditMemo(
     // gl.post() enforces SUM(Dr) === SUM(Cr) — an earlier spec
     // proposed CR 1210 = netCredit, which would have left a
     // restockingFee imbalance and the helper would have rejected.
-    const jeLines: Array<{
-      accountCode: string;
-      debit?: Prisma.Decimal;
-      credit?: Prisma.Decimal;
-      memo?: string;
-    }> = [];
-    if (before.amount.greaterThan(0)) {
-      jeLines.push({
-        accountCode: SALES_RETURNS_ACCOUNT,
-        debit: before.amount,
-        memo: 'Sales returns (gross credit)',
-      });
-      jeLines.push({
-        accountCode: AR_ACCOUNT,
-        credit: before.amount,
-        memo: 'AR — credit memo (gross)',
-      });
-    }
-    if (before.restockingFee.greaterThan(0)) {
-      jeLines.push({
-        accountCode: AR_ACCOUNT,
-        debit: before.restockingFee,
-        memo: 'AR — restocking fee charged back',
-      });
-      jeLines.push({
-        accountCode: RESTOCKING_FEE_INCOME_ACCOUNT,
-        credit: before.restockingFee,
-        memo: 'Restocking fee income',
-      });
-    }
-    if (jeLines.length > 0) {
-      await post(tx, {
-        entityType: 'CreditMemo',
-        entityId: before.id,
-        description: `Confirm credit memo ${before.number}`,
-        lines: jeLines,
-      });
-    }
-
-    // Flip status + stamp issuedAt.
-    const after = await tx.creditMemo.update({
-      where: { id: creditMemoId },
-      data: {
-        status: CreditMemoStatus.CONFIRMED,
-        issuedAt: new Date(),
-      },
-      include: { lines: true },
+  const jeLines: Array<{
+    accountCode: string;
+    debit?: Prisma.Decimal;
+    credit?: Prisma.Decimal;
+    memo?: string;
+  }> = [];
+  if (before.amount.greaterThan(0)) {
+    jeLines.push({
+      accountCode: SALES_RETURNS_ACCOUNT,
+      debit: before.amount,
+      memo: 'Sales returns (gross credit)',
     });
-
-    // Auto-application when linked to an invoice.
-    if (before.invoiceId && before.netCredit.greaterThan(0)) {
-      const app = await tx.creditApplication.create({
-        data: {
-          kind: CreditApplicationKind.CREDIT_TO_INVOICE,
-          creditMemoId: before.id,
-          invoiceId: before.invoiceId,
-          amount: before.netCredit,
-          notes: AUTO_APPLY_ON_CONFIRM_MARKER,
-          appliedById: ctx?.userId ?? null,
-        },
-      });
-      await tx.creditMemo.update({
-        where: { id: creditMemoId },
-        data: { appliedAmount: before.netCredit },
-      });
-      await recomputeAmountPaidForInvoice(tx, before.invoiceId);
-      void app;
-    }
-
-    // Inventory restock-pending signal for the costing engine slice.
-    if (before.category.affectsInventory) {
-      await tx.customerActivity.create({
-        data: {
-          customerId: before.customerId,
-          kind: CustomerActivityKind.AUTO,
-          summary: 'credit_memo_inventory_restock_pending',
-          detailJson: {
-            creditMemoId: before.id,
-            creditMemoNumber: before.number,
-            lines: before.lines.map((l) => ({
-              variantId: l.variantId,
-              qty: l.qty.toString(),
-              invoiceLineId: l.invoiceLineId,
-            })),
-          },
-          createdById: ctx?.userId ?? null,
-        },
-      });
-    }
-
-    await audit(tx, {
-      action: AuditAction.STATUS_CHANGE,
+    jeLines.push({
+      accountCode: AR_ACCOUNT,
+      credit: before.amount,
+      memo: 'AR — credit memo (gross)',
+    });
+  }
+  if (before.restockingFee.greaterThan(0)) {
+    jeLines.push({
+      accountCode: AR_ACCOUNT,
+      debit: before.restockingFee,
+      memo: 'AR — restocking fee charged back',
+    });
+    jeLines.push({
+      accountCode: RESTOCKING_FEE_INCOME_ACCOUNT,
+      credit: before.restockingFee,
+      memo: 'Restocking fee income',
+    });
+  }
+  if (jeLines.length > 0) {
+    await post(tx, {
       entityType: 'CreditMemo',
-      entityId: creditMemoId,
-      before: { status: before.status },
-      after: { status: after.status, issuedAt: after.issuedAt },
-      ctx,
+      entityId: before.id,
+      description: `Confirm credit memo ${before.number}`,
+      lines: jeLines,
     });
+  }
 
-    return after;
+  // Flip status + stamp issuedAt.
+  const after = await tx.creditMemo.update({
+    where: { id: creditMemoId },
+    data: {
+      status: CreditMemoStatus.CONFIRMED,
+      issuedAt: new Date(),
+    },
+    include: { lines: true },
   });
+
+  // Auto-application when linked to an invoice.
+  if (before.invoiceId && before.netCredit.greaterThan(0)) {
+    const app = await tx.creditApplication.create({
+      data: {
+        kind: CreditApplicationKind.CREDIT_TO_INVOICE,
+        creditMemoId: before.id,
+        invoiceId: before.invoiceId,
+        amount: before.netCredit,
+        notes: AUTO_APPLY_ON_CONFIRM_MARKER,
+        appliedById: ctx?.userId ?? null,
+      },
+    });
+    await tx.creditMemo.update({
+      where: { id: creditMemoId },
+      data: { appliedAmount: before.netCredit },
+    });
+    await recomputeAmountPaidForInvoice(tx, before.invoiceId);
+    void app;
+  }
+
+  // Inventory restock-pending signal for the costing engine slice.
+  if (before.category.affectsInventory) {
+    await tx.customerActivity.create({
+      data: {
+        customerId: before.customerId,
+        kind: CustomerActivityKind.AUTO,
+        summary: 'credit_memo_inventory_restock_pending',
+        detailJson: {
+          creditMemoId: before.id,
+          creditMemoNumber: before.number,
+          lines: before.lines.map((l) => ({
+            variantId: l.variantId,
+            qty: l.qty.toString(),
+            invoiceLineId: l.invoiceLineId,
+          })),
+        },
+        createdById: ctx?.userId ?? null,
+      },
+    });
+  }
+
+  await audit(tx, {
+    action: AuditAction.STATUS_CHANGE,
+    entityType: 'CreditMemo',
+    entityId: creditMemoId,
+    before: { status: before.status },
+    after: { status: after.status, issuedAt: after.issuedAt },
+    ctx,
+  });
+
+  return after;
+}
+
+export async function confirmCreditMemo(
+  db: PrismaClient,
+  creditMemoId: string,
+  ctx?: AuditContext,
+): Promise<CreditMemoWithLines> {
+  return db.$transaction((tx) => confirmCreditMemoTx(tx, creditMemoId, ctx));
 }
 
 // ---------------------------------------------------------------------------
