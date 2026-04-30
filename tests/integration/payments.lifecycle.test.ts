@@ -572,7 +572,19 @@ async function wipe(db: PrismaClient): Promise<void> {
     await db.invoice.deleteMany({ where: { id: { in: invIds } } });
   }
 
-  // SOs + customer scaffolding.
+  // SOs + customer scaffolding. Scope SO + InventoryMovement audit
+  // deletes by THIS test's entity ids — wholesale-by-entityType
+  // would clobber other parallel tests' audits.
+  const ourSos = await db.salesOrder.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const soIds = ourSos.map((s) => s.id);
+  if (soIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'SalesOrder', entityId: { in: soIds } },
+    });
+  }
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: { in: ids } } } });
   await db.salesOrder.deleteMany({ where: { customerId: { in: ids } } });
   const variantIds = (
@@ -582,6 +594,18 @@ async function wipe(db: PrismaClient): Promise<void> {
     })
   ).map((v) => v.id);
   if (variantIds.length > 0) {
+    const ourMovements = await db.inventoryMovement.findMany({
+      where: { variantId: { in: variantIds } },
+      select: { id: true },
+    });
+    if (ourMovements.length > 0) {
+      await db.auditLog.deleteMany({
+        where: {
+          entityType: 'InventoryMovement',
+          entityId: { in: ourMovements.map((m) => m.id) },
+        },
+      });
+    }
     await db.inventoryMovement.deleteMany({ where: { variantId: { in: variantIds } } });
     await db.inventoryItem.deleteMany({ where: { variantId: { in: variantIds } } });
   }
@@ -590,10 +614,11 @@ async function wipe(db: PrismaClient): Promise<void> {
   await db.auditLog.deleteMany({
     where: { entityType: 'Customer', entityId: { in: ids } },
   });
+  // CreditApplication / CustomerAddress audits — only this test's
+  // rows match these entity types in practice (other tests scope by
+  // their own customer ids), so wholesale is safe enough here.
   await db.auditLog.deleteMany({
-    where: {
-      entityType: { in: ['CustomerAddress', 'SalesOrder', 'CreditApplication', 'InventoryMovement'] },
-    },
+    where: { entityType: { in: ['CustomerAddress', 'CreditApplication'] } },
   });
   await db.customer.deleteMany({ where: { id: { in: ids } } });
 }

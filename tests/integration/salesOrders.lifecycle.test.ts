@@ -236,8 +236,12 @@ suite('SalesOrder lifecycle', () => {
       orderBy: { createdAt: 'asc' },
     });
     const actions = auditRows.map((r) => r.action);
-    expect(actions[0]).toBe(AuditAction.CREATE);
-    // 3 transitions: DRAFT->CONFIRMED, CONFIRMED->DISPATCHED, DISPATCHED->CLOSED
+    // Assert by SET membership rather than order — Postgres
+    // CURRENT_TIMESTAMP sub-microsecond collisions can make
+    // createdAt-ordering unstable when multiple transactions land
+    // within the same instant. The semantic invariant is "exactly
+    // one CREATE and exactly three STATUS_CHANGE rows".
+    expect(actions.filter((a) => a === AuditAction.CREATE)).toHaveLength(1);
     expect(actions.filter((a) => a === AuditAction.STATUS_CHANGE)).toHaveLength(3);
   });
 });

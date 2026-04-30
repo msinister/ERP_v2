@@ -177,6 +177,14 @@ async function wipe(db: PrismaClient): Promise<void> {
     select: { id: true },
   });
   await wipeInvoiceArtifactsForSOs(db, ourSos.map((s) => s.id));
+  // Scope SO audits by THIS test's SO ids — wholesale-by-entityType
+  // would clobber other parallel test files.
+  const soIds = ourSos.map((s) => s.id);
+  if (soIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'SalesOrder', entityId: { in: soIds } },
+    });
+  }
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: { in: ids } } } });
   await db.salesOrder.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerPriceOverride.deleteMany({ where: { customerId: { in: ids } } });
@@ -186,9 +194,7 @@ async function wipe(db: PrismaClient): Promise<void> {
     where: { entityType: 'Customer', entityId: { in: ids } },
   });
   await db.auditLog.deleteMany({
-    where: {
-      entityType: { in: ['CustomerAddress', 'CustomerPriceOverride', 'SalesOrder'] },
-    },
+    where: { entityType: { in: ['CustomerAddress', 'CustomerPriceOverride'] } },
   });
   await db.customer.deleteMany({ where: { id: { in: ids } } });
 }

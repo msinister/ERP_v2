@@ -427,6 +427,18 @@ async function wipe(db: PrismaClient): Promise<void> {
   }
 
   // Drop SO rows + their consume movements + customer scaffolding.
+  // Scope SO audits by THIS test's SO ids so other parallel test
+  // files' audit rows survive. Done BEFORE deleting the SO rows.
+  const ourSos = await db.salesOrder.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const soIds = ourSos.map((s) => s.id);
+  if (soIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'SalesOrder', entityId: { in: soIds } },
+    });
+  }
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: { in: ids } } } });
   await db.salesOrder.deleteMany({ where: { customerId: { in: ids } } });
   // Inventory movements + items for our test variants (variantA, variantB
@@ -437,6 +449,18 @@ async function wipe(db: PrismaClient): Promise<void> {
   });
   const variantIds = ourVariants.map((v) => v.id);
   if (variantIds.length > 0) {
+    const ourMovements = await db.inventoryMovement.findMany({
+      where: { variantId: { in: variantIds } },
+      select: { id: true },
+    });
+    if (ourMovements.length > 0) {
+      await db.auditLog.deleteMany({
+        where: {
+          entityType: 'InventoryMovement',
+          entityId: { in: ourMovements.map((m) => m.id) },
+        },
+      });
+    }
     await db.inventoryMovement.deleteMany({ where: { variantId: { in: variantIds } } });
     await db.inventoryItem.deleteMany({ where: { variantId: { in: variantIds } } });
   }
@@ -445,10 +469,8 @@ async function wipe(db: PrismaClient): Promise<void> {
   await db.auditLog.deleteMany({
     where: { entityType: 'Customer', entityId: { in: ids } },
   });
-  await db.auditLog.deleteMany({
-    where: {
-      entityType: { in: ['CustomerAddress', 'SalesOrder', 'InventoryMovement'] },
-    },
-  });
+  // CustomerAddress audits — these only exist on this test's customers
+  // (which are about to be hard-deleted), so wholesale is safe.
+  await db.auditLog.deleteMany({ where: { entityType: 'CustomerAddress' } });
   await db.customer.deleteMany({ where: { id: { in: ids } } });
 }
