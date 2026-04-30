@@ -54,18 +54,19 @@ export async function resolvePrice(
     };
   }
 
-  // 2. CUSTOMER_SPECIFIC — single findUnique on the (customerId, variantId)
-  //    composite unique. Soft-deleted overrides are treated as absent so
-  //    the resolver falls through to BASE_PRICE on the same call.
-  const override = await tx.customerPriceOverride.findUnique({
+  // 2. CUSTOMER_SPECIFIC — single findFirst on the (customerId, variantId,
+  //    deletedAt=null) tuple. The partial unique index
+  //    `customerpriceoverride_active_key` guarantees at most one match.
+  //    Soft-deleted overrides are treated as absent — the resolver falls
+  //    through to BASE_PRICE on the same call.
+  const override = await tx.customerPriceOverride.findFirst({
     where: {
-      customerId_variantId: {
-        customerId: input.customerId,
-        variantId: input.variantId,
-      },
+      customerId: input.customerId,
+      variantId: input.variantId,
+      deletedAt: null,
     },
   });
-  if (override && override.deletedAt == null) {
+  if (override) {
     return {
       unitPrice: new Prisma.Decimal(override.unitPrice),
       rule: PriceResolutionRule.CUSTOMER_SPECIFIC,

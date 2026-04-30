@@ -156,8 +156,11 @@ suite('resolvePrice — CUSTOMER_SPECIFIC branch', () => {
     );
 
     // Replace with currency=null and re-resolve.
+    const existing = await db.customerPriceOverride.findFirstOrThrow({
+      where: { customerId, variantId, deletedAt: null },
+    });
     await db.customerPriceOverride.update({
-      where: { customerId_variantId: { customerId, variantId } },
+      where: { id: existing.id },
       data: { currency: null },
     });
     const r2 = await db.$transaction((tx) =>

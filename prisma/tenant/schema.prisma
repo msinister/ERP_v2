@@ -588,6 +588,13 @@ model CustomerContact {
 // resolver; loses to MANUAL_OVERRIDE (caller-supplied). CSV import is
 // UPSERT-ONLY: rows present in the CSV are inserted/updated; rows absent
 // from the CSV are LEFT ALONE — never deleted via the import path.
+//
+// Uniqueness on (customerId, variantId) is enforced by a partial unique
+// index `customerpriceoverride_active_key` that ignores soft-deleted
+// rows — created in the price_override_partial_unique migration. Prisma
+// can't express partial indices, so the @@unique declaration was
+// removed; queries that previously used findUnique on the composite key
+// now use findFirst with deletedAt:null in the filter.
 model CustomerPriceOverride {
   id         String    @id @default(cuid())
   customerId String
@@ -602,7 +609,10 @@ model CustomerPriceOverride {
   customer Customer       @relation(fields: [customerId], references: [id])
   variant  ProductVariant @relation(fields: [variantId], references: [id])
 
-  @@unique([customerId, variantId])
+  // Lookups by (customerId, variantId) are served by the partial unique
+  // index `customerpriceoverride_active_key` (declared in raw SQL in
+  // the price_override_partial_unique migration). No separate
+  // @@index([customerId, variantId]) needed.
   @@index([variantId])
   @@index([deletedAt])
 }
