@@ -22,11 +22,11 @@ import {
 } from '@/server/services/salesOrders';
 import { receiveInventory } from '@/server/services/movements';
 import {
-  arBalanceForCustomer,
   getInvoice,
   listInvoices,
   voidInvoice,
 } from '@/server/services/invoices';
+import { arBalanceForCustomer } from '@/server/services/ar';
 import { hasTenantDb, makeClient } from '../helpers/db';
 
 const suite = hasTenantDb ? describe : describe.skip;
@@ -337,9 +337,9 @@ suite('Invoice lifecycle — auto-generation, void, AR balance', () => {
       shippingAmount: '0',
       handlingAmount: '0',
     });
-    const balance = await arBalanceForCustomer(db, customer.id);
+    const { arBalance } = await arBalanceForCustomer(db, customer.id);
     // 57 + 100 + 50 = 207
-    expect(balance.toString()).toBe(new Prisma.Decimal('207').toString());
+    expect(arBalance.toString()).toBe(new Prisma.Decimal('207').toString());
   });
 
   it('listInvoices: customerId + status filter; voided excluded by status filter', async () => {

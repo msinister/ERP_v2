@@ -444,30 +444,6 @@ export async function listInvoices(
   });
 }
 
-/**
- * Sum of open invoice balances for a customer (computed as
- * total − amountPaid − amountCredited). Excludes VOIDED and
- * soft-deleted. Aging detail (bucket breakdown) lives in a separate
- * helper.
- */
-export async function arBalanceForCustomer(
-  db: PrismaClient,
-  customerId: string,
-): Promise<Prisma.Decimal> {
-  const invoices = await db.invoice.findMany({
-    where: {
-      customerId,
-      deletedAt: null,
-      status: { not: InvoiceStatus.VOIDED },
-    },
-    select: {
-      total: true,
-      amountPaid: true,
-      amountCredited: true,
-    },
-  });
-  return invoices.reduce(
-    (acc, i) => acc.plus(i.total).minus(i.amountPaid).minus(i.amountCredited),
-    new Prisma.Decimal(0),
-  );
-}
+// arBalanceForCustomer moved to src/server/services/ar.ts where it
+// returns both arBalance and unappliedCreditBalance as separate
+// fields. Aging buckets and the cross-customer summary live there too.
