@@ -82,17 +82,19 @@ export async function createCreditMemoDraftTx(
   }
 
   // Cross-record math check: SUM(line.qty * line.unitPrice) must equal
-  // amount + restockingFee within the documented tolerance.
+  // `amount` (the gross sales-returns recognition) within the documented
+  // tolerance. The restocking fee is a SEPARATE charge — it does not
+  // affect the line totals. Customer's net credit = amount - fee.
+  // Per docs/06-invoicing-ar.md: amount is gross, netCredit = amount - fee.
   const lineSum = data.lines.reduce(
     (acc, l) =>
       acc.plus(new Prisma.Decimal(l.qty).times(new Prisma.Decimal(l.unitPrice))),
     new Prisma.Decimal(0),
   );
-  const expected = amount.plus(restockingFee);
-  const diff = lineSum.minus(expected).abs();
+  const diff = lineSum.minus(amount).abs();
   if (diff.greaterThan(LINE_MATH_TOLERANCE)) {
     throw new Error(
-      `Line totals $${lineSum.toString()} don't match memo amount $${amount.toString()} + restocking fee $${restockingFee.toString()}; difference $${diff.toString()}`,
+      `Line totals $${lineSum.toString()} don't match memo amount $${amount.toString()}; difference $${diff.toString()}`,
     );
   }
 

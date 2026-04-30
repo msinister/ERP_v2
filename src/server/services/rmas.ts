@@ -326,12 +326,13 @@ export async function creditFromRma(
     } else if (fee.percent != null) {
       restockingFeeAmount = lineGrossSum.times(fee.percent).dividedBy(100);
     }
-    // amount = lineGrossSum (this is the gross credit amount for the lines)
-    // restockingFee adds on top to satisfy the schema math:
-    //   SUM(line.qty * unitPrice) === amount + restockingFee
-    // So amount = lineGrossSum - restockingFee.
-    const amount = lineGrossSum.minus(restockingFeeAmount);
-    if (amount.lessThan(0)) {
+    // Per docs/06-invoicing-ar.md: amount is the GROSS sales-returns
+    // recognition (= lineGrossSum). restockingFee is a separate charge.
+    // The CM service computes netCredit = amount - fee, which is the
+    // customer's actual AR reduction. CM line invariant: SUM(line.qty *
+    // unitPrice) === amount (fee is NOT included in the line sum).
+    const amount = lineGrossSum;
+    if (restockingFeeAmount.greaterThan(amount)) {
       throw new Error(
         `Resolved restocking fee ${restockingFeeAmount.toString()} exceeds line gross ${lineGrossSum.toString()}`,
       );

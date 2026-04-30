@@ -350,15 +350,14 @@ suite('RMA lifecycle', () => {
         { invoiceLineId: inv.lines[0].id, qty: '5', unitPrice: '10', description: 'r' },
       ],
     });
-    // Per spec (item #10): amount = lineGrossSum - fee = 45; the existing
-    // CreditMemo service computes netCredit = amount - fee, so netCredit = 40.
-    // Line invariant SUM(qty*unitPrice) === amount + fee = 50 holds with the
-    // pass-through unit prices.
+    // Per docs/06-invoicing-ar.md: amount = gross sales-returns
+    // recognition (= lineGrossSum = 50), fee = 5, netCredit = amount - fee = 45.
+    // Line invariant SUM(qty*unitPrice) === amount = 50 (fee NOT in line sum).
     expect(result.creditMemo.restockingFee.toString()).toBe(
       new Prisma.Decimal('5').toString(),
     );
-    expect(result.creditMemo.amount.toString()).toBe(new Prisma.Decimal('45').toString());
-    expect(result.creditMemo.netCredit.toString()).toBe(new Prisma.Decimal('40').toString());
+    expect(result.creditMemo.amount.toString()).toBe(new Prisma.Decimal('50').toString());
+    expect(result.creditMemo.netCredit.toString()).toBe(new Prisma.Decimal('45').toString());
   });
 
   it('Flat override + default percent → flat wins', async () => {

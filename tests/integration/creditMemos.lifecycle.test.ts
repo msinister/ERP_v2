@@ -347,9 +347,10 @@ suite('CreditMemo lifecycle', () => {
       categoryId: returnCategory.id,
       amount: '100',
       restockingFee: '10',
-      // Lines must satisfy SUM(qty*unitPrice) === amount + restockingFee = 110.
+      // Lines must satisfy SUM(qty*unitPrice) === amount = 100.
+      // Restocking fee is a SEPARATE charge, NOT included in line sum.
       lines: [
-        { variantId: variant.id, qty: '11', unitPrice: '10', description: 'with-fee' },
+        { variantId: variant.id, qty: '10', unitPrice: '10', description: 'with-fee' },
       ],
     });
     expect(cm.netCredit.toString()).toBe(new Prisma.Decimal('90').toString());
