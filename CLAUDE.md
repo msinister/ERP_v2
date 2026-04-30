@@ -253,7 +253,11 @@ npm run typecheck
 
 ## Operational notes
 
-- **Migration history (post-reset baseline, 2026-04-30):** Dev DB was originally built via `prisma db push`, which doesn't write to `_prisma_migrations`. The dev DB was reset on 2026-04-30 to establish a clean migration history. From this point forward, every migration runs through `prisma migrate dev` and the history table is the source of truth. If drift detection ever fires again, do NOT run `--applied` loops — investigate the cause.
+- **Migration shadow-URL hazard (root cause identified 2026-04-30):** the `prisma migrate diff --shadow-database-url=$TENANT_DATABASE_URL` pattern is **destructive** — it aliases the shadow DB to the real dev DB, and Prisma's shadow workflow wipes `_prisma_migrations` as part of the diff (and applies the migration's SQL to the dev DB as a side effect). NEVER pass the dev DB URL as a shadow URL. For the auto-vs-hand-written migration SQL comparison ritual, use one of:
+  - **(a) Let Prisma auto-create a transient shadow DB** — default behavior; works because the Postgres user has `CREATE DATABASE` permission. Recommended.
+  - **(b) Configure a dedicated shadow DB** (e.g. `erp_tenant_shadow`) via `shadowDatabaseUrl` in the schema.prisma datasource block.
+
+  Past CLAUDE.md notes about "Dropbox sync casualty" and "prior `db push` origin" for missing `_prisma_migrations` were incorrect — the actual cause was always shadow-URL aliasing in the diff workflow. Note corrected on 2026-04-30.
 - **Crypto key rotation is not implemented.** `src/lib/crypto/index.ts` assumes a single static `TENANT_FIELD_ENCRYPTION_KEY` for the lifetime of an instance. Rotation requires a key id stored alongside ciphertext + a resolver registry + a re-encrypt sweep, none of which exist yet. Acceptable for pilot; add before scaling to multiple production tenants or before the first key compromise drill.
 
 ---
