@@ -21,11 +21,18 @@ export async function createCustomer(
 ): Promise<Customer> {
   const data = createCustomerInputSchema.parse(input);
   return db.$transaction(async (tx) => {
+    // Stub-era createCustomer: connects the customer to the seeded
+    // UNASSIGNED sales rep + NET30 payment term so the post-expansion
+    // schema's required relations are satisfied. The full createCustomer
+    // (accepting type, sales rep, payment term, addresses, contacts, etc.)
+    // lands in the next service commit and replaces this body.
     const customer = await tx.customer.create({
       data: {
         code: data.code,
         name: data.name,
         active: data.active ?? true,
+        salesRep: { connect: { code: 'UNASSIGNED' } },
+        paymentTerm: { connect: { code: 'NET30' } },
       },
     });
     await audit(tx, {

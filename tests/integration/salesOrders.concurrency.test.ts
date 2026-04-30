@@ -9,6 +9,7 @@ import {
 } from '@/server/services/salesOrders';
 import { receiveInventory } from '@/server/services/movements';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { upsertTestCustomer } from '../helpers/customerStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -21,10 +22,9 @@ suite('SalesOrder concurrency (advisory lock)', () => {
 
   beforeAll(async () => {
     db = makeClient();
-    const c = await db.customer.upsert({
-      where: { code: 'TEST-CUST-SO-CONC' },
-      create: { code: 'TEST-CUST-SO-CONC', name: 'SO Conc Cust' },
-      update: { active: true, deletedAt: null },
+    const c = await upsertTestCustomer(db, {
+      code: 'TEST-CUST-SO-CONC',
+      name: 'SO Conc Cust',
     });
     customerId = c.id;
     const wh = await db.warehouse.upsert({

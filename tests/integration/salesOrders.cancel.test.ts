@@ -10,6 +10,7 @@ import {
 } from '@/server/services/salesOrders';
 import { receiveInventory } from '@/server/services/movements';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { upsertTestCustomer } from '../helpers/customerStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -22,10 +23,9 @@ suite('SalesOrder cancel', () => {
 
   beforeAll(async () => {
     db = makeClient();
-    const c = await db.customer.upsert({
-      where: { code: 'TEST-CUST-SO-CN' },
-      create: { code: 'TEST-CUST-SO-CN', name: 'Cancel Cust' },
-      update: { active: true, deletedAt: null },
+    const c = await upsertTestCustomer(db, {
+      code: 'TEST-CUST-SO-CN',
+      name: 'Cancel Cust',
     });
     customerId = c.id;
     const wh = await db.warehouse.upsert({

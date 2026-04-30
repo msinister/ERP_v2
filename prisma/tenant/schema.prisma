@@ -50,6 +50,40 @@ enum AuditAction {
   LOGIN
   LOGOUT
   INSUFFICIENT_STOCK_AT_CLOSE
+  SENSITIVE_READ
+}
+
+enum CustomerType {
+  WHOLESALE_REGULAR
+  WHOLESALE_PREFERRED
+  WHOLESALE_DISTRIBUTOR
+  WHOLESALE_MASTER_DISTRIBUTOR
+  RETAIL
+}
+
+enum CustomerActivityKind {
+  AUTO
+  MANUAL
+}
+
+enum CustomerDocumentKind {
+  RESALE_PERMIT
+  BUSINESS_LICENSE
+  RESALE_CERT
+  EIN
+  DRIVERS_LICENSE
+  SSN
+  OTHER
+}
+
+enum CommissionBasis {
+  REVENUE
+  MARGIN
+}
+
+enum AddressKind {
+  BILLING
+  SHIPPING
 }
 
 enum SalesOrderStatus {
@@ -121,12 +155,13 @@ model ProductVariant {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  product            Product             @relation(fields: [productId], references: [id])
+  product            Product                 @relation(fields: [productId], references: [id])
   inventory          InventoryItem[]
   movements          InventoryMovement[]
   purchaseOrderLines PurchaseOrderLine[]
   receiptLines       ReceiptLine[]
   salesOrderLines    SalesOrderLine[]
+  priceOverrides     CustomerPriceOverride[]
 
   @@index([productId])
 }
@@ -333,22 +368,55 @@ model ReceiptLine {
   @@index([variantId, warehouseId])
 }
 
-// Minimal customer stub. Full Customer master (contacts, ship-to/bill-to
-// addresses, payment terms, tax exemption, sales rep, pricing tier, AR
-// balance, portal credentials, etc.) lands in its own slice (see
-// docs/03-customers.md). For now Sales Orders need *something* to FK
-// against — this row holds the bare minimum. Strict mirror of the Vendor
-// stub above. EXPAND LATER.
 model Customer {
-  id        String    @id @default(cuid())
-  code      String    @unique
-  name      String
-  active    Boolean   @default(true)
-  deletedAt DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id                String       @id @default(cuid())
+  // Auto-issued CUST-YYYY-NNNNN via the Sequence helper. Original stub
+  // exposed this as `code` and we keep that name for FK stability.
+  code              String       @unique
+  // Display name. CITEXT makes the @unique case-insensitive natively.
+  // Convention is to add `(City)` suffix on collision — see docs/03-customers.md.
+  name              String       @unique @db.Citext
+  type              CustomerType @default(WHOLESALE_REGULAR)
+  // Required relations. Existing rows are backfilled to UNASSIGNED / NET30
+  // before the NOT NULL flip in the migration.
+  salesRepId        String
+  paymentTermId     String
+  // Financial terms.
+  creditLimit       Decimal?     @db.Decimal(18, 5) // null = no limit
+  arHoldDays        Int? // null = AR hold off
+  taxExempt         Boolean      @default(false)
+  resaleCertNumber  String?
+  // Phone/email may be duplicated across customers (one owner, many stores).
+  primaryPhone      String?
+  primaryEmail      String?
+  // Sticky internal notes — print on every internal document for this customer
+  // (per docs/03-customers.md). Distinct from CustomerActivity (timeline) and
+  // AuditLog (security/compliance ledger).
+  internalNotes     String?
+  shopifyCustomerId String? // future Shopify sync
+  // Cost-plus % captured for future resolver branch; not wired in this slice.
+  costPlusPercent   Decimal?     @db.Decimal(18, 5)
+  active            Boolean      @default(true)
+  deletedAt         DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
-  salesOrders SalesOrder[]
+  salesRep       SalesRep                     @relation(fields: [salesRepId], references: [id])
+  paymentTerm    PaymentTerm                  @relation(fields: [paymentTermId], references: [id])
+  addresses      CustomerAddress[]
+  contacts       CustomerContact[]
+  priceOverrides CustomerPriceOverride[]
+  paymentMethods CustomerPaymentMethod[]
+  documents      CustomerDocument[]
+  activities     CustomerActivity[]
+  tags           CustomerTagAssignment[]
+  categories     CustomerCategoryAssignment[]
+  salesOrders    SalesOrder[]
+
+  @@index([type])
+  @@index([salesRepId])
+  @@index([active, deletedAt])
+  @@index([shopifyCustomerId])
 }
 
 model SalesOrder {
@@ -425,4 +493,239 @@ model SalesOrderLine {
   @@index([salesOrderId])
   @@index([variantId, warehouseId])
   @@index([deletedAt])
+}
+
+// Admin-managed list. Seeded with Net 30, COD, Prepay, 50% deposit,
+// Pay on shipping, Bill later (Net 30) by the migration; the seed file
+// re-asserts these on every run.
+model PaymentTerm {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  label     String
+  netDays   Int? // null for COD/Prepay
+  active    Boolean   @default(true)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  customers Customer[]
+}
+
+// Sales rep — minimal. userId is captured nullable now so the future User
+// model can FK in without a migration. Commission rate fields are captured
+// here for the commission slice; computation lives elsewhere.
+model SalesRep {
+  id                String           @id @default(cuid())
+  code              String           @unique
+  name              String
+  email             String?
+  active            Boolean          @default(true)
+  // Reserved for future User-model FK. Nullable + no @relation defined yet.
+  userId            String?
+  commissionBasis   CommissionBasis?
+  commissionPercent Decimal?         @db.Decimal(18, 5)
+  // Group rate placeholder (future SalesRepGroup model).
+  groupId           String?
+  deletedAt         DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  customers Customer[]
+
+  @@index([userId])
+}
+
+model CustomerAddress {
+  id         String      @id @default(cuid())
+  customerId String
+  kind       AddressKind // BILLING or SHIPPING
+  // Service layer enforces "exactly one isDefault=true per (customerId, kind)
+  // among non-deleted rows" — also guarded by a partial unique index.
+  isDefault  Boolean     @default(false)
+  label      String? // e.g. "Warehouse", "Storefront"
+  line1      String
+  line2      String?
+  city       String
+  region     String // state/province
+  postalCode String
+  country    String      @default("US")
+  // 'attention' is "what to write on the package" (name-only string), not a
+  // FK to CustomerContact. Future cleanup: consider FK link in v2.
+  attention  String?
+  phone      String?
+  deletedAt  DateTime?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId, kind])
+  @@index([customerId, isDefault])
+}
+
+model CustomerContact {
+  id         String    @id @default(cuid())
+  customerId String
+  name       String
+  // Free-form with autocomplete suggestions: Owner / Buyer / AP / AR / Manager / Shipping
+  role       String?
+  email      String?
+  phone      String?
+  mobile     String?
+  // Service layer enforces "exactly one isPrimary=true per customer among
+  // non-deleted rows" — also guarded by a partial unique index.
+  isPrimary  Boolean   @default(false)
+  deletedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+}
+
+// Per-customer per-variant price override. Wins over BASE_PRICE in the
+// resolver; loses to MANUAL_OVERRIDE (caller-supplied). CSV import is
+// UPSERT-ONLY: rows present in the CSV are inserted/updated; rows absent
+// from the CSV are LEFT ALONE — never deleted via the import path.
+model CustomerPriceOverride {
+  id         String    @id @default(cuid())
+  customerId String
+  variantId  String
+  unitPrice  Decimal   @db.Decimal(18, 5)
+  currency   String?   @default("USD")
+  notes      String?
+  deletedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  customer Customer       @relation(fields: [customerId], references: [id])
+  variant  ProductVariant @relation(fields: [variantId], references: [id])
+
+  @@unique([customerId, variantId])
+  @@index([variantId])
+  @@index([deletedAt])
+}
+
+// Authorize.Net CIM tokens only. NEVER store PAN, CVV, or anything
+// PCI-relevant. Input validation rejects payloads that look like raw card
+// numbers. See CLAUDE.md non-negotiable rules.
+model CustomerPaymentMethod {
+  id                            String    @id @default(cuid())
+  customerId                    String
+  authorizeNetCustomerProfileId String
+  authorizeNetPaymentProfileId  String    @unique
+  brand                         String?
+  last4                         String?
+  expirationMonth               Int?
+  expirationYear                Int?
+  // Service layer enforces "exactly one isPreferred=true per customer among
+  // non-deleted rows" — also guarded by a partial unique index.
+  isPreferred                   Boolean   @default(false)
+  active                        Boolean   @default(true)
+  deletedAt                     DateTime?
+  createdAt                     DateTime  @default(now())
+  updatedAt                     DateTime  @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId, isPreferred])
+  @@index([expirationYear, expirationMonth])
+}
+
+// Document blobs live in DigitalOcean Spaces; this row stores metadata.
+// EIN / SSN / DRIVERS_LICENSE values are stored as ciphertext via lib/crypto
+// (AES-256-GCM); the cleartext read path emits a SENSITIVE_READ audit row.
+model CustomerDocument {
+  id               String               @id @default(cuid())
+  customerId       String
+  kind             CustomerDocumentKind
+  // ciphertext (base64) + iv for kinds with a sensitive scalar value.
+  encryptedValue   String?
+  encryptedValueIv String?
+  // For kinds with a file attachment.
+  storageKey       String?
+  fileName         String?
+  contentType      String?
+  expiresOn        DateTime?
+  notes            String?
+  deletedAt        DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId, kind])
+  @@index([expiresOn])
+}
+
+// Customer-scoped business activity log. Distinct from AuditLog: AuditLog is
+// the security/compliance ledger (who-did-what across the entire app);
+// CustomerActivity is the customer-facing timeline a salesperson reads on
+// the customer page. Sensitive customer changes (credit limit, AR hold,
+// type, sales rep) write to BOTH — intentional, not redundant.
+//
+// detailJson conventions:
+//   - AUTO entries: { field: string, from: any, to: any }
+//   - MANUAL entries: null (the summary string is the whole content)
+model CustomerActivity {
+  id          String               @id @default(cuid())
+  customerId  String
+  kind        CustomerActivityKind
+  summary     String
+  detailJson  Json?
+  createdById String?
+  createdAt   DateTime             @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId, createdAt])
+}
+
+// Pre-made list, admin-managed. The `code` column is the stable identifier
+// admins reference in scripts/imports (CustomerTag is label-only by design
+// — tags are sales-rep ad-hoc, categories are operations-managed lists).
+model CustomerCategory {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  label     String
+  active    Boolean   @default(true)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  assignments CustomerCategoryAssignment[]
+}
+
+model CustomerCategoryAssignment {
+  customerId String
+  categoryId String
+  createdAt  DateTime @default(now())
+
+  customer Customer         @relation(fields: [customerId], references: [id])
+  category CustomerCategory @relation(fields: [categoryId], references: [id])
+
+  @@id([customerId, categoryId])
+  @@index([categoryId])
+}
+
+// Free-form, autocomplete-driven. Tag rows are created lazily on first use.
+model CustomerTag {
+  id        String   @id @default(cuid())
+  label     String   @unique @db.Citext
+  createdAt DateTime @default(now())
+
+  assignments CustomerTagAssignment[]
+}
+
+model CustomerTagAssignment {
+  customerId String
+  tagId      String
+  createdAt  DateTime @default(now())
+
+  customer Customer    @relation(fields: [customerId], references: [id])
+  tag      CustomerTag @relation(fields: [tagId], references: [id])
+
+  @@id([customerId, tagId])
+  @@index([tagId])
 }

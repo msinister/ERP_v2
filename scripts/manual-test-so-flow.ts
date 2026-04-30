@@ -10,9 +10,17 @@ import {
 const CUSTOMER_CODE = 'MANUAL-TEST-CUSTOMER';
 
 async function ensureCustomer() {
+  // Connects the customer to the seeded UNASSIGNED sales rep + NET30
+  // payment term (created by the expand_customer_master migration and
+  // re-asserted by prisma/tenant/seed.ts).
   return db.customer.upsert({
     where: { code: CUSTOMER_CODE },
-    create: { code: CUSTOMER_CODE, name: 'Manual Test Customer' },
+    create: {
+      code: CUSTOMER_CODE,
+      name: 'Manual Test Customer',
+      salesRep: { connect: { code: 'UNASSIGNED' } },
+      paymentTerm: { connect: { code: 'NET30' } },
+    },
     update: { active: true, deletedAt: null },
   });
 }
