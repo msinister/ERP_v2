@@ -8,20 +8,94 @@ import {
 } from '../src/server/services/salesOrders';
 
 const CUSTOMER_CODE = 'MANUAL-TEST-CUSTOMER';
+const OVERRIDE_PRICE = '4.44'; // distinct from the seed product basePrice (9.99)
+
+async function ensureSalesRepAndPaymentTerm() {
+  // Idempotently re-assert the seeded UNASSIGNED rep + NET30 term so
+  // the script works even on a freshly-migrated DB before db:seed:tenant
+  // has been run.
+  await db.salesRep.upsert({
+    where: { code: 'UNASSIGNED' },
+    create: { code: 'UNASSIGNED', name: 'Unassigned' },
+    update: { name: 'Unassigned', active: true, deletedAt: null },
+  });
+  await db.paymentTerm.upsert({
+    where: { code: 'NET30' },
+    create: { code: 'NET30', label: 'Net 30', netDays: 30 },
+    update: { label: 'Net 30', netDays: 30, active: true, deletedAt: null },
+  });
+}
 
 async function ensureCustomer() {
-  // Connects the customer to the seeded UNASSIGNED sales rep + NET30
-  // payment term (created by the expand_customer_master migration and
-  // re-asserted by prisma/tenant/seed.ts).
-  return db.customer.upsert({
-    where: { code: CUSTOMER_CODE },
-    create: {
-      code: CUSTOMER_CODE,
-      name: 'Manual Test Customer',
-      salesRep: { connect: { code: 'UNASSIGNED' } },
-      paymentTerm: { connect: { code: 'NET30' } },
+  // Full master shape: customer + billing address. Default ship-to is
+  // optional; the SO flow doesn't require it. The first run creates;
+  // subsequent runs leave the customer in place (the upsert path
+  // requires a billing-address-less update, which we do via a separate
+  // findFirst-then-create flow).
+  const existing = await db.customer.findFirst({
+    where: { code: CUSTOMER_CODE, deletedAt: null },
+  });
+  if (existing) return existing;
+
+  return db.$transaction(async (tx) => {
+    const customer = await tx.customer.create({
+      data: {
+        code: CUSTOMER_CODE,
+        name: 'Manual Test Customer',
+        salesRep: { connect: { code: 'UNASSIGNED' } },
+        paymentTerm: { connect: { code: 'NET30' } },
+      },
+    });
+    await tx.customerAddress.create({
+      data: {
+        customerId: customer.id,
+        kind: 'BILLING',
+        isDefault: true,
+        line1: '1 Manual Test Way',
+        city: 'Dallas',
+        region: 'TX',
+        postalCode: '75201',
+      },
+    });
+    await tx.customerAddress.create({
+      data: {
+        customerId: customer.id,
+        kind: 'SHIPPING',
+        isDefault: true,
+        line1: '1 Manual Test Way',
+        city: 'Dallas',
+        region: 'TX',
+        postalCode: '75201',
+      },
+    });
+    return customer;
+  });
+}
+
+async function ensurePriceOverride(customerId: string, variantId: string) {
+  // Idempotent: leaves an existing override in place but resets the
+  // unit price + un-soft-deletes if needed so the script's expected
+  // CUSTOMER_SPECIFIC rule fires reliably across runs.
+  const existing = await db.customerPriceOverride.findFirst({
+    where: { customerId, variantId },
+  });
+  if (existing) {
+    return db.customerPriceOverride.update({
+      where: { id: existing.id },
+      data: {
+        unitPrice: new Prisma.Decimal(OVERRIDE_PRICE),
+        currency: 'USD',
+        deletedAt: null,
+      },
+    });
+  }
+  return db.customerPriceOverride.create({
+    data: {
+      customerId,
+      variantId,
+      unitPrice: new Prisma.Decimal(OVERRIDE_PRICE),
+      currency: 'USD',
     },
-    update: { active: true, deletedAt: null },
   });
 }
 
@@ -56,7 +130,8 @@ async function readInventory(variantId: string, warehouseId: string) {
 }
 
 async function main() {
-  banner('1. Ensure customer stub exists');
+  banner('1. Ensure sales rep + payment term + customer (full master shape)');
+  await ensureSalesRepAndPaymentTerm();
   const customer = await ensureCustomer();
   console.log({ id: customer.id, code: customer.code, name: customer.name });
 
@@ -78,7 +153,15 @@ async function main() {
     productBasePrice: product!.basePrice!.toString(),
   });
 
-  banner('3. Create SO (1 line, 5 units, base price via resolver)');
+  banner(`2b. Ensure customer-specific price override at $${OVERRIDE_PRICE} (vs base ${product!.basePrice!.toString()})`);
+  const override = await ensurePriceOverride(customer.id, variant.id);
+  console.log({
+    overrideId: override.id,
+    unitPrice: override.unitPrice.toString(),
+    currency: override.currency,
+  });
+
+  banner('3. Create SO (1 line, 5 units — should resolve via CUSTOMER_SPECIFIC override)');
   const so = await createSalesOrder(db, {
     customerId: customer.id,
     warehouseId: warehouse.id,
@@ -103,6 +186,12 @@ async function main() {
       qtyShipped: so.lines[0].qtyShipped.toString(),
     },
   });
+  console.log(
+    `Pricing rule fired: ${so.lines[0].priceRule}` +
+      (so.lines[0].priceRule === 'CUSTOMER_SPECIFIC'
+        ? '  ← override took effect ✓'
+        : '  ← UNEXPECTED: override did not fire'),
+  );
 
   banner('4a. Inventory BEFORE confirm');
   console.log(await readInventory(variant.id, warehouse.id));
@@ -247,6 +336,15 @@ async function main() {
     where: { salesOrderId: { in: [so.id, cancelMe.id] } },
   });
   await db.salesOrder.deleteMany({ where: { id: { in: [so.id, cancelMe.id] } } });
+
+  // Remove the price override + its audit row so the next run starts
+  // from a clean slate. (The customer + addresses stay — they're cheap
+  // and ensureCustomer is idempotent.)
+  await db.auditLog.deleteMany({
+    where: { entityType: 'CustomerPriceOverride', entityId: override.id },
+  });
+  await db.customerPriceOverride.deleteMany({ where: { id: override.id } });
+
   console.log('Inventory after cleanup:', await readInventory(variant.id, warehouse.id));
   console.log('done');
 }
