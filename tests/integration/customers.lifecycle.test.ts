@@ -14,6 +14,7 @@ import {
   updateCustomer,
 } from '@/server/services/customers';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -275,6 +276,11 @@ async function wipe(db: PrismaClient): Promise<void> {
     return;
   }
   // Hard-delete dependent rows we created in tests.
+  const ourSos = await db.salesOrder.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  await wipeInvoiceArtifactsForSOs(db, ourSos.map((s) => s.id));
   await db.salesOrder.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerActivity.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerAddress.deleteMany({ where: { customerId: { in: ids } } });

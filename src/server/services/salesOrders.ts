@@ -9,6 +9,7 @@ import { getNextSequence } from '@/lib/sequences/sequences';
 import { resolvePrice } from '@/lib/pricing/resolve';
 import { lockBin } from '@/server/services/locks';
 import { consumeInventoryTx } from '@/server/services/movements';
+import { generateInvoiceForClosedSOTx } from '@/server/services/invoices';
 import {
   cancelSalesOrderInputSchema,
   closeSalesOrderInputSchema,
@@ -448,6 +449,13 @@ export async function closeSalesOrder(
         after: { status: after.status },
         ctx,
       });
+
+      // Auto-invoice generation. Same transaction as the close, so
+      // either both succeed or both roll back. Idempotent against
+      // re-call (existing invoice for the SO is returned without
+      // throwing).
+      await generateInvoiceForClosedSOTx(tx, id, ctx);
+
       return after;
     });
   } catch (e) {

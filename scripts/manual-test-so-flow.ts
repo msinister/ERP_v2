@@ -332,6 +332,31 @@ async function main() {
   await db.auditLog.deleteMany({
     where: { entityType: 'SalesOrder', entityId: { in: [so.id, cancelMe.id] } },
   });
+  // Drop the invoice + its JE that closeSalesOrder generated as a side
+  // effect, before deleting the SO (Invoice.salesOrderId is RESTRICT).
+  const closeInvoices = await db.invoice.findMany({
+    where: { salesOrderId: { in: [so.id, cancelMe.id] } },
+    select: { id: true },
+  });
+  if (closeInvoices.length > 0) {
+    const invIds = closeInvoices.map((i) => i.id);
+    const closeJes = await db.journalEntry.findMany({
+      where: { entityType: 'Invoice', entityId: { in: invIds } },
+      select: { id: true },
+    });
+    if (closeJes.length > 0) {
+      const jeIds = closeJes.map((j) => j.id);
+      await db.journalEntryLine.deleteMany({
+        where: { journalEntryId: { in: jeIds } },
+      });
+      await db.journalEntry.deleteMany({ where: { id: { in: jeIds } } });
+    }
+    await db.auditLog.deleteMany({
+      where: { entityType: 'Invoice', entityId: { in: invIds } },
+    });
+    await db.invoiceLine.deleteMany({ where: { invoiceId: { in: invIds } } });
+    await db.invoice.deleteMany({ where: { id: { in: invIds } } });
+  }
   await db.salesOrderLine.deleteMany({
     where: { salesOrderId: { in: [so.id, cancelMe.id] } },
   });

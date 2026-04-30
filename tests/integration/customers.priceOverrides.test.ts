@@ -23,6 +23,7 @@ import {
 } from '@/server/services/customerPriceOverrides';
 import { createSalesOrder } from '@/server/services/salesOrders';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -330,6 +331,7 @@ suite('CustomerPriceOverride service + CSV importer', () => {
     await db.auditLog.deleteMany({
       where: { entityType: 'SalesOrder', entityId: so.id },
     });
+    await wipeInvoiceArtifactsForSOs(db, [so.id]);
     await db.salesOrderLine.deleteMany({ where: { salesOrderId: so.id } });
     await db.salesOrder.deleteMany({ where: { id: so.id } });
   });
@@ -342,6 +344,11 @@ async function wipe(db: PrismaClient): Promise<void> {
   });
   const ids = customers.map((c) => c.id);
   if (ids.length === 0) return;
+  const ourSos = await db.salesOrder.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  await wipeInvoiceArtifactsForSOs(db, ourSos.map((s) => s.id));
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: { in: ids } } } });
   await db.salesOrder.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerPriceOverride.deleteMany({ where: { customerId: { in: ids } } });

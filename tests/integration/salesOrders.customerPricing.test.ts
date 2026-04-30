@@ -11,6 +11,7 @@ import type {
 import { createCustomer } from '@/server/services/customers';
 import { createSalesOrder } from '@/server/services/salesOrders';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -171,6 +172,11 @@ async function wipe(db: PrismaClient): Promise<void> {
   });
   const ids = customers.map((c) => c.id);
   if (ids.length === 0) return;
+  const ourSos = await db.salesOrder.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  await wipeInvoiceArtifactsForSOs(db, ourSos.map((s) => s.id));
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: { in: ids } } } });
   await db.salesOrder.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerPriceOverride.deleteMany({ where: { customerId: { in: ids } } });

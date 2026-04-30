@@ -14,6 +14,7 @@ import {
   dispatchSalesOrder,
 } from '@/server/services/salesOrders';
 import { receiveInventory } from '@/server/services/movements';
+import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { upsertTestCustomer } from '../helpers/customerStub';
 
@@ -271,6 +272,7 @@ async function wipe(
       },
     });
   }
+  await wipeInvoiceArtifactsForSOs(db, ourSos.map((s) => s.id));
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: ids.customerId } } });
   await db.salesOrder.deleteMany({ where: { customerId: ids.customerId } });
   await db.inventoryMovement.deleteMany({ where: { variantId: ids.variantId } });

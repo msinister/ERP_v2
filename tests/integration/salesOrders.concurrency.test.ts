@@ -9,6 +9,7 @@ import {
 } from '@/server/services/salesOrders';
 import { receiveInventory } from '@/server/services/movements';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 import { upsertTestCustomer } from '../helpers/customerStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
@@ -151,6 +152,7 @@ async function wipe(
       where: { entityType: 'SalesOrder', entityId: { in: ourSos.map((s) => s.id) } },
     });
   }
+  await wipeInvoiceArtifactsForSOs(db, ourSos.map((s) => s.id));
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: ids.customerId } } });
   await db.salesOrder.deleteMany({ where: { customerId: ids.customerId } });
   await db.inventoryMovement.deleteMany({ where: { variantId: ids.variantId } });
