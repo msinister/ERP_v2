@@ -202,13 +202,33 @@ export async function confirmCreditMemo(
       );
     }
 
-    // Post the GL JE. Math (matches docs/08-gl-costing-reporting.md):
+    // Post the GL JE. Math matches docs/08-gl-costing-reporting.md:
+    //
     //   DR 4500 Sales Returns       amount
     //   CR 1210 AR                  amount
     //   DR 1210 AR                  restockingFee  (only if > 0)
     //   CR 4600 Restocking Fee Inc  restockingFee  (only if > 0)
-    // Net AR effect = -amount + restockingFee = -netCredit. Balanced
-    // (Dr = amount + restockingFee, Cr = amount + restockingFee).
+    //
+    // IMPORTANT — both 4500 and 1210 use `amount` (gross), NOT
+    // `netCredit`. Future readers may be tempted to "simplify" by
+    // collapsing into 3 legs (DR 4500 / CR 1210 netCredit / CR 4600
+    // restockingFee), but that misrepresents the sales-returns
+    // recognition: the customer is being credited the FULL gross
+    // amount of the return; the restocking fee is a SEPARATE event
+    // that charges them back. Booking gross 4500 / gross AR-CR keeps
+    // the sales-returns ledger accurate (matches the gross of the
+    // original sale being reversed) while the second pair of legs
+    // recognizes the restocking-fee income and its corresponding
+    // AR re-add — i.e. "customer owes us the fee back."
+    //
+    // Net effects:
+    //   Net Dr 1210 = -amount + restockingFee = -netCredit  ✓
+    //   Sum Dr      = amount + restockingFee
+    //   Sum Cr      = amount + restockingFee  ✓ balanced
+    //
+    // gl.post() enforces SUM(Dr) === SUM(Cr) — an earlier spec
+    // proposed CR 1210 = netCredit, which would have left a
+    // restockingFee imbalance and the helper would have rejected.
     const jeLines: Array<{
       accountCode: string;
       debit?: Prisma.Decimal;
