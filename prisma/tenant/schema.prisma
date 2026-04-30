@@ -103,6 +103,14 @@ enum CreditApplicationKind {
   CREDIT_TO_INVOICE
 }
 
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
 enum CustomerType {
   WHOLESALE_REGULAR
   WHOLESALE_PREFERRED
@@ -1068,4 +1076,78 @@ model CreditApplication {
   @@index([invoiceId, reversedAt])
   @@index([paymentId])
   @@index([creditMemoId])
+}
+
+// =========================================================================
+// GL stub — minimum needed for the Invoicing & AR slice's auto-JE posts.
+//
+// Full Chart of Accounts module (hierarchy / parent accounts / period
+// close / multi-warehouse inventory accounts / manual JEs / admin
+// reversal with closed-period gating) ships in its own slice (Module 7,
+// docs/08-gl-costing-reporting.md). This stub is the minimum set of
+// shapes the AR auto-posts need to land — same pattern as the Vendor /
+// Customer / SalesRep stubs that came before their full slices.
+// =========================================================================
+
+model GlAccount {
+  id        String      @id @default(cuid())
+  // Numeric account code per the spec (1000–9999). Stable identifier
+  // for service-layer references (e.g., findByCode('1210')).
+  code      String      @unique
+  name      String
+  type      AccountType
+  // Hierarchy / parent-account / sub-account fields land with the GL
+  // slice. Stub keeps a flat list.
+  active    Boolean     @default(true)
+  deletedAt DateTime?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  journalEntryLines JournalEntryLine[]
+
+  @@index([type])
+}
+
+model JournalEntry {
+  id          String    @id @default(cuid())
+  number      String    @unique // JE-YYYY-NNNNN via Sequence
+  // Operational source — cross-references the entity that triggered
+  // the post. Used by the GL slice for drill-down and by the AR
+  // slice's reversal paths to find the JE to reverse.
+  entityType  String
+  entityId    String
+  postedAt    DateTime  @default(now())
+  description String
+  // Set when the operational entity is voided / payment-reversed /
+  // CM-voided. The full GL slice will add admin manual-reverse
+  // capability with proper period-close gating.
+  reversedAt  DateTime?
+  reversedBy  String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  lines JournalEntryLine[]
+
+  @@index([entityType, entityId])
+  @@index([postedAt])
+}
+
+model JournalEntryLine {
+  id             String   @id @default(cuid())
+  journalEntryId String
+  accountId      String
+  // Conventional double-entry: debit and credit are mutually exclusive,
+  // both >= 0. The post() helper enforces SUM(debits) = SUM(credits)
+  // before insertion.
+  debit          Decimal  @default(0) @db.Decimal(18, 5)
+  credit         Decimal  @default(0) @db.Decimal(18, 5)
+  memo           String?
+  createdAt      DateTime @default(now())
+
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id])
+  account      GlAccount    @relation(fields: [accountId], references: [id])
+
+  @@index([journalEntryId])
+  @@index([accountId])
 }
