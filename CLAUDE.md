@@ -278,16 +278,17 @@ npm run typecheck
 1. ✅ Discovery / design spec complete
 2. ✅ Foundation (audit log, multi-tenant infra, advisory locks; auth + RBAC still pending and will land alongside the next module that needs them)
 3. ✅ Products & Inventory (parent product + variant model, ledger-based stock, advisory-locked movement service with audit, Tx variants for composability)
-4. ⏳ Customers + Vendors (Vendor stub exists from PO module — needs full master expansion)
-5. ⏳ Sales Orders + Invoicing/AR ← **CURRENT**
+4. ✅ Customer master (full expansion: types, addresses, contacts, payment terms, sales reps, credit limit + AR-hold thresholds, tax-exempt + resale cert, customer-specific pricing with CSV importer + UPSERT-only contract, Authorize.Net CIM payment-method tokens, encrypted document storage with audited decrypt path, activity log, tags + categories). Vendor still stub-only — full vendor master lands in its own slice.
+5. ✅ Sales Orders (DRAFT → CONFIRMED → DISPATCHED → CLOSED + CANCELLED, reservation, advisory locks, audit, INSUFFICIENT_STOCK_AT_CLOSE visibility)
 6. ✅ Purchase Orders + Receipts (M:N PO ↔ Receipt model, Sequence helper, RECEIVE_REVERSE)
-7. ⏳ Bills / AP (separate phase — depends on Receipts, which are done)
-8. ⏳ GL/Costing engine + Reports
-9. ⏳ Integrations (Shopify, Authorize.Net, Mailgun)
-10. ⏳ Document/email templates + admin UI
-11. ⏳ Migration tooling + Naked Kratom data import
-12. ⏳ Parallel run
-13. ⏳ Cutover
+7. ⏳ Invoicing / AR ← **CURRENT** (depends on closed SOs which exist)
+8. ⏳ Bills / AP (separate phase — depends on Receipts, which are done)
+9. ⏳ GL/Costing engine + Reports
+10. ⏳ Integrations (Shopify, Authorize.Net runtime, Mailgun)
+11. ⏳ Document/email templates + admin UI
+12. ⏳ Migration tooling + Naked Kratom data import
+13. ⏳ Parallel run
+14. ⏳ Cutover
 
 Update this section as phases complete.
 
