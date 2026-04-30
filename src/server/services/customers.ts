@@ -1,18 +1,56 @@
-import { AuditAction } from '@/generated/tenant';
-import type { Customer, PrismaClient } from '@/generated/tenant';
+import { AuditAction, CustomerActivityKind, Prisma } from '@/generated/tenant';
+import type {
+  Customer,
+  CustomerType as CustomerTypeEnum,
+  PrismaClient,
+} from '@/generated/tenant';
 import { audit, type AuditContext } from '@/lib/audit/audit';
+import { getNextSequence } from '@/lib/sequences/sequences';
 import {
-  createCustomerStubInputSchema as createCustomerInputSchema,
-  updateCustomerStubInputSchema as updateCustomerInputSchema,
-  type CreateCustomerStubInput as CreateCustomerInput,
-  type UpdateCustomerStubInput as UpdateCustomerInput,
+  createCustomerInputSchema,
+  updateCustomerInputSchema,
+  type CreateCustomerInput,
+  type UpdateCustomerInput,
 } from '@/lib/validation/customers';
+import { addAddressTx } from '@/server/services/customerAddresses';
+import { createContactTx } from '@/server/services/customerContacts';
 
-// Customer stub service. Strict mirror of the Vendor stub. EXPAND LATER.
-// The full Customer master (contacts, addresses, terms, tax exemption,
-// pricing tier, sales rep, AR balance, portal credentials) lands in its
-// own slice (docs/03-customers.md). For now we only need the minimum so
-// Sales Orders can FK against something and tests can construct fixtures.
+// Customer master service. Replaces the SO-slice stub.
+//
+// docs/03-customers.md drives the shape: required customer ID + display
+// name + type + sales rep + payment term + billing address + (default)
+// ship-to. Composite create writes everything in one transaction so a
+// half-built customer is impossible.
+//
+// Two writes-on-sensitive-changes intentionally:
+//   - AuditLog       — security/compliance ledger; tamper-evident, retained
+//   - CustomerActivity — customer-facing timeline a salesperson reads
+//                        on the customer page. detailJson on AUTO entries
+//                        follows { field, from, to } per the schema doc.
+
+const CUSTOMER_SEQUENCE_NAME = 'customer';
+const CUSTOMER_PREFIX = 'CUST';
+
+// Fields whose changes are surfaced in the customer-facing activity log.
+// Updates to OTHER fields still write to AuditLog (every state change is
+// tracked there) but don't pollute the customer timeline.
+const ACTIVITY_TRACKED_FIELDS = [
+  'creditLimit',
+  'arHoldDays',
+  'taxExempt',
+  'salesRepId',
+  'paymentTermId',
+  'type',
+] as const;
+
+export type CustomerWithRelations = Customer & {
+  addresses?: Array<{ id: string; kind: string; isDefault: boolean }>;
+  contacts?: Array<{ id: string; isPrimary: boolean }>;
+};
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
 
 export async function createCustomer(
   db: PrismaClient,
@@ -21,27 +59,112 @@ export async function createCustomer(
 ): Promise<Customer> {
   const data = createCustomerInputSchema.parse(input);
   return db.$transaction(async (tx) => {
-    // Stub-era createCustomer: connects the customer to the seeded
-    // UNASSIGNED sales rep + NET30 payment term so the post-expansion
-    // schema's required relations are satisfied. The full createCustomer
-    // (accepting type, sales rep, payment term, addresses, contacts, etc.)
-    // lands in the next service commit and replaces this body.
+    // Allocate CUST-YYYY-NNNNN unless the caller explicitly supplied a
+    // code (used by the migration importer / manual fixtures).
+    let code = data.code;
+    if (!code) {
+      const seq = await getNextSequence(tx, {
+        name: CUSTOMER_SEQUENCE_NAME,
+        prefix: CUSTOMER_PREFIX,
+        useYear: true,
+      });
+      code = seq.formatted;
+    }
+
     const customer = await tx.customer.create({
       data: {
-        code: data.code,
+        code,
         name: data.name,
+        type: data.type ?? 'WHOLESALE_REGULAR',
+        salesRep: { connect: { id: data.salesRepId } },
+        paymentTerm: { connect: { id: data.paymentTermId } },
+        creditLimit:
+          data.creditLimit != null ? new Prisma.Decimal(data.creditLimit) : null,
+        arHoldDays: data.arHoldDays ?? null,
+        taxExempt: data.taxExempt ?? false,
+        resaleCertNumber: data.resaleCertNumber ?? null,
+        primaryPhone: data.primaryPhone ?? null,
+        primaryEmail: data.primaryEmail ?? null,
+        internalNotes: data.internalNotes ?? null,
+        shopifyCustomerId: data.shopifyCustomerId ?? null,
+        costPlusPercent:
+          data.costPlusPercent != null
+            ? new Prisma.Decimal(data.costPlusPercent)
+            : null,
         active: data.active ?? true,
-        salesRep: { connect: { code: 'UNASSIGNED' } },
-        paymentTerm: { connect: { code: 'NET30' } },
       },
     });
+
+    // Composite payload — write addresses + contacts inside the same tx
+    // via the *Tx variants so the singleton invariants (one default per
+    // kind, one primary contact) are enforced atomically.
+    await addAddressTx(tx, customer.id, data.billingAddress, ctx);
+    if (data.defaultShippingAddress) {
+      await addAddressTx(
+        tx,
+        customer.id,
+        // Force isDefault=true on the explicit "default ship-to" slot.
+        { ...data.defaultShippingAddress, isDefault: true },
+        ctx,
+      );
+    }
+    if (data.additionalShippingAddresses) {
+      for (const addr of data.additionalShippingAddresses) {
+        await addAddressTx(tx, customer.id, addr, ctx);
+      }
+    }
+    if (data.contacts) {
+      for (const contact of data.contacts) {
+        await createContactTx(tx, customer.id, contact, ctx);
+      }
+    }
+    if (data.tagLabels) {
+      for (const label of data.tagLabels) {
+        const tag = await tx.customerTag.upsert({
+          where: { label },
+          create: { label },
+          update: {},
+        });
+        await tx.customerTagAssignment.upsert({
+          where: { customerId_tagId: { customerId: customer.id, tagId: tag.id } },
+          create: { customerId: customer.id, tagId: tag.id },
+          update: {},
+        });
+      }
+    }
+    if (data.categoryIds) {
+      for (const categoryId of data.categoryIds) {
+        await tx.customerCategoryAssignment.upsert({
+          where: {
+            customerId_categoryId: { customerId: customer.id, categoryId },
+          },
+          create: { customerId: customer.id, categoryId },
+          update: {},
+        });
+      }
+    }
+
     await audit(tx, {
       action: AuditAction.CREATE,
       entityType: 'Customer',
       entityId: customer.id,
       after: customer,
-      ctx,
+      ctx: {
+        userId: ctx?.userId ?? data.createdById ?? null,
+        ipAddress: ctx?.ipAddress,
+        reason: ctx?.reason,
+      },
     });
+    // Seed activity row so the customer page has a non-empty timeline.
+    await tx.customerActivity.create({
+      data: {
+        customerId: customer.id,
+        kind: CustomerActivityKind.AUTO,
+        summary: 'customer_created',
+        createdById: ctx?.userId ?? data.createdById ?? null,
+      },
+    });
+
     return customer;
   });
 }
@@ -57,13 +180,36 @@ export async function updateCustomer(
     const before = await tx.customer.findUnique({ where: { id } });
     if (!before) throw new Error(`Customer not found: ${id}`);
     if (before.deletedAt) throw new Error('Customer is soft-deleted');
-    const after = await tx.customer.update({
-      where: { id },
-      data: {
-        ...(data.name !== undefined ? { name: data.name } : {}),
-        ...(data.active !== undefined ? { active: data.active } : {}),
-      },
-    });
+
+    const updateData: Prisma.CustomerUpdateInput = {};
+    if (data.name !== undefined) updateData.name = data.name;
+    if (data.type !== undefined) updateData.type = data.type;
+    if (data.salesRepId !== undefined) {
+      updateData.salesRep = { connect: { id: data.salesRepId } };
+    }
+    if (data.paymentTermId !== undefined) {
+      updateData.paymentTerm = { connect: { id: data.paymentTermId } };
+    }
+    if ('creditLimit' in data) {
+      updateData.creditLimit =
+        data.creditLimit != null ? new Prisma.Decimal(data.creditLimit) : null;
+    }
+    if ('arHoldDays' in data) updateData.arHoldDays = data.arHoldDays ?? null;
+    if (data.taxExempt !== undefined) updateData.taxExempt = data.taxExempt;
+    if ('resaleCertNumber' in data) updateData.resaleCertNumber = data.resaleCertNumber ?? null;
+    if ('primaryPhone' in data) updateData.primaryPhone = data.primaryPhone ?? null;
+    if ('primaryEmail' in data) updateData.primaryEmail = data.primaryEmail ?? null;
+    if ('internalNotes' in data) updateData.internalNotes = data.internalNotes ?? null;
+    if ('shopifyCustomerId' in data) updateData.shopifyCustomerId = data.shopifyCustomerId ?? null;
+    if ('costPlusPercent' in data) {
+      updateData.costPlusPercent =
+        data.costPlusPercent != null ? new Prisma.Decimal(data.costPlusPercent) : null;
+    }
+    if (data.active !== undefined) updateData.active = data.active;
+
+    const after = await tx.customer.update({ where: { id }, data: updateData });
+
+    // AuditLog row first — every state change is in the security ledger.
     await audit(tx, {
       action: AuditAction.UPDATE,
       entityType: 'Customer',
@@ -72,6 +218,25 @@ export async function updateCustomer(
       after,
       ctx,
     });
+
+    // Then a CustomerActivity AUTO row per tracked field that actually
+    // changed. Both writes are intentional — see module-header comment.
+    for (const field of ACTIVITY_TRACKED_FIELDS) {
+      const fromVal = serializeFieldValue((before as Record<string, unknown>)[field]);
+      const toVal = serializeFieldValue((after as Record<string, unknown>)[field]);
+      if (!shallowEqual(fromVal, toVal)) {
+        await tx.customerActivity.create({
+          data: {
+            customerId: id,
+            kind: CustomerActivityKind.AUTO,
+            summary: `${field}_changed`,
+            detailJson: { field, from: fromVal, to: toVal },
+            createdById: ctx?.userId ?? null,
+          },
+        });
+      }
+    }
+
     return after;
   });
 }
@@ -85,6 +250,16 @@ export async function softDeleteCustomer(
     const before = await tx.customer.findUnique({ where: { id } });
     if (!before) throw new Error(`Customer not found: ${id}`);
     if (before.deletedAt) throw new Error('Customer is already soft-deleted');
+
+    const liveSoCount = await tx.salesOrder.count({
+      where: { customerId: id, deletedAt: null },
+    });
+    if (liveSoCount > 0) {
+      throw new Error(
+        `Cannot soft-delete Customer: ${liveSoCount} non-deleted sales order(s) reference it; soft-delete those first or move them to another customer`,
+      );
+    }
+
     const after = await tx.customer.update({
       where: { id },
       data: { deletedAt: new Date() },
@@ -108,18 +283,153 @@ export async function getCustomer(
   return db.customer.findFirst({ where: { id, deletedAt: null } });
 }
 
+// ---------------------------------------------------------------------------
+// Queries / list
+// ---------------------------------------------------------------------------
+
+export type CustomerListFilters = {
+  active?: boolean;
+  type?: CustomerTypeEnum;
+  salesRepId?: string;
+  tagId?: string;
+  categoryId?: string;
+  q?: string; // case-insensitive substring on display name (citext)
+  skip?: number;
+  take?: number;
+};
+
 export async function listCustomers(
   db: PrismaClient,
-  filters: { active?: boolean; skip?: number; take?: number } = {},
+  filters: CustomerListFilters = {},
 ): Promise<Customer[]> {
-  const { skip = 0, take = 100, active } = filters;
+  const { skip = 0, take = 100, active, type, salesRepId, tagId, categoryId, q } = filters;
   return db.customer.findMany({
     where: {
       deletedAt: null,
       ...(active !== undefined ? { active } : {}),
+      ...(type ? { type } : {}),
+      ...(salesRepId ? { salesRepId } : {}),
+      ...(tagId ? { tags: { some: { tagId } } } : {}),
+      ...(categoryId ? { categories: { some: { categoryId } } } : {}),
+      // CITEXT is only case-insensitive for equality, not LIKE; use Prisma's
+      // mode: 'insensitive' which produces ILIKE on Postgres.
+      ...(q ? { name: { contains: q, mode: 'insensitive' as const } } : {}),
     },
     orderBy: { createdAt: 'desc' },
     skip,
     take,
   });
+}
+
+/**
+ * Duplicate-detection helper for the create-customer form. Returns up
+ * to 5 candidates whose display name CONTAINS the input (citext
+ * substring match — case-insensitive); within those, customers whose
+ * default ship-to is in the same city sort first.
+ *
+ * Per refinement #4: this is name-AND-city-prioritized, NOT name-OR-
+ * city. Matching by city alone would flag every Dallas business as a
+ * duplicate of every other Dallas business.
+ */
+export async function findDuplicateCandidates(
+  db: PrismaClient,
+  args: { name: string; city?: string | null; limit?: number },
+): Promise<Array<Customer & { defaultShipCity: string | null }>> {
+  const limit = Math.min(args.limit ?? 5, 50);
+  const matches = await db.customer.findMany({
+    where: {
+      deletedAt: null,
+      // CITEXT only overrides equality; use ILIKE via mode:'insensitive'
+      // for substring matching.
+      name: { contains: args.name, mode: 'insensitive' },
+    },
+    include: {
+      addresses: {
+        where: { kind: 'SHIPPING', isDefault: true, deletedAt: null },
+        take: 1,
+        select: { city: true },
+      },
+    },
+    take: limit * 4, // overfetch so we can prioritize same-city after
+  });
+
+  const wantedCity = args.city?.trim().toLowerCase() ?? null;
+  const decorated = matches.map((c) => {
+    const defaultShipCity = c.addresses[0]?.city ?? null;
+    const sameCity =
+      wantedCity && defaultShipCity && defaultShipCity.toLowerCase() === wantedCity;
+    // Strip the addresses array — the public shape only exposes the
+    // single defaultShipCity scalar to the caller.
+    const { addresses: _addresses, ...rest } = c;
+    return { ...rest, defaultShipCity, _sameCity: sameCity ? 1 : 0 };
+  });
+
+  decorated.sort((a, b) => {
+    if (a._sameCity !== b._sameCity) return b._sameCity - a._sameCity;
+    return a.name.localeCompare(b.name);
+  });
+
+  return decorated.slice(0, limit).map(({ _sameCity, ...rest }) => {
+    void _sameCity;
+    return rest;
+  });
+}
+
+/**
+ * Documents whose `expiresOn` falls within the next N days. Used by
+ * the "documents expiring in 30 days" dashboard widget per
+ * docs/03-customers.md. Excludes soft-deleted documents.
+ */
+export async function documentsExpiringWithin(
+  db: PrismaClient,
+  days: number,
+): Promise<
+  Array<{
+    id: string;
+    customerId: string;
+    customerName: string;
+    kind: string;
+    expiresOn: Date;
+  }>
+> {
+  if (days < 0) throw new Error('days must be >= 0');
+  const now = new Date();
+  const cutoff = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+  const docs = await db.customerDocument.findMany({
+    where: {
+      deletedAt: null,
+      expiresOn: { gte: now, lte: cutoff },
+    },
+    include: { customer: { select: { name: true } } },
+    orderBy: { expiresOn: 'asc' },
+  });
+  return docs.map((d) => ({
+    id: d.id,
+    customerId: d.customerId,
+    customerName: d.customer.name,
+    kind: d.kind,
+    expiresOn: d.expiresOn!,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+// Make Decimal / Date / null comparable as JSON for activity logs.
+function serializeFieldValue(v: unknown): string | number | boolean | null {
+  if (v == null) return null;
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === 'object' && v !== null && 'toString' in v) {
+    // Prisma.Decimal lands here
+    return (v as { toString(): string }).toString();
+  }
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+    return v;
+  }
+  return String(v);
+}
+
+function shallowEqual(a: unknown, b: unknown): boolean {
+  return a === b;
 }

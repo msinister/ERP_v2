@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { createCustomerStubInputSchema as createCustomerInputSchema } from '@/lib/validation/customers';
+import type { CustomerType } from '@/generated/tenant';
+import { createCustomerInputSchema } from '@/lib/validation/customers';
 import {
   createCustomer,
   listCustomers,
@@ -13,10 +14,24 @@ export async function GET(req: Request) {
   const activeParam = url.searchParams.get('active');
   const active =
     activeParam === 'true' ? true : activeParam === 'false' ? false : undefined;
+  const typeParam = url.searchParams.get('type') ?? undefined;
+  const salesRepId = url.searchParams.get('salesRepId') ?? undefined;
+  const tagId = url.searchParams.get('tagId') ?? undefined;
+  const categoryId = url.searchParams.get('categoryId') ?? undefined;
+  const q = url.searchParams.get('q') ?? undefined;
   const skip = Number(url.searchParams.get('skip') ?? '0') || 0;
   const take = Math.min(Number(url.searchParams.get('take') ?? '100') || 100, 500);
 
-  const list = await listCustomers(db, { active, skip, take });
+  const list = await listCustomers(db, {
+    active,
+    type: typeParam as CustomerType | undefined,
+    salesRepId,
+    tagId,
+    categoryId,
+    q,
+    skip,
+    take,
+  });
   return NextResponse.json(list);
 }
 
