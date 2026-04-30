@@ -37,6 +37,10 @@ enum ReceiptStatus {
   CANCELLED
 }
 
+// Add new values when filterability matters. Don't reuse generic
+// CREATE / UPDATE / STATUS_CHANGE if a domain-specific action would be
+// more useful in audit reports (e.g. "show me every invoice generated
+// this month" should not need to filter on entityType).
 enum AuditAction {
   CREATE
   UPDATE
@@ -51,6 +55,52 @@ enum AuditAction {
   LOGOUT
   INSUFFICIENT_STOCK_AT_CLOSE
   SENSITIVE_READ
+  INVOICE_GENERATED
+  PAYMENT_REVERSED
+  RMA_STATUS_CHANGE
+}
+
+enum InvoiceStatus {
+  OPEN // generated, balance > 0
+  PARTIAL // some payment applied, balance > 0
+  PAID // balance = 0
+  VOIDED // credit memo or admin void; no AR impact
+}
+
+enum PaymentMethod {
+  CREDIT_CARD // Authorize.Net via Kaja (record-only in this slice)
+  ACH
+  WIRE
+  CHECK
+  CASH
+  MONEY_ORDER
+  APPLIED_CREDIT // deducting unapplied credit balance
+}
+
+enum PaymentStatus {
+  RECORDED
+  REVERSED // returned check / failed ACH / chargeback
+}
+
+enum CreditMemoStatus {
+  DRAFT
+  CONFIRMED // posted to GL, applies to AR
+  VOIDED
+}
+
+enum RmaStatus {
+  PENDING
+  APPROVED
+  IN_TRANSIT
+  RECEIVED
+  INSPECTED
+  CREDITED // terminal — credit memo issued and confirmed
+  REJECTED // terminal — no credit, no inventory effect
+}
+
+enum CreditApplicationKind {
+  PAYMENT_TO_INVOICE
+  CREDIT_TO_INVOICE
 }
 
 enum CustomerType {
@@ -162,6 +212,8 @@ model ProductVariant {
   receiptLines       ReceiptLine[]
   salesOrderLines    SalesOrderLine[]
   priceOverrides     CustomerPriceOverride[]
+  invoiceLines       InvoiceLine[]
+  creditMemoLines    CreditMemoLine[]
 
   @@index([productId])
 }
@@ -182,6 +234,7 @@ model Warehouse {
   receiptLines       ReceiptLine[]
   salesOrders        SalesOrder[]
   salesOrderLines    SalesOrderLine[]
+  invoices           Invoice[]
 }
 
 model InventoryItem {
@@ -412,6 +465,10 @@ model Customer {
   tags           CustomerTagAssignment[]
   categories     CustomerCategoryAssignment[]
   salesOrders    SalesOrder[]
+  invoices       Invoice[]
+  payments       Payment[]
+  creditMemos    CreditMemo[]
+  rmas           Rma[]
 
   @@index([type])
   @@index([salesRepId])
@@ -458,6 +515,7 @@ model SalesOrder {
   customer  Customer         @relation(fields: [customerId], references: [id])
   warehouse Warehouse        @relation(fields: [warehouseId], references: [id])
   lines     SalesOrderLine[]
+  invoice   Invoice?
 
   @@index([customerId, status])
   @@index([status, orderDate])
@@ -738,4 +796,276 @@ model CustomerTagAssignment {
 
   @@id([customerId, tagId])
   @@index([tagId])
+}
+
+// Generic admin-managed key/value settings table. Replaces the
+// single-row pattern (RestockingFeeDefault, etc.) — every future
+// admin setting (late-fee %, AR-hold default, negative-inventory
+// flag, ...) lives here as a typed JSON value validated by a per-key
+// Zod schema in the service layer. updatedBy is nullable until
+// auth/RBAC ships.
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+}
+
+// Invoice generated automatically when a SalesOrder closes.
+//
+// Numbering: Invoice.number = SalesOrder.number per docs/06-invoicing-ar.md
+// (no separate Sequence allocator in pilot). Drop-ship splits where
+// child invoices become `{SO}-1` are deferred — when that lands, the
+// unique constraint on `salesOrderId` relaxes to a per-SO sequence.
+//
+// cogsPosted is false until the costing engine slice retroactively
+// posts the COGS leg of the SO-close JE. Until then, P&L reports
+// overstate net income by the COGS amount of all closed SOs (see
+// CLAUDE.md operational notes).
+model Invoice {
+  id             String        @id @default(cuid())
+  number         String        @unique
+  salesOrderId   String        @unique
+  customerId     String
+  warehouseId    String
+  status         InvoiceStatus @default(OPEN)
+  // Money snapshot at generation. Immutable except via CreditMemo.
+  subtotal       Decimal       @db.Decimal(18, 5)
+  orderDiscount  Decimal       @default(0) @db.Decimal(18, 5)
+  shippingAmount Decimal       @default(0) @db.Decimal(18, 5)
+  handlingAmount Decimal       @default(0) @db.Decimal(18, 5)
+  total          Decimal       @db.Decimal(18, 5)
+  // Denormalized counters; recompute helpers in the service.
+  amountPaid     Decimal       @default(0) @db.Decimal(18, 5)
+  amountCredited Decimal       @default(0) @db.Decimal(18, 5)
+  currency       String?       @default("USD")
+  invoiceDate    DateTime      @default(now())
+  customerNotes  String?
+  internalNotes  String?
+  storedPdfKey   String? // populated on first email; PDF slice deferred
+  emailedAt      DateTime?
+  voidedAt       DateTime?
+  voidReason     String?
+  // Flipped to true by the costing engine slice when COGS is retro-posted.
+  cogsPosted     Boolean       @default(false)
+  deletedAt      DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  salesOrder   SalesOrder          @relation(fields: [salesOrderId], references: [id])
+  customer     Customer            @relation(fields: [customerId], references: [id])
+  warehouse    Warehouse           @relation(fields: [warehouseId], references: [id])
+  lines        InvoiceLine[]
+  applications CreditApplication[]
+  creditMemos  CreditMemo[]
+  rmas         Rma[]
+
+  @@index([customerId, status])
+  @@index([status, invoiceDate])
+  @@index([cogsPosted])
+  @@index([deletedAt])
+}
+
+// Snapshot of SO line at close-time. Decoupled from SOLine so SO edits
+// after close can never mutate posted invoices.
+model InvoiceLine {
+  id               String    @id @default(cuid())
+  invoiceId        String
+  salesOrderLineId String?
+  variantId        String
+  description      String
+  qty              Decimal   @db.Decimal(18, 5)
+  unitPrice        Decimal   @db.Decimal(18, 5)
+  discountPercent  Decimal?  @db.Decimal(18, 5)
+  discountAmount   Decimal?  @db.Decimal(18, 5)
+  lineTotal        Decimal   @db.Decimal(18, 5)
+  qtyReturned      Decimal   @default(0) @db.Decimal(18, 5)
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  invoice         Invoice          @relation(fields: [invoiceId], references: [id])
+  variant         ProductVariant   @relation(fields: [variantId], references: [id])
+  rmaLines        RmaLine[]
+  creditMemoLines CreditMemoLine[]
+
+  @@index([invoiceId])
+  @@index([variantId])
+}
+
+// A money-receiving event. One Payment can be split across many
+// invoices (or none — unapplied) via CreditApplication rows.
+model Payment {
+  id             String        @id @default(cuid())
+  number         String        @unique // PMT-YYYY-NNNNN via Sequence
+  customerId     String
+  method         PaymentMethod
+  status         PaymentStatus @default(RECORDED)
+  amount         Decimal       @db.Decimal(18, 5)
+  appliedAmount  Decimal       @default(0) @db.Decimal(18, 5)
+  currency       String?       @default("USD")
+  receivedAt     DateTime      @default(now())
+  reference      String?
+  notes          String?
+  reversedAt     DateTime?
+  reversedReason String?
+  deletedAt      DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  customer     Customer            @relation(fields: [customerId], references: [id])
+  applications CreditApplication[]
+
+  @@index([customerId, receivedAt])
+  @@index([status, receivedAt])
+}
+
+// Admin-managed list of credit-memo categories. Self-serve in admin
+// per spec. affectsInventory tells the credit-memo confirmation path
+// whether to emit a structured restock event for the future costing
+// engine slice.
+model CreditMemoCategory {
+  id               String    @id @default(cuid())
+  code             String    @unique
+  label            String
+  affectsInventory Boolean   @default(true)
+  active           Boolean   @default(true)
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  memos CreditMemo[]
+}
+
+model CreditMemo {
+  id            String           @id @default(cuid())
+  number        String           @unique // CM-YYYY-NNNNN via Sequence
+  customerId    String
+  invoiceId     String?
+  status        CreditMemoStatus @default(DRAFT)
+  categoryId    String
+  amount        Decimal          @db.Decimal(18, 5)
+  restockingFee Decimal          @default(0) @db.Decimal(18, 5)
+  netCredit     Decimal          @db.Decimal(18, 5)
+  appliedAmount Decimal          @default(0) @db.Decimal(18, 5)
+  currency      String?          @default("USD")
+  reason        String?
+  issuedAt      DateTime?
+  voidedAt      DateTime?
+  voidReason    String?
+  deletedAt     DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  customer     Customer            @relation(fields: [customerId], references: [id])
+  invoice      Invoice?            @relation(fields: [invoiceId], references: [id])
+  category     CreditMemoCategory  @relation(fields: [categoryId], references: [id])
+  rma          Rma?
+  lines        CreditMemoLine[]
+  applications CreditApplication[]
+
+  @@index([customerId, status])
+  @@index([invoiceId])
+}
+
+model CreditMemoLine {
+  id            String    @id @default(cuid())
+  creditMemoId  String
+  invoiceLineId String?
+  variantId     String
+  qty           Decimal   @db.Decimal(18, 5)
+  unitPrice     Decimal   @db.Decimal(18, 5)
+  lineTotal     Decimal   @db.Decimal(18, 5)
+  description   String
+  deletedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  creditMemo  CreditMemo     @relation(fields: [creditMemoId], references: [id])
+  invoiceLine InvoiceLine?   @relation(fields: [invoiceLineId], references: [id])
+  variant     ProductVariant @relation(fields: [variantId], references: [id])
+
+  @@index([creditMemoId])
+}
+
+model Rma {
+  id                   String    @id @default(cuid())
+  number               String    @unique // RMA-YYYY-NNNNN
+  customerId           String
+  invoiceId            String
+  status               RmaStatus @default(PENDING)
+  returnless           Boolean   @default(false)
+  reason               String?
+  // Restocking-fee policy at RMA creation. Defaults sourced from
+  // Setting('restocking_fee_default'); both nullable so an RMA can
+  // explicitly carry "no restocking fee" overrides.
+  restockingFeePercent Decimal?  @db.Decimal(18, 5)
+  restockingFeeFlat    Decimal?  @db.Decimal(18, 5)
+  approvedAt           DateTime?
+  receivedAt           DateTime?
+  inspectedAt          DateTime?
+  creditedAt           DateTime?
+  rejectedAt           DateTime?
+  rejectedReason       String?
+  creditMemoId         String?   @unique
+  deletedAt            DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  customer   Customer    @relation(fields: [customerId], references: [id])
+  invoice    Invoice     @relation(fields: [invoiceId], references: [id])
+  creditMemo CreditMemo? @relation(fields: [creditMemoId], references: [id])
+  lines      RmaLine[]
+
+  @@index([customerId, status])
+  @@index([status])
+}
+
+model RmaLine {
+  id            String    @id @default(cuid())
+  rmaId         String
+  invoiceLineId String
+  qty           Decimal   @db.Decimal(18, 5)
+  reason        String?
+  deletedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  rma         Rma         @relation(fields: [rmaId], references: [id])
+  invoiceLine InvoiceLine @relation(fields: [invoiceLineId], references: [id])
+
+  @@index([rmaId])
+}
+
+// Single source of truth for "this dollar of payment/credit was
+// applied to that dollar of invoice." Reversed apps are kept
+// (reversedAt set) so the audit trail survives.
+//
+// Two partial unique indices on (paymentId, invoiceId) and
+// (creditMemoId, invoiceId) — both filtered by reversedAt IS NULL —
+// prevent multi-applying the same payment or credit memo to the same
+// invoice while live. Created in raw SQL in the migration since
+// Prisma can't express partial indices.
+model CreditApplication {
+  id           String                @id @default(cuid())
+  kind         CreditApplicationKind
+  paymentId    String?
+  creditMemoId String?
+  invoiceId    String
+  amount       Decimal               @db.Decimal(18, 5)
+  appliedAt    DateTime              @default(now())
+  appliedById  String?
+  reversedAt   DateTime?
+  notes        String?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  payment    Payment?    @relation(fields: [paymentId], references: [id])
+  creditMemo CreditMemo? @relation(fields: [creditMemoId], references: [id])
+  invoice    Invoice     @relation(fields: [invoiceId], references: [id])
+
+  @@index([invoiceId, reversedAt])
+  @@index([paymentId])
+  @@index([creditMemoId])
 }
