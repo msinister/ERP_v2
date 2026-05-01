@@ -222,18 +222,20 @@ model ProductVariant {
   priceOverrides     CustomerPriceOverride[]
   invoiceLines       InvoiceLine[]
   creditMemoLines    CreditMemoLine[]
+  fifoLayers         FifoLayer[]
 
   @@index([productId])
 }
 
 model Warehouse {
-  id        String    @id @default(cuid())
-  code      String    @unique
-  name      String
-  active    Boolean   @default(true)
-  deletedAt DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  code               String    @unique
+  name               String
+  active             Boolean   @default(true)
+  inventoryAccountId String?
+  deletedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   inventory          InventoryItem[]
   movements          InventoryMovement[]
@@ -243,6 +245,8 @@ model Warehouse {
   salesOrders        SalesOrder[]
   salesOrderLines    SalesOrderLine[]
   invoices           Invoice[]
+  fifoLayers         FifoLayer[]
+  inventoryAccount   GlAccount?          @relation(fields: [inventoryAccountId], references: [id])
 }
 
 model InventoryItem {
@@ -262,25 +266,97 @@ model InventoryItem {
 }
 
 model InventoryMovement {
-  id              String                @id @default(cuid())
-  variantId       String
-  warehouseId     String
-  type            InventoryMovementType
-  qty             Decimal               @db.Decimal(18, 5)
-  reference       String?
-  transferGroupId String?
-  notes           String?
-  createdById     String?
-  createdAt       DateTime              @default(now())
+  id                 String                @id @default(cuid())
+  variantId          String
+  warehouseId        String
+  type               InventoryMovementType
+  qty                Decimal               @db.Decimal(18, 5)
+  // unitCost: NULL for ADJUST and negative-allocation CONSUME. For RECEIVE
+  // (post-Part-1), equals the new FifoLayer's unitCost. For CONSUME (normal),
+  // weighted average across consumed layers — per-layer breakdown lives in
+  // FifoConsumption rows. Pre-Part-1 RECEIVE rows stay NULL (no backfill).
+  unitCost           Decimal?              @db.Decimal(18, 5)
+  // True only for CONSUME movements created when negative-inventory flag is
+  // ON and stock was insufficient. Forces unitCost=NULL and skips
+  // FifoConsumption rows. Future part adds back-fill on subsequent RECEIVE.
+  negativeAllocation Boolean               @default(false)
+  reference          String?
+  transferGroupId    String?
+  notes              String?
+  createdById        String?
+  createdAt          DateTime              @default(now())
 
-  variant     ProductVariant @relation(fields: [variantId], references: [id])
-  warehouse   Warehouse      @relation(fields: [warehouseId], references: [id])
-  receiptLine ReceiptLine?
+  variant          ProductVariant    @relation(fields: [variantId], references: [id])
+  warehouse        Warehouse         @relation(fields: [warehouseId], references: [id])
+  receiptLine      ReceiptLine?
+  fifoLayer        FifoLayer?
+  fifoConsumptions FifoConsumption[]
 
   @@index([variantId, warehouseId, createdAt])
   @@index([type, createdAt])
   @@index([reference])
   @@index([transferGroupId])
+}
+
+// FIFO cost layer — created on RECEIVE (via postReceipt), consumed by
+// CONSUME movements (oldest receivedDate first). qtyRemaining is a
+// denormalized convenience kept in sync via service code; the database
+// CHECK constraint enforces qtyRemaining = qtyReceived - qtyConsumed at
+// commit time so any drift is caught immediately. unitCost is mutable
+// in the late-landed-cost slice (Part 4) but immutable in Part 1.
+//
+// receivedDate is sourced from Receipt.receivedAt (the business event
+// date, not system clock) so user-backdated receipts land in the
+// correct FIFO position.
+//
+// sourceReceiptLineId / sourceMovementId are nullable because future
+// parts (RMA returns at original sale's cost, adjustment-gain layers)
+// create layers without a Receipt source. Each is @unique to enforce
+// 1:1 with its owning Receipt line / RECEIVE movement.
+model FifoLayer {
+  id                  String    @id @default(cuid())
+  variantId           String
+  warehouseId         String
+  qtyReceived         Decimal   @db.Decimal(18, 5)
+  qtyConsumed         Decimal   @default(0) @db.Decimal(18, 5)
+  qtyRemaining        Decimal   @db.Decimal(18, 5)
+  unitCost            Decimal   @db.Decimal(18, 5)
+  receivedDate        DateTime
+  sourceReceiptLineId String?   @unique
+  sourceMovementId    String?   @unique
+  deletedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  variant           ProductVariant     @relation(fields: [variantId], references: [id])
+  warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
+  sourceReceiptLine ReceiptLine?       @relation(fields: [sourceReceiptLineId], references: [id])
+  sourceMovement    InventoryMovement? @relation(fields: [sourceMovementId], references: [id])
+  consumptions      FifoConsumption[]
+
+  @@index([variantId, warehouseId, receivedDate, id])
+  @@index([deletedAt])
+}
+
+// Per-layer breakdown of a CONSUME movement. One CONSUME → 1..N
+// FifoConsumption rows; SUM(qty) = ABS(InventoryMovement.qty) when
+// negativeAllocation = false (test-asserted, not DB-enforced). unitCost
+// snapshotted at consume time so Part 4 retroactive layer-cost edits
+// don't rewrite history; the retro-COGS engine walks these rows to
+// compute deltas.
+model FifoConsumption {
+  id         String   @id @default(cuid())
+  movementId String
+  layerId    String
+  qty        Decimal  @db.Decimal(18, 5)
+  unitCost   Decimal  @db.Decimal(18, 5)
+  createdAt  DateTime @default(now())
+
+  movement InventoryMovement @relation(fields: [movementId], references: [id])
+  layer    FifoLayer         @relation(fields: [layerId], references: [id])
+
+  @@index([movementId])
+  @@index([layerId])
 }
 
 model AuditLog {
@@ -423,6 +499,7 @@ model ReceiptLine {
   variant           ProductVariant     @relation(fields: [variantId], references: [id])
   warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
   inventoryMovement InventoryMovement? @relation(fields: [inventoryMovementId], references: [id])
+  fifoLayer         FifoLayer?
 
   @@index([receiptId])
   @@index([purchaseOrderLineId])
@@ -1104,6 +1181,7 @@ model GlAccount {
   updatedAt DateTime    @updatedAt
 
   journalEntryLines JournalEntryLine[]
+  warehouses        Warehouse[]
 
   @@index([type])
 }
