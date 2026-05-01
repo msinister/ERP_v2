@@ -285,8 +285,8 @@ npm run typecheck
 4. ✅ Customer master (full expansion: types, addresses, contacts, payment terms, sales reps, credit limit + AR-hold thresholds, tax-exempt + resale cert, customer-specific pricing with CSV importer + UPSERT-only contract, Authorize.Net CIM payment-method tokens, encrypted document storage with audited decrypt path, activity log, tags + categories). Vendor still stub-only — full vendor master lands in its own slice.
 5. ✅ Sales Orders (DRAFT → CONFIRMED → DISPATCHED → CLOSED + CANCELLED, reservation, advisory locks, audit, INSUFFICIENT_STOCK_AT_CLOSE visibility)
 6. ✅ Purchase Orders + Receipts (M:N PO ↔ Receipt model, Sequence helper, RECEIVE_REVERSE)
-7. ⏳ Invoicing / AR ← **CURRENT** (depends on closed SOs which exist)
-8. ⏳ Bills / AP (separate phase — depends on Receipts, which are done)
+7. ✅ Invoicing / AR (auto-invoice on SO close, void-blocked-by-applied-payments guard, recordPayment with FIFO CM apply, CreditMemo DRAFT→CONFIRMED→VOIDED with auto-apply on confirm, RMA → creditFromRma atomic flow, AR aging service: balance + per-customer buckets + summary, end-to-end smoke script in `scripts/smoke-test-ar-flow.ts`)
+8. ⏳ Bills / AP ← **CURRENT** (separate phase — depends on Receipts, which are done)
 9. ⏳ GL/Costing engine + Reports
 10. ⏳ Integrations (Shopify, Authorize.Net runtime, Mailgun)
 11. ⏳ Document/email templates + admin UI
