@@ -3,6 +3,8 @@ import type { InventoryMovement, PrismaClient } from '@/generated/tenant';
 import { randomUUID } from 'node:crypto';
 import { audit, type AuditContext } from '@/lib/audit/audit';
 import { lockBin, lockBinsOrdered } from '@/server/services/locks';
+import { consumeFromLayersTx } from '@/server/services/fifoLayers';
+import { getNegativeInventoryAllowed } from '@/server/services/negativeInventory';
 import {
   adjustmentInputSchema,
   receiveInputSchema,
@@ -107,6 +109,30 @@ export async function receiveInventoryTx(
   return movement;
 }
 
+// Outcome-first CONSUME (Phase 1C). Walks FifoLayers oldest-first via
+// consumeFromLayersTx, then branches:
+//   covered_by_layers           — layers fully covered qty; movement.unitCost = WAC
+//   covered_by_onhand_no_layers — no layers exist but onHand >= qty (option-A
+//                                  back-compat for tests that seed via
+//                                  receiveInventoryTx without going through
+//                                  postReceipt); movement.unitCost = NULL
+//   negative_allocation         — insufficient stock + neg-inv flag ON;
+//                                  movement.unitCost = NULL, negativeAllocation=true
+//   throw                       — insufficient stock + neg-inv flag OFF
+//
+// FK ordering: FifoConsumption.movementId is a non-deferred FK to
+// InventoryMovement.id, so the movement row must exist BEFORE the layer
+// walk inserts FifoConsumption rows. Mirrors postReceipt's create-movement-
+// then-create-layer ordering. The movement is created with placeholder
+// unitCost=null / negativeAllocation=false and then UPDATEd to the final
+// values once the outcome is decided. A throw rolls the entire tx back —
+// movement and any FifoConsumption / FifoLayer mutations vanish together.
+type ConsumeOutcome =
+  | 'covered_by_layers'
+  | 'covered_by_onhand_no_layers'
+  | 'negative_allocation'
+  | 'throw';
+
 export async function consumeInventoryTx(
   tx: Prisma.TransactionClient,
   input: ConsumeInput,
@@ -126,23 +152,69 @@ export async function consumeInventoryTx(
     },
   });
   const onHand = item?.onHand ?? new Prisma.Decimal(0);
-  if (onHand.lessThan(qty)) {
-    throw new Error(
-      `Insufficient stock: onHand=${onHand.toString()} requested=${qty.toString()}`,
-    );
-  }
+  const onHandSufficient = onHand.greaterThanOrEqualTo(qty);
 
-  const movement = await tx.inventoryMovement.create({
+  // Step 1: create movement with placeholders. Satisfies the
+  // FifoConsumption.movementId FK before the layer walk runs.
+  let movement = await tx.inventoryMovement.create({
     data: {
       variantId: data.variantId,
       warehouseId: data.warehouseId,
       type: InventoryMovementType.CONSUME,
       qty: qty.negated(),
+      unitCost: null,
+      negativeAllocation: false,
       reference: data.reference,
       notes: data.notes,
       createdById: data.createdById,
     },
   });
+
+  // Step 2: walk layers oldest-first. The FOR UPDATE inside
+  // consumeFromLayersTx serializes against concurrent consumes / late-
+  // landed-cost flows on the same bin.
+  const layerResult = await consumeFromLayersTx(tx, {
+    variantId: data.variantId,
+    warehouseId: data.warehouseId,
+    qty,
+    movementId: movement.id,
+  });
+  const noLayers = layerResult.consumptions.length === 0;
+
+  // Step 3: decide outcome.
+  let outcome: ConsumeOutcome;
+  if (layerResult.fullyAllocated) {
+    outcome = 'covered_by_layers';
+  } else if (noLayers && onHandSufficient) {
+    outcome = 'covered_by_onhand_no_layers';
+  } else {
+    const negAllowed = await getNegativeInventoryAllowed(tx);
+    outcome = negAllowed ? 'negative_allocation' : 'throw';
+  }
+
+  // Step 4: execute.
+  switch (outcome) {
+    case 'throw':
+      throw new Error(
+        `Insufficient stock for ${data.variantId} in ${data.warehouseId}: onHand=${onHand.toString()}, requested=${qty.toString()}`,
+      );
+    case 'covered_by_layers':
+      movement = await tx.inventoryMovement.update({
+        where: { id: movement.id },
+        data: { unitCost: layerResult.weightedAverageCost },
+      });
+      break;
+    case 'covered_by_onhand_no_layers':
+      // Placeholder values are correct for this outcome — no update needed.
+      break;
+    case 'negative_allocation':
+      movement = await tx.inventoryMovement.update({
+        where: { id: movement.id },
+        data: { negativeAllocation: true },
+      });
+      break;
+  }
+
   await recomputeOnHand(tx, data.variantId, data.warehouseId);
   await audit(tx, {
     action: AuditAction.CREATE,
