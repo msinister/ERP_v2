@@ -63,6 +63,25 @@ export const restockingFeeDefaultValueSchema = z
 export type RestockingFeeDefaultOnDisk = z.infer<typeof restockingFeeDefaultValueSchema>;
 
 // ---------------------------------------------------------------------------
+// negative_inventory_allowed
+// ---------------------------------------------------------------------------
+// Shape on disk: { allowed: boolean }
+// Tenant-wide flag that controls whether CONSUME against insufficient stock
+// is allowed. Default false (preserves the historical hard-block behavior).
+// When true and stock is insufficient, the CONSUME succeeds with
+// unitCost=NULL and negativeAllocation=true on the movement; no
+// FifoConsumption rows are created. Back-fill on subsequent RECEIVE is
+// not yet implemented (see CLAUDE.md known limitations).
+
+export const negativeInventoryAllowedValueSchema = z.object({
+  allowed: z.boolean(),
+});
+
+export type NegativeInventoryAllowedOnDisk = z.infer<
+  typeof negativeInventoryAllowedValueSchema
+>;
+
+// ---------------------------------------------------------------------------
 // Per-key registry — useful for a future generic admin UI that needs to
 // validate any key by name. For now only one entry; later admin settings
 // (late_fee_default, ar_hold_default, etc.) get added here as they ship.
@@ -70,9 +89,13 @@ export type RestockingFeeDefaultOnDisk = z.infer<typeof restockingFeeDefaultValu
 
 export const SETTING_KEYS = {
   RESTOCKING_FEE_DEFAULT: 'restocking_fee_default',
+  NEGATIVE_INVENTORY_ALLOWED: 'negative_inventory_allowed',
 } as const;
 
 export const settingValueSchemas: ReadonlyMap<string, z.ZodTypeAny> = new Map<
   string,
   z.ZodTypeAny
->([[SETTING_KEYS.RESTOCKING_FEE_DEFAULT, restockingFeeDefaultValueSchema]]);
+>([
+  [SETTING_KEYS.RESTOCKING_FEE_DEFAULT, restockingFeeDefaultValueSchema],
+  [SETTING_KEYS.NEGATIVE_INVENTORY_ALLOWED, negativeInventoryAllowedValueSchema],
+]);
