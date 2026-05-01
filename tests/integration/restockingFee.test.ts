@@ -12,9 +12,15 @@ const suite = hasTenantDb ? describe : describe.skip;
 
 suite('restockingFee service', () => {
   let db: PrismaClient;
+  let restockingFeeSettingId: string;
 
   beforeAll(async () => {
     db = makeClient();
+    const row = await db.setting.findUniqueOrThrow({
+      where: { key: 'restocking_fee_default' },
+      select: { id: true },
+    });
+    restockingFeeSettingId = row.id;
   });
 
   afterEach(async () => {
@@ -24,8 +30,10 @@ suite('restockingFee service', () => {
       where: { key: 'restocking_fee_default' },
       data: { value: { percent: null, flat: null } },
     });
+    // Scope to THIS setting's audit rows only — an unscoped
+    // entityType='Setting' delete would wipe other suites' audit data.
     await db.auditLog.deleteMany({
-      where: { entityType: 'Setting' },
+      where: { entityType: 'Setting', entityId: restockingFeeSettingId },
     });
   });
 
