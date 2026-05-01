@@ -189,11 +189,20 @@ async function wipe(db: PrismaClient): Promise<void> {
   });
   const ids = ours.map((o) => o.id);
   if (ids.length === 0) return;
+  const ourAddresses = await db.customerAddress.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const addressIds = ourAddresses.map((a) => a.id);
   await db.customerActivity.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerAddress.deleteMany({ where: { customerId: { in: ids } } });
   await db.auditLog.deleteMany({
     where: { entityType: 'Customer', entityId: { in: ids } },
   });
-  await db.auditLog.deleteMany({ where: { entityType: 'CustomerAddress' } });
+  if (addressIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CustomerAddress', entityId: { in: addressIds } },
+    });
+  }
   await db.customer.deleteMany({ where: { id: { in: ids } } });
 }

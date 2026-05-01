@@ -187,14 +187,31 @@ async function wipe(db: PrismaClient): Promise<void> {
   }
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: { in: ids } } } });
   await db.salesOrder.deleteMany({ where: { customerId: { in: ids } } });
+  const ourAddresses = await db.customerAddress.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const addressIds = ourAddresses.map((a) => a.id);
+  const ourOverrides = await db.customerPriceOverride.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const overrideIds = ourOverrides.map((o) => o.id);
   await db.customerPriceOverride.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerActivity.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerAddress.deleteMany({ where: { customerId: { in: ids } } });
   await db.auditLog.deleteMany({
     where: { entityType: 'Customer', entityId: { in: ids } },
   });
-  await db.auditLog.deleteMany({
-    where: { entityType: { in: ['CustomerAddress', 'CustomerPriceOverride'] } },
-  });
+  if (addressIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CustomerAddress', entityId: { in: addressIds } },
+    });
+  }
+  if (overrideIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CustomerPriceOverride', entityId: { in: overrideIds } },
+    });
+  }
   await db.customer.deleteMany({ where: { id: { in: ids } } });
 }

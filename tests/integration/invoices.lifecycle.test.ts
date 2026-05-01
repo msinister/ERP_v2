@@ -464,13 +464,20 @@ async function wipe(db: PrismaClient): Promise<void> {
     await db.inventoryMovement.deleteMany({ where: { variantId: { in: variantIds } } });
     await db.inventoryItem.deleteMany({ where: { variantId: { in: variantIds } } });
   }
+  const ourAddresses = await db.customerAddress.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const addressIds = ourAddresses.map((a) => a.id);
   await db.customerActivity.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerAddress.deleteMany({ where: { customerId: { in: ids } } });
   await db.auditLog.deleteMany({
     where: { entityType: 'Customer', entityId: { in: ids } },
   });
-  // CustomerAddress audits — these only exist on this test's customers
-  // (which are about to be hard-deleted), so wholesale is safe.
-  await db.auditLog.deleteMany({ where: { entityType: 'CustomerAddress' } });
+  if (addressIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CustomerAddress', entityId: { in: addressIds } },
+    });
+  }
   await db.customer.deleteMany({ where: { id: { in: ids } } });
 }

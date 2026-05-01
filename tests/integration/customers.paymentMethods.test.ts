@@ -236,14 +236,31 @@ async function wipe(db: PrismaClient): Promise<void> {
   });
   const ids = customers.map((c) => c.id);
   if (ids.length === 0) return;
+  const ourAddresses = await db.customerAddress.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const addressIds = ourAddresses.map((a) => a.id);
+  const ourPaymentMethods = await db.customerPaymentMethod.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const paymentMethodIds = ourPaymentMethods.map((p) => p.id);
   await db.customerPaymentMethod.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerActivity.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerAddress.deleteMany({ where: { customerId: { in: ids } } });
   await db.auditLog.deleteMany({
     where: { entityType: 'Customer', entityId: { in: ids } },
   });
-  await db.auditLog.deleteMany({
-    where: { entityType: { in: ['CustomerAddress', 'CustomerPaymentMethod'] } },
-  });
+  if (addressIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CustomerAddress', entityId: { in: addressIds } },
+    });
+  }
+  if (paymentMethodIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CustomerPaymentMethod', entityId: { in: paymentMethodIds } },
+    });
+  }
   await db.customer.deleteMany({ where: { id: { in: ids } } });
 }

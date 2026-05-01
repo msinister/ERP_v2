@@ -334,14 +334,31 @@ async function wipe(db: PrismaClient): Promise<void> {
   });
   const ids = customers.map((c) => c.id);
   if (ids.length === 0) return;
+  const ourAddresses = await db.customerAddress.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const addressIds = ourAddresses.map((a) => a.id);
+  const ourDocuments = await db.customerDocument.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const documentIds = ourDocuments.map((d) => d.id);
   await db.customerDocument.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerActivity.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerAddress.deleteMany({ where: { customerId: { in: ids } } });
   await db.auditLog.deleteMany({
     where: { entityType: 'Customer', entityId: { in: ids } },
   });
-  await db.auditLog.deleteMany({
-    where: { entityType: { in: ['CustomerAddress', 'CustomerDocument'] } },
-  });
+  if (addressIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CustomerAddress', entityId: { in: addressIds } },
+    });
+  }
+  if (documentIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CustomerDocument', entityId: { in: documentIds } },
+    });
+  }
   await db.customer.deleteMany({ where: { id: { in: ids } } });
 }

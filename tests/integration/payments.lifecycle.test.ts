@@ -510,6 +510,32 @@ async function wipe(db: PrismaClient): Promise<void> {
   const ids = customers.map((c) => c.id);
   if (ids.length === 0) return;
 
+  // Snapshot CreditApplication IDs for this test's customers BEFORE any
+  // deletes. Used at the end to scope audit cleanup to test-owned rows.
+  const ourCustomerInvoices = await db.invoice.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const ourCustomerPayments = await db.payment.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const ourCustomerCms = await db.creditMemo.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const ourCreditApps = await db.creditApplication.findMany({
+    where: {
+      OR: [
+        { invoiceId: { in: ourCustomerInvoices.map((i) => i.id) } },
+        { paymentId: { in: ourCustomerPayments.map((p) => p.id) } },
+        { creditMemoId: { in: ourCustomerCms.map((c) => c.id) } },
+      ],
+    },
+    select: { id: true },
+  });
+  const creditAppIds = ourCreditApps.map((a) => a.id);
+
   // Drop CMs for these customers (they hold FKs back to invoices).
   const ourCms = await db.creditMemo.findMany({
     where: { customerId: { in: ids } },
@@ -609,16 +635,25 @@ async function wipe(db: PrismaClient): Promise<void> {
     await db.inventoryMovement.deleteMany({ where: { variantId: { in: variantIds } } });
     await db.inventoryItem.deleteMany({ where: { variantId: { in: variantIds } } });
   }
+  const ourAddresses = await db.customerAddress.findMany({
+    where: { customerId: { in: ids } },
+    select: { id: true },
+  });
+  const addressIds = ourAddresses.map((a) => a.id);
   await db.customerActivity.deleteMany({ where: { customerId: { in: ids } } });
   await db.customerAddress.deleteMany({ where: { customerId: { in: ids } } });
   await db.auditLog.deleteMany({
     where: { entityType: 'Customer', entityId: { in: ids } },
   });
-  // CreditApplication / CustomerAddress audits — only this test's
-  // rows match these entity types in practice (other tests scope by
-  // their own customer ids), so wholesale is safe enough here.
-  await db.auditLog.deleteMany({
-    where: { entityType: { in: ['CustomerAddress', 'CreditApplication'] } },
-  });
+  if (addressIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CustomerAddress', entityId: { in: addressIds } },
+    });
+  }
+  if (creditAppIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CreditApplication', entityId: { in: creditAppIds } },
+    });
+  }
   await db.customer.deleteMany({ where: { id: { in: ids } } });
 }

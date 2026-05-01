@@ -225,6 +225,29 @@ async function wipe(db: PrismaClient): Promise<void> {
   });
   const ids = customers.map((c) => c.id);
   if (ids.length > 0) {
+    // Snapshot child IDs BEFORE deleting the assignment/address rows,
+    // so we can scope the audit cleanup to test-owned rows only.
+    const ourAddresses = await db.customerAddress.findMany({
+      where: { customerId: { in: ids } },
+      select: { id: true },
+    });
+    const addressIds = ourAddresses.map((a) => a.id);
+    const ourTagAssignments = await db.customerTagAssignment.findMany({
+      where: { customerId: { in: ids } },
+      select: { customerId: true, tagId: true },
+    });
+    // Audit entityId for assignments is the composite "customerId:tagId"
+    // string (see src/server/services/customerTags.ts).
+    const tagAssignmentAuditIds = ourTagAssignments.map(
+      (a) => `${a.customerId}:${a.tagId}`,
+    );
+    const ourCategoryAssignments = await db.customerCategoryAssignment.findMany({
+      where: { customerId: { in: ids } },
+      select: { customerId: true, categoryId: true },
+    });
+    const categoryAssignmentAuditIds = ourCategoryAssignments.map(
+      (a) => `${a.customerId}:${a.categoryId}`,
+    );
     await db.customerActivity.deleteMany({ where: { customerId: { in: ids } } });
     await db.customerAddress.deleteMany({ where: { customerId: { in: ids } } });
     await db.customerTagAssignment.deleteMany({ where: { customerId: { in: ids } } });
@@ -232,22 +255,39 @@ async function wipe(db: PrismaClient): Promise<void> {
     await db.auditLog.deleteMany({
       where: { entityType: 'Customer', entityId: { in: ids } },
     });
-    await db.auditLog.deleteMany({
-      where: {
-        entityType: {
-          in: [
-            'CustomerAddress',
-            'CustomerTagAssignment',
-            'CustomerCategoryAssignment',
-          ],
+    if (addressIds.length > 0) {
+      await db.auditLog.deleteMany({
+        where: { entityType: 'CustomerAddress', entityId: { in: addressIds } },
+      });
+    }
+    if (tagAssignmentAuditIds.length > 0) {
+      await db.auditLog.deleteMany({
+        where: {
+          entityType: 'CustomerTagAssignment',
+          entityId: { in: tagAssignmentAuditIds },
         },
-      },
-    });
+      });
+    }
+    if (categoryAssignmentAuditIds.length > 0) {
+      await db.auditLog.deleteMany({
+        where: {
+          entityType: 'CustomerCategoryAssignment',
+          entityId: { in: categoryAssignmentAuditIds },
+        },
+      });
+    }
     await db.customer.deleteMany({ where: { id: { in: ids } } });
   }
   await db.customerTag.deleteMany({ where: { label: { startsWith: TAG } } });
-  await db.auditLog.deleteMany({
-    where: { entityType: 'CustomerCategory' },
+  const ourCategories = await db.customerCategory.findMany({
+    where: { code: { startsWith: `${TAG}-CAT` } },
+    select: { id: true },
   });
+  const categoryIds = ourCategories.map((c) => c.id);
+  if (categoryIds.length > 0) {
+    await db.auditLog.deleteMany({
+      where: { entityType: 'CustomerCategory', entityId: { in: categoryIds } },
+    });
+  }
   await db.customerCategory.deleteMany({ where: { code: { startsWith: `${TAG}-CAT` } } });
 }
