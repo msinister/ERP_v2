@@ -27,6 +27,7 @@ import {
   applyComputedPoStatus,
   recomputeQtyReceivedForPoLine,
 } from '@/server/services/purchaseOrders';
+import { createFifoLayerOnReceiveTx } from '@/server/services/fifoLayers';
 
 const RECEIPT_SEQUENCE_NAME = 'receipt';
 const RECEIPT_PREFIX = 'RCPT';
@@ -213,6 +214,11 @@ export async function postReceipt(
 
     // Flip status FIRST so recomputeQtyReceivedForPoLine (which filters on
     // receipt.status = POSTED) sees the receipt as in-scope when it sums.
+    // TODO: postReceipt does not currently accept a backdated receivedAt
+    // parameter. The FifoLayer.receivedDate created below mirrors this
+    // value, which is correct semantics for "right now" receives but
+    // blocks user-backdated FIFO scenarios per the spec. Adding an
+    // optional receivedAt parameter is a follow-on slice.
     const after = await tx.receipt.update({
       where: { id },
       data: {
@@ -243,10 +249,33 @@ export async function postReceipt(
         },
         ctx,
       );
+      // The RECEIVE movement carries the same unitCost as the line — they
+      // describe the same event from inventory and costing perspectives.
+      await tx.inventoryMovement.update({
+        where: { id: movement.id },
+        data: { unitCost: line.unitCost },
+      });
       await tx.receiptLine.update({
         where: { id: line.id },
         data: { inventoryMovementId: movement.id },
       });
+      // Create the FIFO cost layer for this receipt line. receivedDate
+      // is sourced from after.receivedAt (the value set on the receipt
+      // status flip above) so the layer's FIFO position reflects the
+      // business event date, not a redundant new Date() call.
+      await createFifoLayerOnReceiveTx(
+        tx,
+        {
+          variantId: line.variantId,
+          warehouseId: line.warehouseId,
+          qtyReceived: line.qtyReceived,
+          unitCost: line.unitCost,
+          receivedDate: after.receivedAt!,
+          sourceReceiptLineId: line.id,
+          sourceMovementId: movement.id,
+        },
+        ctx,
+      );
       if (line.purchaseOrderLineId) {
         affectedPoLineIds.add(line.purchaseOrderLineId);
       }
@@ -302,8 +331,44 @@ export async function cancelReceipt(
       throw new Error(`Cannot cancel Receipt in status ${before.status}`);
     }
 
+    // Guard: refuse cancel if any layer from this receipt has been
+    // consumed. Reversing partially-consumed inventory would require
+    // unwinding COGS posts that may already exist; the user must use
+    // an inventory adjustment instead.
+    const lineIds = before.lines.map((l) => l.id);
+    if (lineIds.length > 0) {
+      const consumedLayer = await tx.fifoLayer.findFirst({
+        where: {
+          sourceReceiptLineId: { in: lineIds },
+          deletedAt: null,
+          qtyConsumed: { gt: new Prisma.Decimal(0) },
+        },
+        select: { id: true },
+      });
+      if (consumedLayer) {
+        throw new Error(
+          'Cannot cancel receipt: receipt has consumed inventory layers. Use inventory adjustment instead.',
+        );
+      }
+    }
+
     const affectedPoLineIds = new Set<string>();
     const affectedPoIds = new Set<string>();
+
+    // Soft-delete all clean (qtyConsumed = 0) layers from this receipt.
+    // Guard above guarantees none have qtyConsumed > 0; this scopes the
+    // soft-delete to layers whose source matches one of this receipt's
+    // line ids. Done before the per-line loop so the layer state is
+    // consistent before any movement reversals fire.
+    if (lineIds.length > 0) {
+      await tx.fifoLayer.updateMany({
+        where: {
+          sourceReceiptLineId: { in: lineIds },
+          deletedAt: null,
+        },
+        data: { deletedAt: new Date() },
+      });
+    }
 
     for (const line of before.lines) {
       // 1. Reverse the movement via dedicated RECEIVE_REVERSE type.

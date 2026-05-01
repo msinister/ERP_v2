@@ -62,48 +62,61 @@ suite('Receipt service', () => {
   });
 
   beforeEach(async () => {
-    const variantIds = [variantAId, variantBId];
-    // Wipe audit rows for our movements only (other test files run in parallel).
-    const ourMovements = await db.inventoryMovement.findMany({
-      where: { variantId: { in: variantIds } },
-      select: { id: true },
-    });
-    if (ourMovements.length > 0) {
-      await db.auditLog.deleteMany({
-        where: { entityType: 'InventoryMovement', entityId: { in: ourMovements.map((m) => m.id) } },
-      });
-    }
-    await db.receiptLine.deleteMany({ where: { variantId: { in: variantIds } } });
-    await db.receipt.deleteMany({ where: { vendorId, warehouseId } });
-    await db.purchaseOrderLine.deleteMany({ where: { variantId: { in: variantIds } } });
-    await db.purchaseOrder.deleteMany({ where: { vendorId } });
-    await db.inventoryMovement.deleteMany({ where: { variantId: { in: variantIds } } });
-    await db.inventoryItem.deleteMany({ where: { variantId: { in: variantIds } } });
+    await wipeRow();
   });
 
   afterAll(async () => {
+    await wipeRow();
     const variantIds = [variantAId, variantBId];
-    const ourMovements = await db.inventoryMovement.findMany({
-      where: { variantId: { in: variantIds } },
-      select: { id: true },
-    });
-    if (ourMovements.length > 0) {
-      await db.auditLog.deleteMany({
-        where: { entityType: 'InventoryMovement', entityId: { in: ourMovements.map((m) => m.id) } },
-      });
-    }
-    await db.receiptLine.deleteMany({ where: { variantId: { in: variantIds } } });
-    await db.receipt.deleteMany({ where: { vendorId, warehouseId } });
-    await db.purchaseOrderLine.deleteMany({ where: { variantId: { in: variantIds } } });
-    await db.purchaseOrder.deleteMany({ where: { vendorId } });
-    await db.inventoryMovement.deleteMany({ where: { variantId: { in: variantIds } } });
-    await db.inventoryItem.deleteMany({ where: { variantId: { in: variantIds } } });
     await db.productVariant.deleteMany({ where: { id: { in: variantIds } } });
     await db.product.deleteMany({ where: { id: productId } });
     await db.warehouse.deleteMany({ where: { id: warehouseId } });
     await db.vendor.deleteMany({ where: { id: vendorId } });
     await db.$disconnect();
   });
+
+  // Scoped cleanup helper — extended in Phase 1B to wipe FifoLayer +
+  // FifoConsumption rows that postReceipt now creates. Snapshots
+  // test-owned ids first, deletes children before parents, scopes every
+  // deleteMany. Same pattern as fifoLayers.test.ts.
+  async function wipeRow(): Promise<void> {
+    const variantIds = [variantAId, variantBId];
+    const ourMovements = await db.inventoryMovement.findMany({
+      where: { variantId: { in: variantIds } },
+      select: { id: true },
+    });
+    const movementIds = ourMovements.map((m) => m.id);
+
+    const ourLayers = await db.fifoLayer.findMany({
+      where: { variantId: { in: variantIds } },
+      select: { id: true },
+    });
+    const layerIds = ourLayers.map((l) => l.id);
+
+    if (layerIds.length > 0) {
+      await db.fifoConsumption.deleteMany({
+        where: { layerId: { in: layerIds } },
+      });
+      await db.auditLog.deleteMany({
+        where: { entityType: 'FifoLayer', entityId: { in: layerIds } },
+      });
+      await db.fifoLayer.deleteMany({ where: { id: { in: layerIds } } });
+    }
+    if (movementIds.length > 0) {
+      await db.fifoConsumption.deleteMany({
+        where: { movementId: { in: movementIds } },
+      });
+      await db.auditLog.deleteMany({
+        where: { entityType: 'InventoryMovement', entityId: { in: movementIds } },
+      });
+    }
+    await db.receiptLine.deleteMany({ where: { variantId: { in: variantIds } } });
+    await db.receipt.deleteMany({ where: { vendorId, warehouseId } });
+    await db.purchaseOrderLine.deleteMany({ where: { variantId: { in: variantIds } } });
+    await db.purchaseOrder.deleteMany({ where: { vendorId } });
+    await db.inventoryMovement.deleteMany({ where: { variantId: { in: variantIds } } });
+    await db.inventoryItem.deleteMany({ where: { variantId: { in: variantIds } } });
+  }
 
   it('createDraftReceipt + postReceipt against a single PO updates inventory and PO state', async () => {
     const po = await createPurchaseOrder(db, {
@@ -359,5 +372,198 @@ suite('Receipt service', () => {
     const posted = await postReceipt(db, draft.id);
     await cancelReceipt(db, posted.id, {});
     await expect(cancelReceipt(db, posted.id, {})).rejects.toThrow(/Cannot cancel Receipt/);
+  });
+
+  // ==========================================================================
+  // Phase 1B — FifoLayer integration with postReceipt + cancelReceipt
+  // ==========================================================================
+
+  it('postReceipt single-line creates one FifoLayer with correct values + source FK links', async () => {
+    const draft = await createDraftReceipt(db, {
+      vendorId,
+      warehouseId,
+      lines: [
+        { variantId: variantAId, warehouseId, qtyReceived: '10', unitCost: '5' },
+      ],
+    });
+    const posted = await postReceipt(db, draft.id);
+    const line = posted.lines.find((l) => l.variantId === variantAId)!;
+
+    const layers = await db.fifoLayer.findMany({
+      where: { variantId: variantAId, warehouseId },
+    });
+    expect(layers).toHaveLength(1);
+    const layer = layers[0];
+    expect(layer.qtyReceived.toString()).toBe(new Prisma.Decimal('10').toString());
+    expect(layer.qtyConsumed.toString()).toBe(new Prisma.Decimal('0').toString());
+    expect(layer.qtyRemaining.toString()).toBe(new Prisma.Decimal('10').toString());
+    expect(layer.unitCost.toString()).toBe(new Prisma.Decimal('5').toString());
+    expect(layer.sourceReceiptLineId).toBe(line.id);
+    expect(layer.sourceMovementId).toBe(line.inventoryMovementId);
+    expect(layer.deletedAt).toBeNull();
+  });
+
+  it('postReceipt multi-line creates one layer per line (3 lines → 3 layers)', async () => {
+    // Three lines on two variants — A, B, A again. Each line is its own
+    // layer because FifoLayer.sourceReceiptLineId is per-line, not
+    // per-variant.
+    const draft = await createDraftReceipt(db, {
+      vendorId,
+      warehouseId,
+      lines: [
+        { variantId: variantAId, warehouseId, qtyReceived: '4', unitCost: '1' },
+        { variantId: variantBId, warehouseId, qtyReceived: '6', unitCost: '2' },
+        { variantId: variantAId, warehouseId, qtyReceived: '3', unitCost: '7' },
+      ],
+    });
+    const posted = await postReceipt(db, draft.id);
+    expect(posted.lines).toHaveLength(3);
+
+    const layers = await db.fifoLayer.findMany({
+      where: { variantId: { in: [variantAId, variantBId] }, warehouseId },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(layers).toHaveLength(3);
+
+    const lineIds = posted.lines.map((l) => l.id).sort();
+    const layerSourceIds = layers
+      .map((l) => l.sourceReceiptLineId!)
+      .sort();
+    expect(layerSourceIds).toEqual(lineIds);
+  });
+
+  it('postReceipt sets RECEIVE movement.unitCost to match the line unitCost', async () => {
+    const draft = await createDraftReceipt(db, {
+      vendorId,
+      warehouseId,
+      lines: [
+        { variantId: variantAId, warehouseId, qtyReceived: '8', unitCost: '5.5' },
+      ],
+    });
+    const posted = await postReceipt(db, draft.id);
+    const line = posted.lines.find((l) => l.variantId === variantAId)!;
+    const movement = await db.inventoryMovement.findUniqueOrThrow({
+      where: { id: line.inventoryMovementId! },
+    });
+    expect(movement.type).toBe(InventoryMovementType.RECEIVE);
+    expect(movement.unitCost?.toString()).toBe(new Prisma.Decimal('5.5').toString());
+  });
+
+  it('postReceipt sets layer.receivedDate to match Receipt.receivedAt as read from DB', async () => {
+    const draft = await createDraftReceipt(db, {
+      vendorId,
+      warehouseId,
+      lines: [
+        { variantId: variantAId, warehouseId, qtyReceived: '4', unitCost: '3' },
+      ],
+    });
+    await postReceipt(db, draft.id);
+
+    const receipt = await db.receipt.findUniqueOrThrow({ where: { id: draft.id } });
+    const layer = await db.fifoLayer.findFirstOrThrow({
+      where: { variantId: variantAId, warehouseId },
+    });
+    expect(receipt.receivedAt).not.toBeNull();
+    expect(layer.receivedDate.toISOString()).toBe(receipt.receivedAt!.toISOString());
+  });
+
+  it('cancelReceipt with all-clean layers soft-deletes them (deletedAt populated)', async () => {
+    const draft = await createDraftReceipt(db, {
+      vendorId,
+      warehouseId,
+      lines: [
+        { variantId: variantAId, warehouseId, qtyReceived: '5', unitCost: '2' },
+        { variantId: variantBId, warehouseId, qtyReceived: '7', unitCost: '4' },
+      ],
+    });
+    const posted = await postReceipt(db, draft.id);
+    const layersBefore = await db.fifoLayer.findMany({
+      where: { variantId: { in: [variantAId, variantBId] }, warehouseId },
+    });
+    expect(layersBefore).toHaveLength(2);
+    expect(layersBefore.every((l) => l.deletedAt === null)).toBe(true);
+
+    await cancelReceipt(db, posted.id, {});
+
+    const layersAfter = await db.fifoLayer.findMany({
+      where: { id: { in: layersBefore.map((l) => l.id) } },
+    });
+    expect(layersAfter).toHaveLength(2);
+    expect(layersAfter.every((l) => l.deletedAt !== null)).toBe(true);
+  });
+
+  it('cancelReceipt with consumed layers throws the terse error', async () => {
+    const draft = await createDraftReceipt(db, {
+      vendorId,
+      warehouseId,
+      lines: [
+        { variantId: variantAId, warehouseId, qtyReceived: '10', unitCost: '5' },
+      ],
+    });
+    const posted = await postReceipt(db, draft.id);
+    const layer = await db.fifoLayer.findFirstOrThrow({
+      where: { variantId: variantAId, warehouseId },
+    });
+    // Phase 1C wires consumeFromLayersTx into consumeInventoryTx; here we
+    // simulate "some inventory has been consumed from this layer" with a
+    // direct write that respects the CHECK constraints
+    // (qtyConsumed <= qtyReceived AND qtyRemaining = qtyReceived - qtyConsumed).
+    await db.fifoLayer.update({
+      where: { id: layer.id },
+      data: {
+        qtyConsumed: new Prisma.Decimal('1'),
+        qtyRemaining: new Prisma.Decimal('9'),
+      },
+    });
+
+    await expect(cancelReceipt(db, posted.id, {})).rejects.toThrow(
+      /Cannot cancel receipt: receipt has consumed inventory layers\. Use inventory adjustment instead\./,
+    );
+
+    // Receipt status should NOT have flipped to CANCELLED.
+    const receipt = await db.receipt.findUniqueOrThrow({ where: { id: posted.id } });
+    expect(receipt.status).toBe(ReceiptStatus.POSTED);
+    // Layer should still be live (not soft-deleted).
+    const layerAfter = await db.fifoLayer.findUniqueOrThrow({ where: { id: layer.id } });
+    expect(layerAfter.deletedAt).toBeNull();
+  });
+
+  it('cancelReceipt does NOT touch layers from OTHER receipts (scope isolation)', async () => {
+    // Receipt R1 (will be cancelled)
+    const r1Draft = await createDraftReceipt(db, {
+      vendorId,
+      warehouseId,
+      lines: [
+        { variantId: variantAId, warehouseId, qtyReceived: '5', unitCost: '1' },
+      ],
+    });
+    await postReceipt(db, r1Draft.id);
+    const r1Layer = await db.fifoLayer.findFirstOrThrow({
+      where: { variantId: variantAId, warehouseId },
+    });
+
+    // Receipt R2 (will NOT be cancelled). Same variant, different receipt.
+    const r2Draft = await createDraftReceipt(db, {
+      vendorId,
+      warehouseId,
+      lines: [
+        { variantId: variantAId, warehouseId, qtyReceived: '7', unitCost: '2' },
+      ],
+    });
+    await postReceipt(db, r2Draft.id);
+    const r2Layer = await db.fifoLayer.findFirstOrThrow({
+      where: {
+        variantId: variantAId,
+        warehouseId,
+        id: { not: r1Layer.id },
+      },
+    });
+
+    await cancelReceipt(db, r1Draft.id, {});
+
+    const r1After = await db.fifoLayer.findUniqueOrThrow({ where: { id: r1Layer.id } });
+    const r2After = await db.fifoLayer.findUniqueOrThrow({ where: { id: r2Layer.id } });
+    expect(r1After.deletedAt).not.toBeNull();
+    expect(r2After.deletedAt).toBeNull();
   });
 });
