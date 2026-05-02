@@ -28,6 +28,7 @@ import {
 } from '@/server/services/rmas';
 import { setRestockingFeeDefault } from '@/server/services/restockingFee';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { upsertTestWarehouse } from '../helpers/warehouseStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -56,10 +57,9 @@ suite('RMA lifecycle', () => {
     db = makeClient();
     salesRep = await db.salesRep.findFirstOrThrow({ where: { code: 'UNASSIGNED' } });
     term = await db.paymentTerm.findFirstOrThrow({ where: { code: 'NET30' } });
-    const wh = await db.warehouse.upsert({
-      where: { code: `${TAG}-WH` },
-      create: { code: `${TAG}-WH`, name: 'RMA WH' },
-      update: { active: true, deletedAt: null },
+    const wh = await upsertTestWarehouse(db, {
+      code: `${TAG}-WH`,
+      name: 'RMA WH',
     });
     warehouseId = wh.id;
     product = await db.product.upsert({

@@ -53,8 +53,11 @@ export type InvoiceWithLines = Invoice & { lines: InvoiceLine[] };
  *   CR 4200 Shipping Income     shippingAmount  (only if > 0)
  *   CR 4300 Handling Income     handlingAmount  (only if > 0)
  *
- * No COGS leg. The costing engine slice will retroactively post
- * DR 5100 COGS / CR 1310 Inventory and flip Invoice.cogsPosted=true.
+ * No COGS leg in this JE. closeSalesOrder calls
+ * postCogsForInvoiceTx (Part 3 of the costing engine slice) right after
+ * this function returns; that posts a SEPARATE COGS JE and flips
+ * Invoice.cogsPosted=true. Two JEs per closed SO keeps AR and COGS
+ * concerns cleanly separable for downstream reversal paths.
  */
 export async function generateInvoiceForClosedSOTx(
   tx: Prisma.TransactionClient,

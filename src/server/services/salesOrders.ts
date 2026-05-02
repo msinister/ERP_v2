@@ -10,6 +10,7 @@ import { resolvePrice } from '@/lib/pricing/resolve';
 import { lockBin } from '@/server/services/locks';
 import { consumeInventoryTx } from '@/server/services/movements';
 import { generateInvoiceForClosedSOTx } from '@/server/services/invoices';
+import { postCogsForInvoiceTx } from '@/server/services/cogsPosting';
 import {
   cancelSalesOrderInputSchema,
   closeSalesOrderInputSchema,
@@ -385,8 +386,9 @@ export async function closeSalesOrder(
       }
 
       for (const line of before.lines) {
+        let movementId: string;
         try {
-          await consumeInventoryTx(
+          const movement = await consumeInventoryTx(
             tx,
             {
               variantId: line.variantId,
@@ -397,6 +399,7 @@ export async function closeSalesOrder(
             },
             ctx,
           );
+          movementId = movement.id;
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           if (msg.startsWith('Insufficient stock')) {
@@ -414,7 +417,11 @@ export async function closeSalesOrder(
 
         await tx.salesOrderLine.update({
           where: { id: line.id },
-          data: { qtyShipped: line.qtyOrdered, qtyReserved: new Prisma.Decimal(0) },
+          data: {
+            qtyShipped: line.qtyOrdered,
+            qtyReserved: new Prisma.Decimal(0),
+            inventoryMovementId: movementId,
+          },
         });
       }
 
@@ -454,7 +461,15 @@ export async function closeSalesOrder(
       // either both succeed or both roll back. Idempotent against
       // re-call (existing invoice for the SO is returned without
       // throwing).
-      await generateInvoiceForClosedSOTx(tx, id, ctx);
+      const invoice = await generateInvoiceForClosedSOTx(tx, id, ctx);
+
+      // Part 3 of the costing engine slice: COGS posting. Walks the
+      // CONSUME movements created above (linked to SOLines via the
+      // inventoryMovementId we just stamped) and posts DR 5100 COGS /
+      // CR <warehouse.inventoryAccount>. Idempotent — re-runs see
+      // Invoice.cogsPosted=true and short-circuit. Zero-COGS invoices
+      // (drop-ship/service-only) flip the flag and skip the JE.
+      await postCogsForInvoiceTx(tx, invoice.id, ctx);
 
       return after;
     });

@@ -32,6 +32,7 @@ import {
   voidCreditMemo,
 } from '@/server/services/creditMemos';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { upsertTestWarehouse } from '../helpers/warehouseStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -68,10 +69,9 @@ suite('CreditMemo lifecycle', () => {
     goodwillCategory = await db.creditMemoCategory.findFirstOrThrow({
       where: { code: 'GOODWILL' },
     });
-    const wh = await db.warehouse.upsert({
-      where: { code: `${TAG}-WH` },
-      create: { code: `${TAG}-WH`, name: 'CM WH' },
-      update: { active: true, deletedAt: null },
+    const wh = await upsertTestWarehouse(db, {
+      code: `${TAG}-WH`,
+      name: 'CM WH',
     });
     warehouseId = wh.id;
     product = await db.product.upsert({

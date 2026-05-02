@@ -17,6 +17,7 @@ import { receiveInventory } from '@/server/services/movements';
 import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { upsertTestCustomer } from '../helpers/customerStub';
+import { upsertTestWarehouse } from '../helpers/warehouseStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -34,10 +35,9 @@ suite('SalesOrder lifecycle', () => {
       name: 'Test SO Customer',
     });
     customerId = c.id;
-    const wh = await db.warehouse.upsert({
-      where: { code: 'TEST-WH-SO-LC' },
-      create: { code: 'TEST-WH-SO-LC', name: 'Test SO Warehouse' },
-      update: { active: true, deletedAt: null },
+    const wh = await upsertTestWarehouse(db, {
+      code: 'TEST-WH-SO-LC',
+      name: 'Test SO Warehouse',
     });
     warehouseId = wh.id;
     const product = await db.product.upsert({

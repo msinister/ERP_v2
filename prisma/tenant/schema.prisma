@@ -291,6 +291,7 @@ model InventoryMovement {
   receiptLine      ReceiptLine?
   fifoLayer        FifoLayer?
   fifoConsumptions FifoConsumption[]
+  salesOrderLine   SalesOrderLine?
 
   @@index([variantId, warehouseId, createdAt])
   @@index([type, createdAt])
@@ -609,29 +610,33 @@ model SalesOrder {
 }
 
 model SalesOrderLine {
-  id              String              @id @default(cuid())
-  salesOrderId    String
-  variantId       String
-  warehouseId     String
-  qtyOrdered      Decimal             @db.Decimal(18, 5)
-  qtyReserved     Decimal             @default(0) @db.Decimal(18, 5)
-  qtyShipped      Decimal             @default(0) @db.Decimal(18, 5)
-  unitPrice       Decimal             @db.Decimal(18, 5)
-  priceRule       PriceResolutionRule
+  id                  String              @id @default(cuid())
+  salesOrderId        String
+  variantId           String
+  warehouseId         String
+  qtyOrdered          Decimal             @db.Decimal(18, 5)
+  qtyReserved         Decimal             @default(0) @db.Decimal(18, 5)
+  qtyShipped          Decimal             @default(0) @db.Decimal(18, 5)
+  unitPrice           Decimal             @db.Decimal(18, 5)
+  priceRule           PriceResolutionRule
   // discountPercent and discountAmount are mutually exclusive (Zod-enforced).
-  discountPercent Decimal?            @db.Decimal(18, 5)
-  discountAmount  Decimal?            @db.Decimal(18, 5)
-  customerNote    String?
-  internalNote    String?
-  // unitCost snapshot at Closed lands when the costing engine ships
-  // (docs/08-gl-costing-reporting.md). Not stored on the line yet.
-  deletedAt       DateTime?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  discountPercent     Decimal?            @db.Decimal(18, 5)
+  discountAmount      Decimal?            @db.Decimal(18, 5)
+  customerNote        String?
+  internalNote        String?
+  // Set by closeSalesOrder once consumeInventoryTx creates the CONSUME
+  // movement for this line. Part 3 of the costing engine slice walks
+  // SOLine → InventoryMovement → FifoConsumption to compute COGS at
+  // invoice time. Nullable for legacy / pre-close rows.
+  inventoryMovementId String?             @unique
+  deletedAt           DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
-  salesOrder SalesOrder     @relation(fields: [salesOrderId], references: [id])
-  variant    ProductVariant @relation(fields: [variantId], references: [id])
-  warehouse  Warehouse      @relation(fields: [warehouseId], references: [id])
+  salesOrder        SalesOrder         @relation(fields: [salesOrderId], references: [id])
+  variant           ProductVariant     @relation(fields: [variantId], references: [id])
+  warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
+  inventoryMovement InventoryMovement? @relation(fields: [inventoryMovementId], references: [id])
 
   @@index([salesOrderId])
   @@index([variantId, warehouseId])

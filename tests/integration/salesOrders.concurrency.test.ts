@@ -11,6 +11,7 @@ import { receiveInventory } from '@/server/services/movements';
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 import { upsertTestCustomer } from '../helpers/customerStub';
+import { upsertTestWarehouse } from '../helpers/warehouseStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -28,10 +29,9 @@ suite('SalesOrder concurrency (advisory lock)', () => {
       name: 'SO Conc Cust',
     });
     customerId = c.id;
-    const wh = await db.warehouse.upsert({
-      where: { code: 'TEST-WH-SO-CONC' },
-      create: { code: 'TEST-WH-SO-CONC', name: 'SO Conc WH' },
-      update: { active: true, deletedAt: null },
+    const wh = await upsertTestWarehouse(db, {
+      code: 'TEST-WH-SO-CONC',
+      name: 'SO Conc WH',
     });
     warehouseId = wh.id;
     const product = await db.product.upsert({

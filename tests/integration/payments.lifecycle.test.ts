@@ -31,6 +31,7 @@ import {
   reversePayment,
 } from '@/server/services/payments';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { upsertTestWarehouse } from '../helpers/warehouseStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -64,10 +65,9 @@ suite('Payments lifecycle', () => {
     returnCategory = await db.creditMemoCategory.findFirstOrThrow({
       where: { code: 'RETURN' },
     });
-    const wh = await db.warehouse.upsert({
-      where: { code: `${TAG}-WH` },
-      create: { code: `${TAG}-WH`, name: 'Pmt WH' },
-      update: { active: true, deletedAt: null },
+    const wh = await upsertTestWarehouse(db, {
+      code: `${TAG}-WH`,
+      name: 'Pmt WH',
     });
     warehouseId = wh.id;
     product = await db.product.upsert({

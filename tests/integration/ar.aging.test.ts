@@ -28,6 +28,7 @@ import {
   arBalanceForCustomer,
 } from '@/server/services/ar';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { upsertTestWarehouse } from '../helpers/warehouseStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -61,10 +62,9 @@ suite('AR aging', () => {
       create: { code: `${TAG}-COD`, label: 'COD (test)', netDays: null },
       update: { netDays: null, active: true, deletedAt: null },
     });
-    const wh = await db.warehouse.upsert({
-      where: { code: `${TAG}-WH` },
-      create: { code: `${TAG}-WH`, name: 'Aging WH' },
-      update: { active: true, deletedAt: null },
+    const wh = await upsertTestWarehouse(db, {
+      code: `${TAG}-WH`,
+      name: 'Aging WH',
     });
     warehouseId = wh.id;
     product = await db.product.upsert({

@@ -28,6 +28,7 @@ import {
 } from '@/server/services/invoices';
 import { arBalanceForCustomer } from '@/server/services/ar';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { upsertTestWarehouse } from '../helpers/warehouseStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -59,10 +60,9 @@ suite('Invoice lifecycle — auto-generation, void, AR balance', () => {
     db = makeClient();
     salesRep = await db.salesRep.findFirstOrThrow({ where: { code: 'UNASSIGNED' } });
     term = await db.paymentTerm.findFirstOrThrow({ where: { code: 'NET30' } });
-    const wh = await db.warehouse.upsert({
-      where: { code: `${TAG}-WH` },
-      create: { code: `${TAG}-WH`, name: 'Inv WH' },
-      update: { active: true, deletedAt: null },
+    const wh = await upsertTestWarehouse(db, {
+      code: `${TAG}-WH`,
+      name: 'Inv WH',
     });
     warehouseId = wh.id;
     product = await db.product.upsert({
@@ -152,7 +152,11 @@ suite('Invoice lifecycle — auto-generation, void, AR balance', () => {
     expect(inv.status).toBe(InvoiceStatus.OPEN);
     expect(inv.amountPaid.toString()).toBe(new Prisma.Decimal('0').toString());
     expect(inv.amountCredited.toString()).toBe(new Prisma.Decimal('0').toString());
-    expect(inv.cogsPosted).toBe(false);
+    // Part 3 zero-COGS skip path flipped the flag: this suite seeds via
+    // receiveInventory (no FifoLayer), so close → consume → 0 FifoConsumption
+    // rows → cogsAmount=0 → flag flips with NO JE posted. Flag=true here
+    // means "skip path ran", not "real COGS recorded".
+    expect(inv.cogsPosted).toBe(true);
     // Subtotal = 20 + 30 = 50; total = 50 - 0 + 5 + 2 = 57
     expect(inv.subtotal.toString()).toBe(new Prisma.Decimal('50').toString());
     expect(inv.shippingAmount.toString()).toBe(new Prisma.Decimal('5').toString());
