@@ -21,6 +21,7 @@ enum InventoryMovementType {
   TRANSFER_OUT
   TRANSFER_IN
   RECEIVE_REVERSE
+  RMA_RETURN
 }
 
 enum PurchaseOrderStatus {
@@ -939,6 +940,10 @@ model Invoice {
   voidReason     String?
   // Flipped to true by the costing engine slice when COGS is retro-posted.
   cogsPosted     Boolean       @default(false)
+  // Flipped to true by reverseCogsForInvoiceTx (Part 3.5) when voidInvoice
+  // reverses the COGS leg. Idempotency anchor: re-call after reversal
+  // sees this and short-circuits.
+  cogsReversed   Boolean       @default(false)
   deletedAt      DateTime?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
@@ -1020,12 +1025,21 @@ model CreditMemoCategory {
   code             String    @unique
   label            String
   affectsInventory Boolean   @default(true)
+  // Optional FK to GlAccount. When set, reverseCogsForCreditMemoTx posts
+  // DR <lossAccount> / CR COGS instead of restoring inventory — the
+  // loss-reclassification path. Admin-managed: shipping-damage,
+  // manufacturer-defect, and miscellaneous-damage categories route here.
+  // RETURN, GOODWILL, PRICING_DISPUTE, CANCELLED leave this NULL.
+  lossAccountId    String?
   active           Boolean   @default(true)
   deletedAt        DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  memos CreditMemo[]
+  memos        CreditMemo[]
+  lossAccount  GlAccount?   @relation(fields: [lossAccountId], references: [id])
+
+  @@index([lossAccountId])
 }
 
 model CreditMemo {
@@ -1044,6 +1058,11 @@ model CreditMemo {
   issuedAt      DateTime?
   voidedAt      DateTime?
   voidReason    String?
+  // Flipped to true by reverseCogsForCreditMemoTx (Part 3.5) when an
+  // RMA-driven CM has its COGS reversed. Per-CM idempotency: independent
+  // of Invoice.cogsReversed because multiple CMs can target a single
+  // invoice (partial returns).
+  cogsReversed  Boolean          @default(false)
   deletedAt     DateTime?
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
@@ -1185,8 +1204,9 @@ model GlAccount {
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 
-  journalEntryLines JournalEntryLine[]
-  warehouses        Warehouse[]
+  journalEntryLines    JournalEntryLine[]
+  warehouses           Warehouse[]
+  creditMemoCategories CreditMemoCategory[]
 
   @@index([type])
 }

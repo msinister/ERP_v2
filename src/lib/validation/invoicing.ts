@@ -210,6 +210,12 @@ export const creditFromRmaInputSchema = z.object({
     )
     .min(1),
   reason: z.string().max(2000).optional(),
+  // Part 3.5: optional CM category. Defaults to RETURN at the service
+  // layer for backward compatibility with pre-3.5 callers. Set to
+  // SHIPPING_DAMAGE / MANUFACTURER_DEFECT / DAMAGED to drive the loss-
+  // reclassification reversal path (DR Loss / CR COGS, no inventory
+  // restoration). The service resolves the categoryId from this code.
+  categoryId: z.string().min(1).optional(),
 });
 
 export const transitionRmaInputSchema = z

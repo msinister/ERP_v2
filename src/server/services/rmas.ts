@@ -21,6 +21,7 @@ import {
   confirmCreditMemoTx,
   type CreditMemoWithLines,
 } from './creditMemos';
+import { reverseCogsForCreditMemoTx } from './cogsReversal';
 import {
   getRestockingFeeDefault,
   resolveRestockingFee,
@@ -338,13 +339,20 @@ export async function creditFromRma(
       );
     }
 
-    // Look up the RETURN category — pilot constraint per spec.
-    const returnCategory = await tx.creditMemoCategory.findFirst({
-      where: { code: RETURN_CATEGORY_CODE, deletedAt: null },
+    // Resolve the CM category. Caller may override via input.categoryId
+    // (Part 3.5) to drive a loss-reclassification reversal path; defaults
+    // to RETURN for backward compatibility with pre-3.5 callers.
+    const categoryWhere = data.categoryId
+      ? { id: data.categoryId, deletedAt: null }
+      : { code: RETURN_CATEGORY_CODE, deletedAt: null };
+    const category = await tx.creditMemoCategory.findFirst({
+      where: categoryWhere,
     });
-    if (!returnCategory) {
+    if (!category) {
       throw new Error(
-        `RETURN category not found — seeded categories may have been altered`,
+        data.categoryId
+          ? `CreditMemoCategory not found: id=${data.categoryId}`
+          : `RETURN category not found — seeded categories may have been altered`,
       );
     }
 
@@ -362,7 +370,7 @@ export async function creditFromRma(
       {
         customerId: rma.customerId,
         invoiceId: rma.invoiceId,
-        categoryId: returnCategory.id,
+        categoryId: category.id,
         amount: amount.toString(),
         restockingFee: restockingFeeAmount.toString(),
         reason: data.reason ?? `From RMA ${rma.number}`,
@@ -384,16 +392,10 @@ export async function creditFromRma(
     );
     const confirmed = await confirmCreditMemoTx(tx, draft.id, ctx);
 
-    // Bump qtyReturned on each affected invoice line.
-    for (const line of data.lines) {
-      const qty = new Prisma.Decimal(line.qty);
-      await tx.invoiceLine.update({
-        where: { id: line.invoiceLineId },
-        data: { qtyReturned: { increment: qty } },
-      });
-    }
-
-    // Link CM back to RMA, stamp creditedAt, status = CREDITED.
+    // Establish the RMA→CM link BEFORE reverseCogsForCreditMemoTx fires —
+    // the reversal's routing decision reads cm.rma to determine goods-back
+    // vs loss-reclass vs pure-AR. Without the link, cm.rma resolves null
+    // and routing collapses incorrectly into pure-AR.
     const updatedRma = await tx.rma.update({
       where: { id: rmaId },
       data: {
@@ -404,6 +406,21 @@ export async function creditFromRma(
       include: { lines: true },
     });
 
+    // Part 3.5: COGS reversal. Self-routing — reads cm.category.lossAccountId
+    // and the CM's RMA state to choose goods-back / loss-reclass / pure-AR.
+    // Inside the same tx so AR-side CM confirm + COGS reversal commit
+    // atomically.
+    await reverseCogsForCreditMemoTx(tx, confirmed.id, ctx);
+
+    // Bump qtyReturned on each affected invoice line.
+    for (const line of data.lines) {
+      const qty = new Prisma.Decimal(line.qty);
+      await tx.invoiceLine.update({
+        where: { id: line.invoiceLineId },
+        data: { qtyReturned: { increment: qty } },
+      });
+    }
+
     await audit(tx, {
       action: AuditAction.RMA_STATUS_CHANGE,
       entityType: 'Rma',
@@ -413,7 +430,16 @@ export async function creditFromRma(
       ctx,
     });
 
-    return { rma: updatedRma, creditMemo: confirmed };
+    // Re-fetch CM so the returned creditMemo reflects post-reversal state.
+    // reverseCogsForCreditMemoTx mutates cm.cogsReversed; the `confirmed`
+    // snapshot captured before that call is stale. Include lines to match
+    // the CreditMemoWithLines return type.
+    const finalCm = await tx.creditMemo.findUniqueOrThrow({
+      where: { id: confirmed.id },
+      include: { lines: true },
+    });
+
+    return { rma: updatedRma, creditMemo: finalCm };
   });
 }
 

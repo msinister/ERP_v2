@@ -12,6 +12,7 @@ import type {
 } from '@/generated/tenant';
 import { audit, type AuditContext } from '@/lib/audit/audit';
 import { post } from '@/lib/gl/post';
+import { reverseCogsForInvoiceTx } from '@/server/services/cogsReversal';
 
 // =============================================================================
 // Invoices service.
@@ -309,6 +310,23 @@ export async function voidInvoice(
       );
     }
 
+    // Part 3.5: refuse if any CreditMemo against this invoice has had its
+    // COGS reversed. Composing a partial-CM-reversal with a full-invoice
+    // void would double-reverse the COGS for the lines the CM touched
+    // (CM's reversal already restored them; voidInvoice's full-reversal
+    // would restore them again). Operator must reverse the CM first OR
+    // continue resolving via the CM flow rather than voiding.
+    const cmsWithReversedCogs = await tx.creditMemo.findMany({
+      where: { invoiceId, cogsReversed: true, deletedAt: null },
+      select: { number: true },
+    });
+    if (cmsWithReversedCogs.length > 0) {
+      const cmNumbers = cmsWithReversedCogs.map((c) => c.number).join(', ');
+      throw new Error(
+        `Cannot void invoice: credit memo ${cmNumbers} has already had its COGS reversed. Reverse that CM first or use a credit memo flow instead.`,
+      );
+    }
+
     const after = await tx.invoice.update({
       where: { id: invoiceId },
       data: {
@@ -365,6 +383,12 @@ export async function voidInvoice(
         lines: reverseLines,
       });
     }
+
+    // Part 3.5: COGS reversal. Self-checking — if the invoice never had
+    // COGS posted (zero-COGS path) OR was already reversed, the call is
+    // a no-op. Inside the same tx so AR void + COGS reversal commit
+    // atomically.
+    await reverseCogsForInvoiceTx(tx, invoiceId, ctx);
 
     await audit(tx, {
       action: AuditAction.STATUS_CHANGE,

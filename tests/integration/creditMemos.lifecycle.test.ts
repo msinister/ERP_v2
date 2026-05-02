@@ -291,54 +291,51 @@ suite('CreditMemo lifecycle', () => {
     await expect(confirmCreditMemo(db, cm.id)).rejects.toThrow(/Cannot confirm/);
   });
 
-  it('confirmCreditMemo with affectsInventory=true (RETURN) writes restock-pending CustomerActivity', async () => {
+  it('confirmCreditMemo on a standalone CM (no RMA, category=RETURN) is pure-AR: no COGS reversal, no inventory side effects', async () => {
+    // Part 3.5: standalone CMs go pure-AR regardless of category.
+    // confirmCreditMemoTx no longer writes the old "restock_pending"
+    // CustomerActivity placeholder; the real reversal lives in
+    // reverseCogsForCreditMemoTx and only fires through creditFromRma
+    // (which has an RMA to anchor the goods-back signal). A standalone
+    // CM has no RMA, so no inventory side effect should occur even when
+    // category.affectsInventory=true.
     const cm = await createCreditMemoDraft(db, {
       customerId: customer.id,
       categoryId: returnCategory.id,
       amount: '20',
-      lines: [{ variantId: variant.id, qty: '2', unitPrice: '10', description: 'restock' }],
+      lines: [{ variantId: variant.id, qty: '2', unitPrice: '10', description: 'standalone return' }],
     });
-    await confirmCreditMemo(db, cm.id);
+    const confirmed = await confirmCreditMemo(db, cm.id);
 
-    const activity = await db.customerActivity.findFirst({
+    // cogsReversed stays false — confirmCreditMemoTx is AR-side only.
+    expect(confirmed.cogsReversed).toBe(false);
+
+    // No COGS-reversal JE on this CM.
+    const cogsRevJes = await db.journalEntry.findMany({
       where: {
-        customerId: customer.id,
-        summary: 'credit_memo_inventory_restock_pending',
+        entityType: 'CreditMemo',
+        entityId: cm.id,
+        OR: [
+          { description: { startsWith: 'Reverse COGS for credit memo' } },
+          { description: { startsWith: 'Loss reclassification for credit memo' } },
+        ],
       },
     });
-    expect(activity).not.toBeNull();
-    const detail = activity!.detailJson as {
-      creditMemoId: string;
-      lines: Array<{ variantId: string; qty: string }>;
-    };
-    expect(detail.creditMemoId).toBe(cm.id);
-    expect(detail.lines).toHaveLength(1);
-    expect(detail.lines[0].variantId).toBe(variant.id);
-    expect(detail.lines[0].qty).toBe(new Prisma.Decimal('2').toString());
+    expect(cogsRevJes).toHaveLength(0);
 
-    // No InventoryMovement was created — costing engine slice will
-    // replay this activity row.
-    const movements = await db.inventoryMovement.findMany({
-      where: { variantId: variant.id, reference: { contains: cm.number } },
+    // No RMA_RETURN movements created for this variant.
+    const rmaReturns = await db.inventoryMovement.findMany({
+      where: { variantId: variant.id, type: 'RMA_RETURN' },
     });
-    expect(movements).toHaveLength(0);
-  });
+    expect(rmaReturns).toHaveLength(0);
 
-  it('confirmCreditMemo with affectsInventory=false (GOODWILL) does NOT write restock-pending row', async () => {
-    const cm = await createCreditMemoDraft(db, {
-      customerId: customer.id,
-      categoryId: goodwillCategory.id,
-      amount: '25',
-      lines: [{ variantId: variant.id, qty: '5', unitPrice: '5', description: 'goodwill' }],
+    // No reversal-sourced FifoLayer (sourceReceiptLineId=null indicates
+    // a non-receipt origin like RMA_RETURN; absence proves no inventory
+    // restoration happened).
+    const reversalLayers = await db.fifoLayer.findMany({
+      where: { variantId: variant.id, sourceReceiptLineId: null },
     });
-    await confirmCreditMemo(db, cm.id);
-    const activity = await db.customerActivity.findFirst({
-      where: {
-        customerId: customer.id,
-        summary: 'credit_memo_inventory_restock_pending',
-      },
-    });
-    expect(activity).toBeNull();
+    expect(reversalLayers).toHaveLength(0);
   });
 
   it('restocking-fee math: amount=$100, fee=$10 → DR 4500 $100, CR 1210 $100, DR 1210 $10, CR 4600 $10', async () => {

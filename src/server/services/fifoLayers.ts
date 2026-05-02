@@ -192,3 +192,102 @@ export async function getOldestLayer(
     orderBy: [{ receivedDate: 'asc' }, { id: 'asc' }],
   });
 }
+
+// =============================================================================
+// createFifoLayerForReturnTx — Part 3.5 sibling of createFifoLayerOnReceiveTx.
+//
+// Used by RMA goods-back returns and voidInvoice goods-recovery flows. Both
+// produce "units coming back into the bin via a non-receipt movement," which
+// is indistinguishable at the FifoLayer level — single shared function.
+//
+// Schema notes:
+//   FifoLayer.sourceReceiptLineId is `String? @unique` and stays NULL for
+//   return-sourced layers. Postgres treats unique constraints as partial-by-
+//   default for nullable columns (multiple NULLs allowed, only non-null
+//   values must be unique), so multiple return layers coexist without
+//   conflict.
+//
+//   FifoLayer.sourceMovementId is `String? @unique`. We DO populate it here
+//   — pointing at the RMA_RETURN movement that brought the units back. This
+//   gives the audit trail a way to walk movement → layer.
+//
+// FIFO position: returnDate (NOT the original layer's receivedDate). The
+// spec at docs/02-products-inventory.md preserves COST ("new layer at
+// original sale's FIFO cost") but is silent on DATE. We use returnDate for
+// two reasons:
+//   1. Physical reality — the unit is back at our warehouse as of
+//      returnDate. Treating it as a long-ago receipt makes audit trails
+//      misleading when reviewers walk the layer's history.
+//   2. Future re-consume traceability — if the returned unit is re-sold,
+//      the resulting CONSUME's FifoConsumption row points at THIS layer
+//      (returnDate-anchored), so the audit story stays honest: "we resold
+//      a return on date Y, originally returned on returnDate from
+//      <RMA_RETURN movement>."
+// Trade-off: returned units sit at the end of the FIFO queue. They'll be
+// consumed AFTER newer-receipt-but-earlier-returnDate layers in edge
+// cases. Acceptable for pilot scale; revisit if FIFO position of returns
+// becomes a reporting concern.
+//
+// Future work (Part 5+): add FifoLayer.sourceRmaLineId @unique for explicit
+// traceability of "which RMA line produced this layer." Today the walk is
+// layer.sourceMovement → movement.reference (string, holds the RMA number).
+// Acceptable for pilot but weakly typed.
+// =============================================================================
+
+export type CreateFifoLayerForReturnParams = {
+  variantId: string;
+  warehouseId: string;
+  qty: Prisma.Decimal | string | number;
+  unitCost: Prisma.Decimal | string | number;
+  returnDate: Date;
+  // The RMA_RETURN movement that brought these units back. Required —
+  // the layer's traceability path is via this movement. The movement's
+  // reference field carries the RMA number (or invoice number for
+  // void-recovery), the manual breadcrumb until Part 5+ adds an explicit
+  // FifoLayer.sourceRmaLineId column.
+  sourceMovementId: string;
+};
+
+export async function createFifoLayerForReturnTx(
+  tx: Prisma.TransactionClient,
+  params: CreateFifoLayerForReturnParams,
+  ctx?: AuditContext,
+): Promise<FifoLayer> {
+  const qty = new Prisma.Decimal(params.qty);
+  const unitCost = new Prisma.Decimal(params.unitCost);
+
+  if (qty.lessThanOrEqualTo(0)) {
+    throw new Error(
+      `createFifoLayerForReturnTx: qty must be > 0 (got ${qty.toString()})`,
+    );
+  }
+  if (unitCost.lessThan(0)) {
+    throw new Error(
+      `createFifoLayerForReturnTx: unitCost must be >= 0 (got ${unitCost.toString()})`,
+    );
+  }
+
+  const layer = await tx.fifoLayer.create({
+    data: {
+      variantId: params.variantId,
+      warehouseId: params.warehouseId,
+      qtyReceived: qty,
+      qtyConsumed: new Prisma.Decimal(0),
+      qtyRemaining: qty,
+      unitCost,
+      receivedDate: params.returnDate,
+      sourceReceiptLineId: null,
+      sourceMovementId: params.sourceMovementId,
+    },
+  });
+
+  await audit(tx, {
+    action: AuditAction.CREATE,
+    entityType: 'FifoLayer',
+    entityId: layer.id,
+    after: layer,
+    ctx,
+  });
+
+  return layer;
+}

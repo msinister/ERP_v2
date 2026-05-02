@@ -313,26 +313,13 @@ export async function confirmCreditMemoTx(
     void app;
   }
 
-  // Inventory restock-pending signal for the costing engine slice.
-  if (before.category.affectsInventory) {
-    await tx.customerActivity.create({
-      data: {
-        customerId: before.customerId,
-        kind: CustomerActivityKind.AUTO,
-        summary: 'credit_memo_inventory_restock_pending',
-        detailJson: {
-          creditMemoId: before.id,
-          creditMemoNumber: before.number,
-          lines: before.lines.map((l) => ({
-            variantId: l.variantId,
-            qty: l.qty.toString(),
-            invoiceLineId: l.invoiceLineId,
-          })),
-        },
-        createdById: ctx?.userId ?? null,
-      },
-    });
-  }
+  // Part 3.5: the previous "credit_memo_inventory_restock_pending"
+  // CustomerActivity placeholder lived here. Removed because the real
+  // costing-engine work now ships in cogsReversal.ts and runs from
+  // creditFromRma. Standalone CMs (created without going through an RMA)
+  // are pure-AR by design — there's no goods-back signal to anchor an
+  // inventory restoration, so confirmCreditMemoTx no longer writes any
+  // inventory-side artifact.
 
   await audit(tx, {
     action: AuditAction.STATUS_CHANGE,

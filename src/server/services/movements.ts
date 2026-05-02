@@ -18,7 +18,7 @@ import {
   type ReverseReceiveInput,
 } from '@/lib/validation/inventory';
 
-async function recomputeOnHand(
+export async function recomputeOnHand(
   tx: Prisma.TransactionClient,
   variantId: string,
   warehouseId: string,
