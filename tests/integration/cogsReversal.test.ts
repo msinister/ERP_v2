@@ -351,9 +351,14 @@ suite('COGS reversal (Part 3.5)', () => {
   }
 
   async function getInvoiceLines(invoiceId: string) {
+    // Tiebreaker on id: multi-line invoices created in a single Prisma
+    // create call land with identical createdAt at millisecond resolution
+    // (Postgres TIMESTAMP(3) + statement-level now()), so sorting on
+    // createdAt alone leaves order implementation-defined. id-ascending
+    // keeps tests that index by position deterministic.
     return db.invoiceLine.findMany({
       where: { invoiceId, deletedAt: null },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
   }
 
@@ -880,15 +885,19 @@ suite('COGS reversal (Part 3.5)', () => {
     await closeSalesOrder(db, so.id, undefined);
     const invoice = await db.invoice.findUniqueOrThrow({ where: { salesOrderId: so.id } });
     const lines = await getInvoiceLines(invoice.id);
+    // Look up by variantId rather than position. Belt-and-suspenders with
+    // the getInvoiceLines id-tiebreaker — makes the semantic mapping
+    // explicit at the call site so any future reorder is harmless.
+    const lineByVariant = new Map(lines.map((l) => [l.variantId, l]));
 
     const rmaId = await buildAndInspectRma(invoice.id, [
-      { invoiceLineId: lines[0].id, qty: '4' },
-      { invoiceLineId: lines[1].id, qty: '3' },
+      { invoiceLineId: lineByVariant.get(variantAId)!.id, qty: '4' },
+      { invoiceLineId: lineByVariant.get(variantBId)!.id, qty: '3' },
     ]);
     const result = await creditFromRma(db, rmaId, {
       lines: [
-        { invoiceLineId: lines[0].id, qty: '4', unitPrice: '20', description: 'A return' },
-        { invoiceLineId: lines[1].id, qty: '3', unitPrice: '20', description: 'B return' },
+        { invoiceLineId: lineByVariant.get(variantAId)!.id, qty: '4', unitPrice: '20', description: 'A return' },
+        { invoiceLineId: lineByVariant.get(variantBId)!.id, qty: '3', unitPrice: '20', description: 'B return' },
       ],
     });
     expect(result.creditMemo.cogsReversed).toBe(true);
