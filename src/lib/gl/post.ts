@@ -48,6 +48,13 @@ export type PostInput = {
   entityId: string;
   description: string;
   lines: PostInputLine[];
+  // Optional business-event date for the JE. When omitted, falls through
+  // to the schema's @default(now()) for postedAt. Late-landed-cost
+  // adjustments (Part 4 of the costing engine slice) backdate this to
+  // the original CONSUME movement's createdAt for period-correct COGS
+  // reporting per docs/08-gl-costing-reporting.md:167. createdAt is
+  // never overridden — it stays at insertion time as audit history.
+  postedAt?: Date;
 };
 
 export type PostedJournalEntry = JournalEntry & { lines: JournalEntryLine[] };
@@ -148,6 +155,11 @@ export async function post(
       entityType: input.entityType,
       entityId: input.entityId,
       description: input.description,
+      // Backdating: when caller supplies postedAt, use it; otherwise omit
+      // so Prisma uses the schema's @default(now()). createdAt is NEVER
+      // overridden — that field is row-insertion timestamp, not a
+      // business date. See PostInput.postedAt comment.
+      ...(input.postedAt ? { postedAt: input.postedAt } : {}),
       lines: {
         create: input.lines.map((line) => ({
           accountId: codeToId.get(line.accountCode)!,

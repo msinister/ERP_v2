@@ -172,6 +172,20 @@ enum PriceResolutionRule {
   COST_PLUS
 }
 
+// Allocation method for late landed cost (freight, customs, handling)
+// applied retroactively across receipts. Schema declares all four
+// values up front so the operationally-supported set can grow without
+// an enum migration. The Part 4 service accepts UNIT_COUNT and VALUE;
+// WEIGHT (needs ProductVariant.weight) and BOX_COUNT (needs per-line
+// box-count input) throw a "deferred to future slice" error until the
+// supporting data exists.
+enum AllocationMethod {
+  UNIT_COUNT
+  VALUE
+  WEIGHT
+  BOX_COUNT
+}
+
 model Product {
   id               String      @id @default(cuid())
   sku              String      @unique
@@ -335,6 +349,11 @@ model FifoLayer {
   sourceReceiptLine ReceiptLine?       @relation(fields: [sourceReceiptLineId], references: [id])
   sourceMovement    InventoryMovement? @relation(fields: [sourceMovementId], references: [id])
   consumptions      FifoConsumption[]
+  // Back-relation: rows in LandedCostAllocationLine that mutated this
+  // layer's unitCost. One layer can be touched by multiple non-reversed
+  // allocations over its lifetime (e.g., freight bill + later customs
+  // bill). reverseLandedCostAllocation walks these to restore originals.
+  landedCostAllocationLines LandedCostAllocationLine[]
 
   @@index([variantId, warehouseId, receivedDate, id])
   @@index([deletedAt])
@@ -342,10 +361,21 @@ model FifoLayer {
 
 // Per-layer breakdown of a CONSUME movement. One CONSUME → 1..N
 // FifoConsumption rows; SUM(qty) = ABS(InventoryMovement.qty) when
-// negativeAllocation = false (test-asserted, not DB-enforced). unitCost
-// snapshotted at consume time so Part 4 retroactive layer-cost edits
-// don't rewrite history; the retro-COGS engine walks these rows to
-// compute deltas.
+// negativeAllocation = false (test-asserted, not DB-enforced).
+//
+// unitCost is the cost-at-consume snapshot. Mutability rule (revised in
+// Part 4):
+//   - MUTABLE before the linked invoice has cogsPosted=true (GL hasn't
+//     realized this consume yet, so the snapshot is the working value
+//     for the eventual COGS post; applyLandedCostToReceipts updates it
+//     in place so Part 3's deferred cogsPosting picks up the corrected
+//     cost in one shot — no separate adjustment JE needed).
+//   - IMMUTABLE after cogsPosted=true (history preserves what was
+//     actually posted to GL; subsequent cost changes flow through
+//     adjustment JEs posted by applyLandedCostToReceipts, NOT through
+//     snapshot rewrites).
+// Manual / transfer CONSUME movements with no SOLine link skip the
+// snapshot mutation and post no JE; the layer's unitCost still moves.
 model FifoConsumption {
   id         String   @id @default(cuid())
   movementId String
@@ -472,6 +502,11 @@ model Receipt {
   vendor    Vendor        @relation(fields: [vendorId], references: [id])
   warehouse Warehouse     @relation(fields: [warehouseId], references: [id])
   lines     ReceiptLine[]
+  // Back-relation: M:N to LandedCostAllocation via the join table.
+  // Used by both the apply path (validate receipts → walk to layers)
+  // and the reverse-lookup query "all landed-cost allocations applied
+  // to this receipt" (vendor freight-bill reconciliation).
+  landedCostAllocations LandedCostAllocationReceipt[]
 
   @@index([vendorId, status])
   @@index([warehouseId, receivedAt])
@@ -1231,6 +1266,12 @@ model JournalEntry {
   updatedAt   DateTime  @updatedAt
 
   lines JournalEntryLine[]
+  // Back-relation: rows in LandedCostAllocationLine that point to this
+  // JE as the per-layer COGS adjustment anchor. Forward COGS adjustment
+  // JEs and reversal JEs both flow through here; query by
+  // (entityType='Invoice', description LIKE 'Late landed cost%') to
+  // separate from regular COGS.
+  landedCostAllocationLines LandedCostAllocationLine[]
 
   @@index([entityType, entityId])
   @@index([postedAt])
@@ -1253,4 +1294,106 @@ model JournalEntryLine {
 
   @@index([journalEntryId])
   @@index([accountId])
+}
+
+// =========================================================================
+// Part 4 of the costing engine slice: late landed cost retroactive
+// adjustment. Apply path mutates affected FifoLayer.unitCost values and
+// posts COGS adjustment JEs (backdated via post() postedAt parameter)
+// for already-realized sales. Reverse path restores from
+// LandedCostAllocationLine.originalUnitCost snapshots and posts mirror-
+// sign reversal JEs. See src/server/services/landedCost.ts.
+//
+// sourceBillId is a plain TEXT? for now — the Bill model lives in the
+// future Bills/AP slice (phase 8). When that slice lands, an additive
+// migration adds the FK constraint. Until then sourceBillId can hold
+// the vendor's invoice number string for operator reference.
+// =========================================================================
+
+model LandedCostAllocation {
+  id               String           @id @default(cuid())
+  totalLandedCost  Decimal          @db.Decimal(18, 5)
+  allocationMethod AllocationMethod
+  appliedAt        DateTime         @default(now())
+  // Audit-only; no FK to a User table because users live in BetterAuth's
+  // auth schema, not the tenant schema. Mirrors the existing pattern on
+  // Receipt.postedById, JournalEntry.reversedBy, CreditApplication.appliedById.
+  appliedById      String?
+  reversedAt       DateTime?
+  reversedReason   String?
+  // Reference to the vendor bill that funded this allocation. No FK
+  // until the future Bills/AP slice creates the Bill model. Operators
+  // can store vendor invoice numbers here in the meantime.
+  sourceBillId     String?
+  notes            String?
+  deletedAt        DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  lines    LandedCostAllocationLine[]
+  receipts LandedCostAllocationReceipt[]
+
+  @@index([appliedAt])
+  @@index([reversedAt])
+  @@index([sourceBillId])
+  @@index([deletedAt])
+}
+
+// Per-FifoLayer impact row. originalUnitCost is the snapshot taken
+// BEFORE allocation, used by reverseLandedCostAllocation to restore
+// the layer cost (NOT layer.unitCost - deltaUnitCost — the snapshot is
+// the source of truth, immune to any subsequent allocation that may
+// have stacked on top before reversal).
+//
+// cogsAdjustmentJeId is nullable / first-of-N. Three cases:
+//   1. NULL because the layer had no FifoConsumption rows at allocation
+//      time (no sales yet — nothing to adjust).
+//   2. NULL because every consumption on the layer tied to a not-yet-
+//      cogs-posted invoice (forward path mutated FifoConsumption.unitCost
+//      in place; no separate JE — see FifoConsumption.unitCost comment).
+//   3. SET to the FIRST cogs-adjustment JE for this (allocation, layer)
+//      tuple, sorted by (invoiceNumber asc, warehouseId asc), when the
+//      layer's consumptions feed one or more (invoice, warehouse) pairs
+//      whose invoice is cogsPosted=true. Sibling JEs (when consumptions
+//      span multiple (invoice, warehouse) pairs) are NOT recorded on a
+//      separate row in pilot scope; they're findable via the JE
+//      description query:
+//        description LIKE 'Late landed cost adjustment%allocation <id>'
+//      using the JournalEntry_postedAt_idx + (entityType, entityId)
+//      index. The "first-of-N" convention is documented here so future
+//      readers don't assume 1:1.
+model LandedCostAllocationLine {
+  id                 String   @id @default(cuid())
+  allocationId       String
+  fifoLayerId        String
+  deltaUnitCost      Decimal  @db.Decimal(18, 5)
+  deltaTotal         Decimal  @db.Decimal(18, 5)
+  originalUnitCost   Decimal  @db.Decimal(18, 5)
+  cogsAdjustmentJeId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  allocation       LandedCostAllocation @relation(fields: [allocationId], references: [id])
+  fifoLayer        FifoLayer            @relation(fields: [fifoLayerId], references: [id])
+  cogsAdjustmentJe JournalEntry?        @relation(fields: [cogsAdjustmentJeId], references: [id])
+
+  @@index([allocationId])
+  @@index([fifoLayerId])
+  @@index([cogsAdjustmentJeId])
+}
+
+// M:N join between LandedCostAllocation and Receipt. No deletedAt — the
+// parent's reversedAt + deletedAt is sufficient for state tracking;
+// join rows are pure association.
+model LandedCostAllocationReceipt {
+  id           String   @id @default(cuid())
+  allocationId String
+  receiptId    String
+  createdAt    DateTime @default(now())
+
+  allocation LandedCostAllocation @relation(fields: [allocationId], references: [id])
+  receipt    Receipt              @relation(fields: [receiptId], references: [id])
+
+  @@unique([allocationId, receiptId])
+  @@index([receiptId])
 }
