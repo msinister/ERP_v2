@@ -395,11 +395,25 @@ suite('COGS posting (Part 3 of costing engine)', () => {
   // Strict-throw on unlinked warehouse
   // ==========================================================================
 
-  it('throws "no inventoryAccountId" when SOLine.warehouse has no inventoryAccount link', async () => {
-    // Use the unlinked warehouse — close should fail before COGS can post.
-    // We bypass postReceipt (which doesn't require inventoryAccountId) and
-    // seed a layer the same way fifoLayers tests do, so the consume
-    // succeeds but COGS posting then sees a null inventoryAccount.
+  it('throws "no inventoryAccountId" when SOLine.warehouse loses inventoryAccount link between receipt and close', async () => {
+    // B2 redesign for the GL counterpart-leg slice: with checkpoint D,
+    // postReceipt itself now throws on unlinked warehouses, so the
+    // original "post against an unlinked warehouse" approach can no
+    // longer reach the COGS-side throw. The COGS-side defensive throw
+    // at cogsPosting.ts:180-184 is still reachable in one operationally-
+    // rare scenario: an admin unlinks a warehouse AFTER receipts have
+    // posted against it but BEFORE the corresponding SOs close. This
+    // test exercises exactly that path so the defensive code stays
+    // covered. Sequence:
+    //   link → postReceipt (succeeds) → unlink → confirm SO → close SO
+    //   → expect closeSalesOrder to throw.
+
+    // Step 1: link the warehouse so the receive path succeeds.
+    await db.warehouse.update({
+      where: { id: unlinkedWarehouseId },
+      data: { inventoryAccount: { connect: { code: '1310' } } },
+    });
+
     const draft = await createDraftReceipt(db, {
       vendorId,
       warehouseId: unlinkedWarehouseId,
@@ -413,6 +427,16 @@ suite('COGS posting (Part 3 of costing engine)', () => {
       ],
     });
     await postReceipt(db, draft.id);
+
+    // Step 2: unlink the warehouse — simulates admin disconnecting the
+    // inventory account between receive and close. disconnect: true
+    // sets inventoryAccountId = null without touching the seeded GL
+    // account row. Returns unlinkedWarehouseId to its beforeAll state
+    // (null inventoryAccountId), so test isolation is preserved.
+    await db.warehouse.update({
+      where: { id: unlinkedWarehouseId },
+      data: { inventoryAccount: { disconnect: true } },
+    });
 
     const so = await createSalesOrder(db, {
       customerId,

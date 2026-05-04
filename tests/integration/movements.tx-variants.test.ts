@@ -12,6 +12,7 @@ import {
   transferInventoryTx,
 } from '@/server/services/movements';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { upsertTestWarehouse } from '../helpers/warehouseStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -24,15 +25,16 @@ suite('movements *Tx variants', () => {
 
   beforeAll(async () => {
     db = makeClient();
-    const wa = await db.warehouse.upsert({
-      where: { code: 'TEST-WH-TX-A' },
-      create: { code: 'TEST-WH-TX-A', name: 'Tx Test Warehouse A' },
-      update: { active: true, deletedAt: null },
+    // Use upsertTestWarehouse so both warehouses get the 1310 inventory
+    // account link. createAdjustmentTx now requires the warehouse-link
+    // for its GL leg (Module 08 GL counterpart-leg slice).
+    const wa = await upsertTestWarehouse(db, {
+      code: 'TEST-WH-TX-A',
+      name: 'Tx Test Warehouse A',
     });
-    const wb = await db.warehouse.upsert({
-      where: { code: 'TEST-WH-TX-B' },
-      create: { code: 'TEST-WH-TX-B', name: 'Tx Test Warehouse B' },
-      update: { active: true, deletedAt: null },
+    const wb = await upsertTestWarehouse(db, {
+      code: 'TEST-WH-TX-B',
+      name: 'Tx Test Warehouse B',
     });
     warehouseAId = wa.id;
     warehouseBId = wb.id;
@@ -65,6 +67,18 @@ suite('movements *Tx variants', () => {
       await db.auditLog.deleteMany({
         where: { entityType: 'InventoryMovement', entityId: { in: ownedMovementIds } },
       });
+      // Wipe JEs that createAdjustmentTx now produces (Module 08 GL
+      // counterpart-leg slice). JEs reference movements via entityId
+      // (no FK), so they don't cascade — explicit cleanup required.
+      const jes = await db.journalEntry.findMany({
+        where: { entityType: 'InventoryMovement', entityId: { in: ownedMovementIds } },
+        select: { id: true },
+      });
+      const jeIds = jes.map((j) => j.id);
+      if (jeIds.length > 0) {
+        await db.journalEntryLine.deleteMany({ where: { journalEntryId: { in: jeIds } } });
+        await db.journalEntry.deleteMany({ where: { id: { in: jeIds } } });
+      }
     }
     await db.inventoryMovement.deleteMany({ where: { variantId } });
     await db.inventoryItem.deleteMany({ where: { variantId } });
@@ -79,6 +93,18 @@ suite('movements *Tx variants', () => {
       await db.auditLog.deleteMany({
         where: { entityType: 'InventoryMovement', entityId: { in: ownedMovementIds } },
       });
+      // Wipe JEs that createAdjustmentTx now produces (Module 08 GL
+      // counterpart-leg slice). JEs reference movements via entityId
+      // (no FK), so they don't cascade — explicit cleanup required.
+      const jes = await db.journalEntry.findMany({
+        where: { entityType: 'InventoryMovement', entityId: { in: ownedMovementIds } },
+        select: { id: true },
+      });
+      const jeIds = jes.map((j) => j.id);
+      if (jeIds.length > 0) {
+        await db.journalEntryLine.deleteMany({ where: { journalEntryId: { in: jeIds } } });
+        await db.journalEntry.deleteMany({ where: { id: { in: jeIds } } });
+      }
     }
     await db.inventoryMovement.deleteMany({ where: { variantId } });
     await db.inventoryItem.deleteMany({ where: { variantId } });
@@ -100,6 +126,8 @@ suite('movements *Tx variants', () => {
         variantId,
         warehouseId: warehouseAId,
         qty: '5',
+        unitCost: '10',          // NEW — required by adjustmentInputSchema (slice: GL counterpart leg)
+        reason: 'found stock',   // NEW — required (was redundantly carried in `notes`)
         reference: 'TX-ADJ',
         notes: 'found stock',
       });

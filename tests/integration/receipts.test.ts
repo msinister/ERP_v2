@@ -16,6 +16,7 @@ import {
   postReceipt,
 } from '@/server/services/receipts';
 import { hasTenantDb, makeClient } from '../helpers/db';
+import { upsertTestWarehouse } from '../helpers/warehouseStub';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -35,10 +36,12 @@ suite('Receipt service', () => {
       update: { active: true, deletedAt: null },
     });
     vendorId = v.id;
-    const wh = await db.warehouse.upsert({
-      where: { code: 'TEST-WH-RCPT' },
-      create: { code: 'TEST-WH-RCPT', name: 'Test Receipt Warehouse' },
-      update: { active: true, deletedAt: null },
+    // Use upsertTestWarehouse so the warehouse gets the 1310 inventory
+    // account link. postReceipt now requires the warehouse-link for its
+    // GL leg (Module 08 GL counterpart-leg slice).
+    const wh = await upsertTestWarehouse(db, {
+      code: 'TEST-WH-RCPT',
+      name: 'Test Receipt Warehouse',
     });
     warehouseId = wh.id;
     const product = await db.product.upsert({

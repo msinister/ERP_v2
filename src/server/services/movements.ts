@@ -5,6 +5,7 @@ import { audit, type AuditContext } from '@/lib/audit/audit';
 import { lockBin, lockBinsOrdered } from '@/server/services/locks';
 import { consumeFromLayersTx } from '@/server/services/fifoLayers';
 import { getNegativeInventoryAllowed } from '@/server/services/negativeInventory';
+import { post } from '@/lib/gl/post';
 import {
   adjustmentInputSchema,
   receiveInputSchema,
@@ -17,6 +18,11 @@ import {
   type TransferInput,
   type ReverseReceiveInput,
 } from '@/lib/validation/inventory';
+
+// GL account codes used by createAdjustmentTx. Inventory account is
+// looked up per-warehouse via Warehouse.inventoryAccount; the expense
+// side is the tenant-wide stub (post() resolves by code).
+const ADJUSTMENT_EXPENSE_ACCOUNT = '5200';
 
 export async function recomputeOnHand(
   tx: Prisma.TransactionClient,
@@ -50,18 +56,103 @@ export async function createAdjustmentTx(
 ): Promise<InventoryMovement> {
   const data = adjustmentInputSchema.parse(input);
   await lockBin(tx, data.variantId, data.warehouseId);
+
+  // Look up variant SKU and warehouse code + inventory account before
+  // creating the movement. SKU + WH-CODE feed the JE description; the
+  // inventory account code feeds the GL leg. Mirrors cogsPosting.ts's
+  // missing-link throw pattern. No deletedAt filter — service behavior
+  // matches the existing tolerance for callers that pass ids without
+  // pre-validating soft-delete state (route.ts handles that gate).
+  const variant = await tx.productVariant.findUnique({
+    where: { id: data.variantId },
+    select: { sku: true },
+  });
+  if (!variant) {
+    throw new Error(
+      `createAdjustmentTx: variant not found: ${data.variantId}`,
+    );
+  }
+  const warehouse = await tx.warehouse.findUnique({
+    where: { id: data.warehouseId },
+    select: {
+      code: true,
+      inventoryAccount: { select: { code: true } },
+    },
+  });
+  if (!warehouse) {
+    throw new Error(
+      `createAdjustmentTx: warehouse not found: ${data.warehouseId}`,
+    );
+  }
+  if (!warehouse.inventoryAccount?.code) {
+    throw new Error(
+      `createAdjustmentTx: warehouse '${warehouse.code}' has no inventoryAccountId — link it to a GL account before posting adjustments against it`,
+    );
+  }
+
+  const qty = new Prisma.Decimal(data.qty);
+  const unitCost = new Prisma.Decimal(data.unitCost);
   const movement = await tx.inventoryMovement.create({
     data: {
       variantId: data.variantId,
       warehouseId: data.warehouseId,
       type: InventoryMovementType.ADJUST,
-      qty: new Prisma.Decimal(data.qty),
+      qty,
+      unitCost,
       reference: data.reference,
       notes: data.notes,
       createdById: data.createdById,
     },
   });
   await recomputeOnHand(tx, data.variantId, data.warehouseId);
+
+  // GL leg. Direction is encoded in sign of qty:
+  //   qty < 0 → loss  → DR 5200 / CR <warehouse-inventory>
+  //   qty > 0 → found → DR <warehouse-inventory> / CR 5200
+  // Amount = abs(qty) × unitCost. unitCost is caller-supplied
+  // (non-negative); zero is allowed by the schema (e.g., found stock
+  // with no cost basis recorded) but produces a zero-amount JE which
+  // post() rejects (each line must have one side > 0). Skip post()
+  // entirely when amount is zero — no value flows, no GL impact, no
+  // JE row. The InventoryMovement still records for inventory tracking.
+  const absQty = qty.abs();
+  const amount = absQty.times(unitCost);
+  if (amount.greaterThan(0)) {
+    const inventoryAccountCode = warehouse.inventoryAccount.code;
+    const isLoss = qty.lessThan(0);
+    const jeLines = isLoss
+      ? [
+          {
+            accountCode: ADJUSTMENT_EXPENSE_ACCOUNT,
+            debit: amount,
+            memo: `Loss adjustment — variant ${variant.sku} at ${warehouse.code}`,
+          },
+          {
+            accountCode: inventoryAccountCode,
+            credit: amount,
+            memo: `Inventory relief — variant ${variant.sku} at ${warehouse.code}`,
+          },
+        ]
+      : [
+          {
+            accountCode: inventoryAccountCode,
+            debit: amount,
+            memo: `Inventory restored — variant ${variant.sku} at ${warehouse.code}`,
+          },
+          {
+            accountCode: ADJUSTMENT_EXPENSE_ACCOUNT,
+            credit: amount,
+            memo: `Found adjustment — variant ${variant.sku} at ${warehouse.code}`,
+          },
+        ];
+    await post(tx, {
+      entityType: 'InventoryMovement',
+      entityId: movement.id,
+      description: `Inventory adjustment for variant ${variant.sku} at ${warehouse.code} qty ${qty.toString()}`,
+      lines: jeLines,
+    });
+  }
+
   await audit(tx, {
     action: AuditAction.CREATE,
     entityType: 'InventoryMovement',
@@ -70,7 +161,7 @@ export async function createAdjustmentTx(
     ctx: {
       userId: ctx?.userId ?? data.createdById ?? null,
       ipAddress: ctx?.ipAddress,
-      reason: ctx?.reason ?? data.notes ?? null,
+      reason: data.reason,
     },
   });
   return movement;

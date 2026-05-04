@@ -28,9 +28,15 @@ import {
   recomputeQtyReceivedForPoLine,
 } from '@/server/services/purchaseOrders';
 import { createFifoLayerOnReceiveTx } from '@/server/services/fifoLayers';
+import { post } from '@/lib/gl/post';
 
 const RECEIPT_SEQUENCE_NAME = 'receipt';
 const RECEIPT_PREFIX = 'RCPT';
+
+// GL account code for the credit side of receipt-time JE.
+// "Goods received not invoiced" clearing account — DR'd later when the
+// AP slice's confirmBill matches the receipt to a vendor bill.
+const ACCRUED_RECEIPTS_ACCOUNT = '2020';
 
 type ReceiptWithLines = Receipt & { lines: ReceiptLine[] };
 
@@ -198,7 +204,20 @@ export async function postReceipt(
   return db.$transaction(async (tx) => {
     const before = await tx.receipt.findUnique({
       where: { id },
-      include: { lines: true },
+      include: {
+        lines: true,
+        // Warehouse + inventoryAccount.code load eagerly so the GL leg
+        // can resolve account codes without a second round-trip. The
+        // include extension is local to this query — no propagation to
+        // the return type because `final` (re-read at function end) uses
+        // the original `{ lines: true }` shape.
+        warehouse: {
+          select: {
+            code: true,
+            inventoryAccount: { select: { code: true } },
+          },
+        },
+      },
     });
     if (!before) throw new Error(`Receipt not found: ${id}`);
     if (before.status !== ReceiptStatus.DRAFT) {
@@ -206,6 +225,15 @@ export async function postReceipt(
     }
     if (before.lines.length === 0) {
       throw new Error('Cannot post a Receipt with no lines');
+    }
+    // Fail fast if the receiving warehouse has no inventory GL account.
+    // Mirrors cogsPosting / createAdjustmentTx — better to throw upfront
+    // than to do all the per-line work + audit + FIFO writes and then
+    // fail at the GL leg, forcing a wasteful rollback.
+    if (!before.warehouse.inventoryAccount?.code) {
+      throw new Error(
+        `postReceipt: warehouse '${before.warehouse.code}' has no inventoryAccountId — link it to a GL account before posting receipts against it`,
+      );
     }
 
     let wasOverReceived = false;
@@ -236,6 +264,14 @@ export async function postReceipt(
       after: { status: after.status },
       ctx,
     });
+
+    // GL subtotal accumulator. Σ(qtyReceived × unitCost) across all
+    // lines on this receipt. validateReceiptLines (called on draft
+    // create + update) enforces every line shares the receipt's
+    // warehouseId, so the GL leg collapses to a single DR Inventory +
+    // single CR Accrued Receipts pair — not per-warehouse fan-out like
+    // COGS posting.
+    let glSubtotal = new Prisma.Decimal(0);
 
     for (const line of before.lines) {
       const movement = await receiveInventoryTx(
@@ -276,9 +312,47 @@ export async function postReceipt(
         },
         ctx,
       );
+      // Accumulate GL subtotal for the post() call after this loop.
+      glSubtotal = glSubtotal.plus(line.qtyReceived.times(line.unitCost));
       if (line.purchaseOrderLineId) {
         affectedPoLineIds.add(line.purchaseOrderLineId);
       }
+    }
+
+    // GL leg: DR Inventory - <warehouse> / CR Accrued Receipts. Single
+    // pair because Receipt.warehouseId is one-per-receipt.
+    //
+    // Skip-when-zero: if every line had qty=0 or unitCost=0 the subtotal
+    // is 0 and post() would reject the zero-amount lines (one-side > 0
+    // invariant). validateReceiptLines guards against zero-line receipts
+    // upstream, but per-line zero qtyReceived/unitCost is allowed by the
+    // schema, so the skip is the safe path. Mirrors createAdjustmentTx.
+    //
+    // postedAt: after.receivedAt — JE business-event date matches the
+    // receipt event date, not the row-insertion timestamp. post()
+    // honors backdated postedAt per the Part 4 invariant. The non-null
+    // assertion is safe because the status update above explicitly sets
+    // receivedAt to a non-null Date — same pattern as the FifoLayer
+    // receivedDate above.
+    if (glSubtotal.greaterThan(0)) {
+      await post(tx, {
+        entityType: 'Receipt',
+        entityId: id,
+        description: `Goods received for receipt ${before.number}`,
+        postedAt: after.receivedAt!,
+        lines: [
+          {
+            accountCode: before.warehouse.inventoryAccount.code,
+            debit: glSubtotal,
+            memo: `Goods received at ${before.warehouse.code}`,
+          },
+          {
+            accountCode: ACCRUED_RECEIPTS_ACCOUNT,
+            credit: glSubtotal,
+            memo: `Accrued receipts pending bill (receipt ${before.number})`,
+          },
+        ],
+      });
     }
 
     // Recompute qtyReceived on each affected PO line, detect over-receive,
@@ -324,11 +398,31 @@ export async function cancelReceipt(
   return db.$transaction(async (tx) => {
     const before = await tx.receipt.findUnique({
       where: { id },
-      include: { lines: true },
+      include: {
+        lines: true,
+        // Eager-load warehouse + inventoryAccount.code for the cancel
+        // GL leg. Same include shape as postReceipt — the cancel JE is
+        // the sign-mirror of the post JE so it needs the same data.
+        warehouse: {
+          select: {
+            code: true,
+            inventoryAccount: { select: { code: true } },
+          },
+        },
+      },
     });
     if (!before) throw new Error(`Receipt not found: ${id}`);
     if (before.status !== ReceiptStatus.POSTED) {
       throw new Error(`Cannot cancel Receipt in status ${before.status}`);
+    }
+    // Fail fast if the warehouse has lost its inventory GL account link
+    // since the original post (edge case — admin would have to actively
+    // unlink). Better to throw before any side effects than to partially
+    // cancel and fail at the GL leg, mid-tx. Mirrors postReceipt.
+    if (!before.warehouse.inventoryAccount?.code) {
+      throw new Error(
+        `cancelReceipt: warehouse '${before.warehouse.code}' has no inventoryAccountId — link it to a GL account before cancelling receipts against it`,
+      );
     }
 
     // Guard: refuse cancel if any layer from this receipt has been
@@ -370,6 +464,14 @@ export async function cancelReceipt(
       });
     }
 
+    // GL subtotal accumulator. Σ(qtyReceived × unitCost) from the
+    // original receipt lines — exactly mirrors the post-time JE
+    // arithmetic so the cancel JE offsets the post JE to the cent.
+    // validateReceiptLines enforces single-warehouse-per-receipt, so
+    // the cancel JE collapses to one DR + one CR pair (sign-mirror of
+    // postReceipt's DR Inventory / CR Accrued Receipts pair).
+    let glSubtotal = new Prisma.Decimal(0);
+
     for (const line of before.lines) {
       // 1. Reverse the movement via dedicated RECEIVE_REVERSE type.
       await reverseReceiveTx(
@@ -388,10 +490,48 @@ export async function cancelReceipt(
         where: { id: line.id },
         data: { deletedAt: new Date() },
       });
+      // 3. Accumulate GL subtotal for the cancel JE after this loop.
+      glSubtotal = glSubtotal.plus(line.qtyReceived.times(line.unitCost));
       if (line.purchaseOrderLineId) affectedPoLineIds.add(line.purchaseOrderLineId);
     }
 
-    // 3. Recompute qtyReceived for each affected PO line.
+    // 4. GL leg: DR Accrued Receipts / CR Inventory - <warehouse>.
+    // Sign-mirror of postReceipt's JE. Same skip-when-zero guard for
+    // symmetry with createAdjustmentTx + postReceipt.
+    //
+    // postedAt: new Date() — cancel is its own business event with its
+    // own date. Receipt has no cancelledAt column today (PurchaseOrder /
+    // SalesOrder / Invoice all do; Receipt is the outlier — adding it
+    // is a separate slice tied to period-close gating). The audit log
+    // row's createdAt + the JE's postedAt together capture the cancel
+    // timestamp until that schema fill-in lands.
+    //
+    // Idempotency: post()'s (entityType, entityId, description) tuple
+    // distinguishes "Goods received for receipt X" (post) from
+    // "Cancellation of receipt X" (cancel) — both JEs coexist on the
+    // same Receipt entityId, which is the design intent.
+    if (glSubtotal.greaterThan(0)) {
+      await post(tx, {
+        entityType: 'Receipt',
+        entityId: id,
+        description: `Cancellation of receipt ${before.number}`,
+        postedAt: new Date(),
+        lines: [
+          {
+            accountCode: ACCRUED_RECEIPTS_ACCOUNT,
+            debit: glSubtotal,
+            memo: `Cancelled accrued receipts (receipt ${before.number})`,
+          },
+          {
+            accountCode: before.warehouse.inventoryAccount.code,
+            credit: glSubtotal,
+            memo: `Inventory reversal at ${before.warehouse.code}`,
+          },
+        ],
+      });
+    }
+
+    // 5. Recompute qtyReceived for each affected PO line.
     for (const poLineId of affectedPoLineIds) {
       await recomputeQtyReceivedForPoLine(tx, poLineId);
       const poLine = await tx.purchaseOrderLine.findUnique({
@@ -401,12 +541,12 @@ export async function cancelReceipt(
       if (poLine) affectedPoIds.add(poLine.purchaseOrderId);
     }
 
-    // 4. Recompute PO statuses purely from current state.
+    // 6. Recompute PO statuses purely from current state.
     for (const poId of affectedPoIds) {
       await applyComputedPoStatus(tx, poId, ctx);
     }
 
-    // 5. Mark receipt CANCELLED.
+    // 7. Mark receipt CANCELLED.
     const after = await tx.receipt.update({
       where: { id },
       data: { status: ReceiptStatus.CANCELLED },
