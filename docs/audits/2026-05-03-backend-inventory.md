@@ -33,15 +33,15 @@
 
 Ordered by priority. Each item: name, scope, size, leverage.
 
-**#1 — GL COUNTERPART LEG FIX (Modules 07 + 08)**
-- Scope: `postReceipt` missing `DR Inventory / CR Accrued Receipts`; `createAdjustmentTx` missing `DR Inventory Adjustment Expense / CR Inventory`; both reverse paths.
-- Size: ~80 lines + ~15 tests + 2 GL account seeds (2020 Accrued Receipts, 5200 Inventory Adjustment Expense).
-- Leverage: **Trial balance ties for ALL inventory-side events.** Pilot parallel-run reconciliation per `docs/10` requires trial balance to tie for 2+ consecutive weeks; with these gaps it can't tie regardless of operator care. Ranked above credit-limit and the audit bug because every other gap is feature-missing or feature-mis-implemented; these two are "the books don't balance for already-shipped paths." Single-commit slice, independent of the full AP slice.
+**#1 — ~~GL COUNTERPART LEG FIX (Modules 07 + 08)~~ DONE — commit e47e502**
+- ~~Scope: `postReceipt` missing `DR Inventory / CR Accrued Receipts`; `createAdjustmentTx` missing `DR Inventory Adjustment Expense / CR Inventory`; both reverse paths.~~
+- ~~Size: ~80 lines + ~15 tests + 2 GL account seeds (2020 Accrued Receipts, 5200 Inventory Adjustment Expense).~~
+- ~~Leverage: **Trial balance ties for ALL inventory-side events.** Pilot parallel-run reconciliation per `docs/10` requires trial balance to tie for 2+ consecutive weeks; with these gaps it can't tie regardless of operator care. Ranked above credit-limit and the audit bug because every other gap is feature-missing or feature-mis-implemented; these two are "the books don't balance for already-shipped paths." Single-commit slice, independent of the full AP slice.~~
 
-**#2 — MODULE 02 AUDIT BUG**
-- Scope: `products.ts` / `variants.ts` / `warehouse.ts` carry stale `// TODO: wire audit() once lib/audit exists` even though `lib/audit/audit.ts` exists and is used everywhere else; CRUD mutations skip audit logging.
-- Size: ~6 lines per service file × 3 files = ~18 lines.
-- Leverage: Prevents GUI from silently shipping audit-gap mutations from day one. Smallest tractable fix in the entire audit.
+**#2 — ~~MODULE 02 AUDIT BUG~~ DONE — commit e15af88**
+- ~~Scope: `products.ts` / `variants.ts` / `warehouse.ts` carry stale `// TODO: wire audit() once lib/audit exists` even though `lib/audit/audit.ts` exists and is used everywhere else; CRUD mutations skip audit logging.~~
+- ~~Size: ~6 lines per service file × 3 files = ~18 lines.~~
+- ~~Leverage: Prevents GUI from silently shipping audit-gap mutations from day one. Smallest tractable fix in the entire audit.~~
 
 **#3 — AUTH + RBAC + SOFT-DELETE MIDDLEWARE + PROVISIONING (Module 01)**
 - Scope: BetterAuth integration + `User` / `Role` / `Permission` / `RolePermission` / `UserRole` / `Session` / `Account` / `VerificationToken` schema; `requirePermission()` helper + permission constants taxonomy (see canonical list below); soft-delete Prisma middleware; `scripts/provision-instance.ts`; password policy validator.
@@ -58,20 +58,30 @@ Ordered by priority. Each item: name, scope, size, leverage.
 - Size: ~80 lines + ~25 tests.
 - Leverage: Wholesale-first pilot needs blanket tier discounts. Without this, every SO line falls through to BASE_PRICE for any customer that should get a tier discount. Three storage options open (Setting, CustomerCategory, new TierDiscount table) — Setting recommended for simplicity.
 
-**#6 — VENDOR MASTER CRUD (Module 04)**
+**#6 — COMMISSION ENGINE (Module 03 §03.M/N)**
+- Scope: Per-rep configurable commission. Extend `SalesRep` with `commissionEnabled: Boolean` (salaried reps = false; default false), keep existing `commissionPercent: Decimal` (rate), and constrain `commissionBasis` enum to `REVENUE` (% of collected gross sales) or `MARGIN` (% of collected gross profit, where GP = collected revenue − proportional COGS-at-close). Both bases key off **collected payments**, never invoiced amounts. New `CommissionAccrual` ledger table: `(id, salesRepId, paymentId, invoiceId, basis, basisAmount: Decimal(18,5), percent: Decimal, amount: Decimal(18,5), accruedAt, reversedAt, reversedByPaymentId, createdAt)`. Accrual fires inside `recordPayment` tx after `CreditApplication` rows insert: for each invoice the payment applies to, look up the SO's `salesRepId`, skip if rep `commissionEnabled=false`, else compute proportional accrual against the applied portion of that invoice (REVENUE = applied × percent; MARGIN = (applied − applied/invoice.subtotal × invoice.cogsAtClose) × percent). Reversal fires inside `reversePayment` (and `creditFromRma` payment-reversing branches): write a negative-amount `CommissionAccrual` row pointing back to the original via `reversedByPaymentId`, never delete or mutate the original. Commission report service: per-rep / per-period aggregation with `earned` (sum positive, accruedAt in window) / `pending` (accrued but rep payout cycle not yet closed — flag via Setting key `commission_payout_cycle`) / `reversed` (sum negative) / `net` columns. No GL posting in this slice (commission expense JE is a Module 08 follow-up — flag in scope, do not implement).
+- Size: ~250 lines services + ~30 lines schema migration + ~35 tests (proportional partial payment, multi-invoice payment, MARGIN basis with mixed-cost invoices, refund reversal exact, refund reversal partial, salaried-rep skip, `commissionEnabled=false` mid-period, basis flip mid-period).
+- Leverage: Confirmed pilot requirement (Naked Kratom blends commissioned + salaried reps). Wires in at exactly two points (`recordPayment` accrual leg, `reversePayment` reversal leg) — additive, doesn't restructure payment flow. Without this, every commission payout has to be reconciled by hand against the payments report. Belongs above Vendor Master because payment recording is a Phase 3 GUI screen and commission must accrue from day one to avoid backfill.
+
+**#7 — VENDOR MASTER CRUD (Module 04)**
 - Scope: Vendor master CRUD service + API + contacts + payment methods (encrypted, using `customerDocuments` pattern) + product catalog. Mirrors Customer master shape but smaller (no portal, no shadow-customer drop-ship complexity, no CIM integration for pilot).
 - Size: ~4-6 days solo with Claude Code.
 - Leverage: Unblocks all vendor-side GUI work. PO entry depends on it. Today vendor records have to be created via raw SQL.
 
-**#7 — REAL-TIME OnHand/Available HELPER (Module 05)**
+**#8 — REAL-TIME OnHand/Available HELPER (Module 05)**
 - Scope: `getLineEntryStock(db, variantId, warehouseId)` returning `{ onHand, reserved, available }` for SO line entry display.
 - Size: ~30 lines + ~5 tests.
 - Leverage: SO line entry GUI needs this for stock context display per spec; without it every line entry does a multi-call dance.
 
-**#8 — DUPLICATE-ORDER HELPER (Module 05)**
+**#9 — DUPLICATE-ORDER HELPER (Module 05)**
 - Scope: `duplicateSalesOrder(db, sourceId, ctx)` → new DRAFT SO with same lines/discounts; new SO #, dates + shipping reset.
 - Size: ~50 lines + ~5 tests.
 - Leverage: Common workflow per spec ("Duplicate" button); small fix.
+
+**#10 — CANCELLATION-RULE CHANGE (Module 05)**
+- Scope: Replace DRAFT-only-cancel + no-post-CLOSED-cancel with payment-state-gated cancel. No payment → cancel allowed at any status with downstream cleanup (un-commit Reserved, un-deduct On Hand if Closed). Payment present → throw structured error ("reverse payment first"). ~40 lines + ~10 tests.
+- Size: ~40 lines service + ~10 tests.
+- Leverage: Matches operator intuition. Current behavior forces workaround paths that lose SO number history.
 
 ### Recommended GUI screen order
 
@@ -93,13 +103,14 @@ Based on backend strength: Module 06 strongest; Module 03 close behind; Module 0
 
 None of Phase 2's items needs #1 (GL leg blocks only inventory write paths), #2 (audit bug blocks only products/variants/warehouses), or #4 (credit-limit blocks only SO create/confirm). Phase 2 starts as soon as #3 lands and runs IN PARALLEL with #1 / #2 / #4 / #5 work. This enables a two-track build: one track on RBAC + customer screens, another track on the small back-end fixes. Both tracks converge before Phase 3 unlocks.
 
-**PHASE 3 — after Phase 2 + #5 + #7 + #8**
+**PHASE 3 — after Phase 2 + #5 + #6 + #8 + #9**
 - Sales order entry — DRAFT through CLOSED with line-entry stock context
-- Payment recording (record, apply, reverse)
+- Payment recording (record, apply, reverse) — accrual leg of #6 must be wired before this screen ships so commission accrues from first payment
 - Credit memo create / confirm flow
 - RMA workflow (state machine UI)
+- Commission report (per-rep / per-period earned / pending / reversed / net)
 
-**PHASE 4 — after #6 (Vendor master)**
+**PHASE 4 — after #7 (Vendor master)**
 - Vendor master CRUD
 - PO entry through receipt
 - Receipt posting workflow
@@ -238,13 +249,11 @@ settings.write_negative_inventory_allowed
 
 ### Open user questions
 
-1. **Commission engine for Naked Kratom.** Do their sales reps work on commission, or are they salaried? If commissioned, the engine (Module 03 §03.M/N) is fix-before-GUI. If salaried, defer entirely.
-2. **Module 05 deliberate scope cuts.** Both are documented in code with intentional error messages — confirm acceptable for pilot or fix:
-   a. **DRAFT-only updates** (spec wants any-pre-CLOSED-status). Workaround: cancel + recreate (loses SO number history).
-   b. **Post-CLOSED cancellation refused entirely** (spec wants allowed-with-confirmation). Workaround: RMA path.
-3. **Wholesale application + backorder queue staff-side flows.** Both are tied to the deferred portal in spec, but each has a staff-side workflow that could land without the portal. Cheap to ship the data model + admin-only UI; hard to retrofit later. Yes for pilot or defer with portal?
-4. **Tier discount % storage.** Three options: Setting (recommended — single tenant-wide map of CustomerType → discount %, no schema change), CustomerCategory (add discount-% column), or new `TierDiscount` table. Pick one before #5 starts.
-5. **Refund handling for pilot.** Rely on `reversePayment` + manual check workflow (acceptable, with bank-reconciliation gap), or build refund-via-AP-entry path before pilot? Authorize.Net runtime is deferred regardless; the question is whether the manual-AP path is needed pre-cutover.
+1. ~~**Commission engine for Naked Kratom.** Do their sales reps work on commission, or are they salaried?~~ **RESOLVED 2026-05-04 — BUILD for pilot.** Reps are a blend of commissioned and salaried. Two basis options per rep, both keying off **collected payments** (not invoiced amounts): (a) % of gross sales, (b) % of gross profit (collected revenue − COGS-at-close). Per-rep config: rate, basis (one of the two), `commissionEnabled` flag (salaried reps = off). Partial payments accrue proportional commission; refunds reverse proportional commission. Tracked as gap-list **#6**.
+2. ~~**Module 05 deliberate scope cuts.** Both are documented in code with intentional error messages — confirm acceptable for pilot or fix: a. **DRAFT-only updates** (spec wants any-pre-CLOSED-status). Workaround: cancel + recreate (loses SO number history). b. **Post-CLOSED cancellation refused entirely** (spec wants allowed-with-confirmation). Workaround: RMA path.~~ **RESOLVED 2026-05-04 — PAYMENT-STATE-GATED.** Cancel allowed at any status if no payment attached. Payment attached → must reverse payment first, then cancel. Service throws structured error if payment exists. Replaces both scope cuts (DRAFT-only edits + no-post-CLOSED cancel). Tracked as gap-list **#10**.
+3. ~~**Wholesale application + backorder queue staff-side flows.** Both are tied to the deferred portal in spec, but each has a staff-side workflow that could land without the portal. Cheap to ship the data model + admin-only UI; hard to retrofit later. Yes for pilot or defer with portal?~~ **RESOLVED 2026-05-04 — DEFERRED with portal.** Not part of pilot. Customers created manually; backorders tracked as customer-record notes.
+4. ~~**Tier discount % storage.** Three options: Setting (recommended — single tenant-wide map of CustomerType → discount %, no schema change), CustomerCategory (add discount-% column), or new `TierDiscount` table. Pick one before #5 starts.~~ **RESOLVED 2026-05-04 — Setting key.** `tier_discount_percentages` JSON map of CustomerType → discount %. Tier % pre-fills the % Discount column on SO lines; operator edits freely. No per-customer override field needed. No stacking — operator-typed % replaces tier pre-fill. Line total: qty × price × (1 − discount_pct). Tracked as gap-list **#5**.
+5. ~~**Refund handling for pilot.** Rely on `reversePayment` + manual check workflow (acceptable, with bank-reconciliation gap), or build refund-via-AP-entry path before pilot? Authorize.Net runtime is deferred regardless; the question is whether the manual-AP path is needed pre-cutover.~~ **RESOLVED 2026-05-04 — MANUAL for pilot.** `reversePayment` exists. Accountant cuts manual check outside system, reverses payment in ERP, clears AR via credit memo "Refund Issued". AP slice closes gap later.
 
 ### Pilot deferrals (re-confirmed from `docs/10`)
 
