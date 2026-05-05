@@ -555,6 +555,93 @@ export async function cancelSalesOrder(
   });
 }
 
+/**
+ * Create a new DRAFT SalesOrder by copying lines + line-level discounts
+ * + order-level discounts + notes from a source SO. Resets transient
+ * lifecycle data: new SO number, orderDate=now, blank ship date /
+ * shipping fields / status timestamps, no inventoryMovement linkage,
+ * no qtyReserved / qtyShipped. Soft-deleted source rows are not
+ * copied; soft-deleted source SOs are rejected (callers should pull a
+ * live SO).
+ *
+ * Customer + warehouse are inherited from the source. Pricing is NOT
+ * re-resolved — line.unitPrice / priceRule are copied verbatim so
+ * "duplicate" produces an identical-money draft. If the operator
+ * wants today's prices, they edit the draft afterward.
+ */
+export async function duplicateSalesOrder(
+  db: PrismaClient,
+  sourceId: string,
+  ctx?: AuditContext,
+): Promise<SalesOrderWithLines> {
+  return db.$transaction(async (tx) => {
+    const source = await tx.salesOrder.findUnique({
+      where: { id: sourceId },
+      include: { lines: { where: { deletedAt: null } } },
+    });
+    if (!source) throw new Error(`SalesOrder not found: ${sourceId}`);
+    if (source.deletedAt) {
+      throw new Error(`Cannot duplicate a soft-deleted SalesOrder: ${sourceId}`);
+    }
+    if (source.lines.length === 0) {
+      throw new Error(`Cannot duplicate SalesOrder with no live lines: ${sourceId}`);
+    }
+
+    const seq = await getNextSequence(tx, {
+      name: SO_SEQUENCE_NAME,
+      prefix: SO_PREFIX,
+      useYear: true,
+    });
+
+    const so = await tx.salesOrder.create({
+      data: {
+        number: seq.formatted,
+        customerId: source.customerId,
+        warehouseId: source.warehouseId,
+        source: source.source,
+        currency: source.currency,
+        customerPo: source.customerPo,
+        // Reset shipping/dates — these are per-shipment, not per-template.
+        promisedShipDate: null,
+        orderDate: new Date(),
+        orderDiscountPercent: source.orderDiscountPercent,
+        orderDiscountAmount: source.orderDiscountAmount,
+        // Shipping + handling are recomputed at close for the new
+        // shipment, not inherited.
+        shippingAmount: null,
+        handlingAmount: null,
+        shippingAddress: source.shippingAddress,
+        customerNotes: source.customerNotes,
+        internalNotes: source.internalNotes,
+        createdById: ctx?.userId ?? null,
+        lines: {
+          create: source.lines.map((l) => ({
+            variantId: l.variantId,
+            warehouseId: l.warehouseId,
+            qtyOrdered: l.qtyOrdered,
+            unitPrice: l.unitPrice,
+            priceRule: l.priceRule,
+            discountPercent: l.discountPercent,
+            discountAmount: l.discountAmount,
+            customerNote: l.customerNote,
+            internalNote: l.internalNote,
+          })),
+        },
+      },
+      include: { lines: true },
+    });
+
+    await audit(tx, {
+      action: AuditAction.CREATE,
+      entityType: 'SalesOrder',
+      entityId: so.id,
+      after: { ...so, duplicatedFromId: sourceId },
+      ctx,
+    });
+    return so;
+  });
+}
+
 export async function softDeleteSalesOrder(
   db: PrismaClient,
   id: string,
