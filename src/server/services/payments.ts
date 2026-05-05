@@ -24,6 +24,7 @@ import {
   type ReversePaymentInput,
 } from '@/lib/validation/invoicing';
 import { recomputeAmountPaidForInvoice } from './invoices';
+import { accrueCommissionForApplicationTx } from './commission';
 
 // =============================================================================
 // Payments service.
@@ -440,13 +441,19 @@ export async function recordPayment(
       });
       if (data.applications && data.applications.length > 0) {
         for (const app of data.applications) {
-          await applyPaymentToInvoiceTx(
+          const created = await applyPaymentToInvoiceTx(
             tx,
             payment.id,
             app.invoiceId,
             new Prisma.Decimal(app.amount),
             ctx,
           );
+          // Commission accrual fires per-application after the
+          // CreditApplication row inserts. APPLIED_CREDIT path is
+          // gated out at the outer if/else (Q1: no accrual on
+          // credit-funded payments). Same tx as the application so
+          // a downstream throw rolls everything back together.
+          await accrueCommissionForApplicationTx(tx, created, ctx);
         }
       }
     }
