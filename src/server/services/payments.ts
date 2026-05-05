@@ -24,7 +24,10 @@ import {
   type ReversePaymentInput,
 } from '@/lib/validation/invoicing';
 import { recomputeAmountPaidForInvoice } from './invoices';
-import { accrueCommissionForApplicationTx } from './commission';
+import {
+  accrueCommissionForApplicationTx,
+  reverseCommissionForPaymentTx,
+} from './commission';
 
 // =============================================================================
 // Payments service.
@@ -533,6 +536,14 @@ export async function reversePayment(
           { accountCode: CASH_ACCOUNT, credit: before.amount, memo: 'Cash reversed' },
         ],
       });
+    }
+
+    // Commission reversal. APPLIED_CREDIT payments never accrued
+    // commission in the first place (Q1) so the lookup is a no-op
+    // there; the explicit gate is for clarity. triggeringPaymentId
+    // = sourcePaymentId for self-reversals (the only path today).
+    if (before.method !== PaymentMethod.APPLIED_CREDIT) {
+      await reverseCommissionForPaymentTx(tx, data.paymentId, data.paymentId, ctx);
     }
 
     await audit(tx, {

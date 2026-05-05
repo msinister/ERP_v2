@@ -114,6 +114,48 @@ export type TierDiscountPercentagesOnDisk = z.infer<
 >;
 
 // ---------------------------------------------------------------------------
+// commission_payout_cycle
+// ---------------------------------------------------------------------------
+// Shape on disk: { kind: 'WEEKLY' | 'BI_WEEKLY' | 'MONTHLY', anchorDay?: number }
+// Used by the commission report's `pending` column: accruals whose
+// accruedAt falls inside the current open cycle window count as
+// pending; older accruals count as earned. Missing key = report
+// graceful no-op (everything counts as earned, pending=0).
+// anchorDay semantics: WEEKLY/BI_WEEKLY = day of week 0-6 (0=Sunday);
+// MONTHLY = day of month 1-28 (capped at 28 to avoid month-length
+// edge cases). Defaults handled by the report when omitted.
+
+export const commissionPayoutCycleValueSchema = z
+  .object({
+    kind: z.enum(['WEEKLY', 'BI_WEEKLY', 'MONTHLY']),
+    anchorDay: z.number().int().min(0).max(28).optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.anchorDay == null) return;
+    if (data.kind === 'MONTHLY') {
+      if (data.anchorDay < 1 || data.anchorDay > 28) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['anchorDay'],
+          message: 'MONTHLY anchorDay must be 1..28',
+        });
+      }
+    } else {
+      if (data.anchorDay < 0 || data.anchorDay > 6) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['anchorDay'],
+          message: 'WEEKLY/BI_WEEKLY anchorDay must be 0..6 (0=Sunday)',
+        });
+      }
+    }
+  });
+
+export type CommissionPayoutCycleOnDisk = z.infer<
+  typeof commissionPayoutCycleValueSchema
+>;
+
+// ---------------------------------------------------------------------------
 // Per-key registry — useful for a future generic admin UI that needs to
 // validate any key by name. For now only one entry; later admin settings
 // (late_fee_default, ar_hold_default, etc.) get added here as they ship.
@@ -123,6 +165,7 @@ export const SETTING_KEYS = {
   RESTOCKING_FEE_DEFAULT: 'restocking_fee_default',
   NEGATIVE_INVENTORY_ALLOWED: 'negative_inventory_allowed',
   TIER_DISCOUNT_PERCENTAGES: 'tier_discount_percentages',
+  COMMISSION_PAYOUT_CYCLE: 'commission_payout_cycle',
 } as const;
 
 export const settingValueSchemas: ReadonlyMap<string, z.ZodTypeAny> = new Map<
@@ -132,4 +175,5 @@ export const settingValueSchemas: ReadonlyMap<string, z.ZodTypeAny> = new Map<
   [SETTING_KEYS.RESTOCKING_FEE_DEFAULT, restockingFeeDefaultValueSchema],
   [SETTING_KEYS.NEGATIVE_INVENTORY_ALLOWED, negativeInventoryAllowedValueSchema],
   [SETTING_KEYS.TIER_DISCOUNT_PERCENTAGES, tierDiscountPercentagesValueSchema],
+  [SETTING_KEYS.COMMISSION_PAYOUT_CYCLE, commissionPayoutCycleValueSchema],
 ]);
