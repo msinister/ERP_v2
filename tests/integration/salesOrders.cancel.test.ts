@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { Prisma, SalesOrderStatus } from '@/generated/tenant';
+import { PaymentMethod, Prisma, SalesOrderStatus } from '@/generated/tenant';
 import type { PrismaClient } from '@/generated/tenant';
 import {
   cancelSalesOrder,
@@ -9,6 +9,8 @@ import {
   dispatchSalesOrder,
 } from '@/server/services/salesOrders';
 import { receiveInventory } from '@/server/services/movements';
+import { recordPayment, reversePayment } from '@/server/services/payments';
+import { SalesOrderCancelBlockedError } from '@/lib/errors/credit';
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 import { upsertTestCustomer } from '../helpers/customerStub';
@@ -145,6 +147,94 @@ suite('SalesOrder cancel', () => {
       cancelSalesOrder(db, so.id, { reason: 'second' }),
     ).rejects.toThrow(/already CANCELLED/);
   });
+
+  // ---------------------------------------------------------------------------
+  // Audit fix #10 — payment-state-gated cancellation.
+  // CLOSED still routes through RMA (Q3 = option b). Pre-CLOSED cancel
+  // is the no-op happy path today (no invoice exists pre-CLOSED → no
+  // payment can attach). The block fires the moment a future workflow
+  // attaches a payment to a pre-close invoice; simulated here by
+  // forcibly creating an invoice + payment on a CONFIRMED SO and
+  // confirming the cancel refuses with the typed error.
+  // ---------------------------------------------------------------------------
+
+  it('CONFIRMED with attached payment → SalesOrderCancelBlockedError', async () => {
+    await receiveInventory(db, { variantId, warehouseId, qty: '10' });
+    const so = await createSalesOrder(db, input('4'));
+    await confirmSalesOrder(db, so.id);
+
+    // Simulate a future deposit-on-confirm workflow: synthesize an
+    // invoice tied to this SO so a payment can apply against it.
+    // Pilot doesn't ship pre-close invoicing, but the cancel guard
+    // must be honest about the case.
+    const inv = await db.invoice.create({
+      data: {
+        number: `${so.number}-DEP`,
+        salesOrderId: so.id,
+        customerId,
+        warehouseId,
+        subtotal: new Prisma.Decimal('40'),
+        total: new Prisma.Decimal('40'),
+      },
+    });
+    const pmt = await recordPayment(db, {
+      customerId,
+      method: PaymentMethod.CHECK,
+      amount: '20',
+      applications: [{ invoiceId: inv.id, amount: '20' }],
+    });
+
+    const err = await cancelSalesOrder(db, so.id, { reason: 'oops' }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(SalesOrderCancelBlockedError);
+    const e = err as SalesOrderCancelBlockedError;
+    expect(e.code).toBe('SO_CANCEL_BLOCKED_BY_PAYMENT');
+    expect(e.salesOrderId).toBe(so.id);
+    expect(e.paymentNumbers).toContain(pmt.number);
+
+    const fresh = await db.salesOrder.findUniqueOrThrow({ where: { id: so.id } });
+    expect(fresh.status).toBe(SalesOrderStatus.CONFIRMED);
+  });
+
+  it('CONFIRMED with reversed payment → cancel succeeds', async () => {
+    await receiveInventory(db, { variantId, warehouseId, qty: '10' });
+    const so = await createSalesOrder(db, input('4'));
+    await confirmSalesOrder(db, so.id);
+    const inv = await db.invoice.create({
+      data: {
+        number: `${so.number}-DEP2`,
+        salesOrderId: so.id,
+        customerId,
+        warehouseId,
+        subtotal: new Prisma.Decimal('40'),
+        total: new Prisma.Decimal('40'),
+      },
+    });
+    const pmt = await recordPayment(db, {
+      customerId,
+      method: PaymentMethod.CHECK,
+      amount: '20',
+      applications: [{ invoiceId: inv.id, amount: '20' }],
+    });
+    await reversePayment(db, { paymentId: pmt.id, reason: 'NSF' });
+
+    const cancelled = await cancelSalesOrder(db, so.id, { reason: 'finally' });
+    expect(cancelled.status).toBe(SalesOrderStatus.CANCELLED);
+  });
+
+  it('CLOSED still throws RMA-redirect error regardless of payment state', async () => {
+    // Reaffirms Q3 option (b): CLOSED cancel never gets the new gate
+    // logic; the RMA path is still the only escape.
+    await receiveInventory(db, { variantId, warehouseId, qty: '10' });
+    const so = await createSalesOrder(db, input('4'));
+    await confirmSalesOrder(db, so.id);
+    await dispatchSalesOrder(db, so.id);
+    await closeSalesOrder(db, so.id, undefined);
+    await expect(
+      cancelSalesOrder(db, so.id, { reason: 'no payment so should pass right?' }),
+    ).rejects.toThrow(/RMA/);
+  });
 });
 
 async function wipe(
@@ -168,6 +258,30 @@ async function wipe(
     await db.auditLog.deleteMany({
       where: { entityType: 'SalesOrder', entityId: { in: ourSos.map((s) => s.id) } },
     });
+  }
+  // Payments + their JEs / applications come before invoices (FK).
+  // The new audit-#10 tests synthesize invoices + payments to drive
+  // the SalesOrderCancelBlockedError gate; clean them up here.
+  const ourPayments = await db.payment.findMany({
+    where: { customerId: ids.customerId },
+    select: { id: true },
+  });
+  if (ourPayments.length > 0) {
+    const pmtIds = ourPayments.map((p) => p.id);
+    const pmtJes = await db.journalEntry.findMany({
+      where: { entityType: 'Payment', entityId: { in: pmtIds } },
+      select: { id: true },
+    });
+    if (pmtJes.length > 0) {
+      const jeIds = pmtJes.map((j) => j.id);
+      await db.journalEntryLine.deleteMany({ where: { journalEntryId: { in: jeIds } } });
+      await db.journalEntry.deleteMany({ where: { id: { in: jeIds } } });
+    }
+    await db.creditApplication.deleteMany({ where: { paymentId: { in: pmtIds } } });
+    await db.auditLog.deleteMany({
+      where: { entityType: 'Payment', entityId: { in: pmtIds } },
+    });
+    await db.payment.deleteMany({ where: { id: { in: pmtIds } } });
   }
   await wipeInvoiceArtifactsForSOs(db, ourSos.map((s) => s.id));
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: ids.customerId } } });

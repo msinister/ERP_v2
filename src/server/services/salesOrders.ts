@@ -19,6 +19,7 @@ import {
 import {
   ArHoldExceededError,
   CreditLimitExceededError,
+  SalesOrderCancelBlockedError,
 } from '@/lib/errors/credit';
 import {
   cancelSalesOrderInputSchema,
@@ -104,16 +105,26 @@ export async function createSalesOrder(
         manualUnitPrice:
           l.manualUnitPrice != null ? new Prisma.Decimal(l.manualUnitPrice) : null,
       });
+      // Operator-supplied discountPercent / discountAmount always win.
+      // Tier-discount pre-fill (resolved.discountPercent) only applies
+      // when the operator left BOTH discount fields blank. No stacking.
+      const operatorSetDiscount =
+        l.discountPercent != null || l.discountAmount != null;
+      const effectiveDiscountPercent = operatorSetDiscount
+        ? l.discountPercent != null
+          ? new Prisma.Decimal(l.discountPercent)
+          : null
+        : resolved.discountPercent;
+      const effectiveDiscountAmount =
+        l.discountAmount != null ? new Prisma.Decimal(l.discountAmount) : null;
       resolvedLines.push({
         variantId: l.variantId,
         warehouseId: l.warehouseId,
         qtyOrdered: new Prisma.Decimal(l.qtyOrdered),
         unitPrice: resolved.unitPrice,
         priceRule: resolved.rule,
-        discountPercent:
-          l.discountPercent != null ? new Prisma.Decimal(l.discountPercent) : null,
-        discountAmount:
-          l.discountAmount != null ? new Prisma.Decimal(l.discountAmount) : null,
+        discountPercent: effectiveDiscountPercent,
+        discountAmount: effectiveDiscountAmount,
         customerNote: l.customerNote ?? null,
         internalNote: l.internalNote ?? null,
       });
@@ -226,6 +237,15 @@ export async function updateSalesOrder(
           manualUnitPrice:
             l.manualUnitPrice != null ? new Prisma.Decimal(l.manualUnitPrice) : null,
         });
+        const operatorSetDiscount =
+          l.discountPercent != null || l.discountAmount != null;
+        const effectiveDiscountPercent = operatorSetDiscount
+          ? l.discountPercent != null
+            ? new Prisma.Decimal(l.discountPercent)
+            : null
+          : resolved.discountPercent;
+        const effectiveDiscountAmount =
+          l.discountAmount != null ? new Prisma.Decimal(l.discountAmount) : null;
         await tx.salesOrderLine.create({
           data: {
             salesOrderId: id,
@@ -234,10 +254,8 @@ export async function updateSalesOrder(
             qtyOrdered: new Prisma.Decimal(l.qtyOrdered),
             unitPrice: resolved.unitPrice,
             priceRule: resolved.rule,
-            discountPercent:
-              l.discountPercent != null ? new Prisma.Decimal(l.discountPercent) : null,
-            discountAmount:
-              l.discountAmount != null ? new Prisma.Decimal(l.discountAmount) : null,
+            discountPercent: effectiveDiscountPercent,
+            discountAmount: effectiveDiscountAmount,
             customerNote: l.customerNote ?? null,
             internalNote: l.internalNote ?? null,
           },
@@ -522,12 +540,50 @@ export async function cancelSalesOrder(
     });
     if (!before) throw new Error(`SalesOrder not found: ${id}`);
     if (before.status === SalesOrderStatus.CLOSED) {
+      // Per audit doc resolution 2 (option b — see audit doc 2026-05-03):
+      // CLOSED cancel still routes through RMA. The RMA path already
+      // handles inventory reversal + AR credit atomically via
+      // creditFromRma. Reimplementing that inside cancel would
+      // duplicate logic and is not worth the risk for pilot.
       throw new Error(
         'Cannot cancel a CLOSED SalesOrder — use the RMA/Returns workflow instead',
       );
     }
     if (before.status === SalesOrderStatus.CANCELLED) {
       throw new Error('SalesOrder is already CANCELLED');
+    }
+
+    // Pre-CLOSED cancel: block when any RECORDED payment has been
+    // applied through this SO's (yet-to-exist) invoice path. Today
+    // an invoice only exists once the SO closes, so this guard is
+    // a no-op for DRAFT / CONFIRMED / DISPATCHED in pilot — but
+    // wiring it now keeps the cancel surface honest if a future
+    // pre-close payment-capture path lands (e.g., 50% deposit
+    // workflow). Looks for an Invoice on this SO, then any
+    // non-reversed CreditApplication attached to a RECORDED payment.
+    const invoice = await tx.invoice.findUnique({
+      where: { salesOrderId: id },
+      select: { id: true },
+    });
+    if (invoice) {
+      const apps = await tx.creditApplication.findMany({
+        where: {
+          invoiceId: invoice.id,
+          reversedAt: null,
+          paymentId: { not: null },
+          payment: { status: 'RECORDED' },
+        },
+        include: { payment: { select: { number: true } } },
+      });
+      if (apps.length > 0) {
+        const numbers = Array.from(
+          new Set(apps.map((a) => a.payment!.number)),
+        ).sort();
+        throw new SalesOrderCancelBlockedError({
+          salesOrderId: id,
+          paymentNumbers: numbers,
+        });
+      }
     }
 
     const wasReserved =

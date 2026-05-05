@@ -82,6 +82,38 @@ export type NegativeInventoryAllowedOnDisk = z.infer<
 >;
 
 // ---------------------------------------------------------------------------
+// tier_discount_percentages
+// ---------------------------------------------------------------------------
+// Shape on disk: { WHOLESALE_REGULAR: string, WHOLESALE_PREFERRED: string,
+//                  WHOLESALE_DISTRIBUTOR: string, WHOLESALE_MASTER_DISTRIBUTOR: string,
+//                  RETAIL: string }
+// Each value is a Decimal-string in [0, 100] representing the blanket
+// tier discount % applied at SO line entry. Tier % pre-fills the
+// % Discount column on SO lines (operator can edit). Missing key =
+// no tier discounts (resolver gracefully no-ops). Per audit doc
+// resolution 4: stored as a Setting, not on Customer / CustomerCategory.
+
+const tierDiscountPercent = decimalString.refine(
+  (v) => {
+    const n = Number(v);
+    return n >= 0 && n <= 100;
+  },
+  'Must be between 0 and 100',
+);
+
+export const tierDiscountPercentagesValueSchema = z.object({
+  WHOLESALE_REGULAR: tierDiscountPercent,
+  WHOLESALE_PREFERRED: tierDiscountPercent,
+  WHOLESALE_DISTRIBUTOR: tierDiscountPercent,
+  WHOLESALE_MASTER_DISTRIBUTOR: tierDiscountPercent,
+  RETAIL: tierDiscountPercent,
+});
+
+export type TierDiscountPercentagesOnDisk = z.infer<
+  typeof tierDiscountPercentagesValueSchema
+>;
+
+// ---------------------------------------------------------------------------
 // Per-key registry — useful for a future generic admin UI that needs to
 // validate any key by name. For now only one entry; later admin settings
 // (late_fee_default, ar_hold_default, etc.) get added here as they ship.
@@ -90,6 +122,7 @@ export type NegativeInventoryAllowedOnDisk = z.infer<
 export const SETTING_KEYS = {
   RESTOCKING_FEE_DEFAULT: 'restocking_fee_default',
   NEGATIVE_INVENTORY_ALLOWED: 'negative_inventory_allowed',
+  TIER_DISCOUNT_PERCENTAGES: 'tier_discount_percentages',
 } as const;
 
 export const settingValueSchemas: ReadonlyMap<string, z.ZodTypeAny> = new Map<
@@ -98,4 +131,5 @@ export const settingValueSchemas: ReadonlyMap<string, z.ZodTypeAny> = new Map<
 >([
   [SETTING_KEYS.RESTOCKING_FEE_DEFAULT, restockingFeeDefaultValueSchema],
   [SETTING_KEYS.NEGATIVE_INVENTORY_ALLOWED, negativeInventoryAllowedValueSchema],
+  [SETTING_KEYS.TIER_DISCOUNT_PERCENTAGES, tierDiscountPercentagesValueSchema],
 ]);

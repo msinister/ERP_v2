@@ -36,6 +36,24 @@ export class CreditLimitExceededError extends Error {
   }
 }
 
+export class SalesOrderCancelBlockedError extends Error {
+  readonly code = 'SO_CANCEL_BLOCKED_BY_PAYMENT';
+  readonly salesOrderId: string;
+  readonly reason: 'PAYMENT_PRESENT';
+  readonly paymentNumbers: string[];
+
+  constructor(args: { salesOrderId: string; paymentNumbers: string[] }) {
+    super(
+      `Cannot cancel SalesOrder ${args.salesOrderId}: payment(s) attached ` +
+        `(${args.paymentNumbers.join(', ')}). Reverse payment(s) first, then cancel.`,
+    );
+    this.name = 'SalesOrderCancelBlockedError';
+    this.salesOrderId = args.salesOrderId;
+    this.reason = 'PAYMENT_PRESENT';
+    this.paymentNumbers = args.paymentNumbers;
+  }
+}
+
 export class ArHoldExceededError extends Error {
   readonly code = 'AR_HOLD_EXCEEDED';
   readonly customerId: string;
