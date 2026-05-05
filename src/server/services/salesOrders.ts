@@ -11,6 +11,15 @@ import { lockBin } from '@/server/services/locks';
 import { consumeInventoryTx } from '@/server/services/movements';
 import { generateInvoiceForClosedSOTx } from '@/server/services/invoices';
 import { postCogsForInvoiceTx } from '@/server/services/cogsPosting';
+import { arBalanceForCustomer, agingForCustomer } from '@/server/services/ar';
+import {
+  computeSalesOrderTotal,
+  getOpenSosNotInvoicedTotal,
+} from '@/lib/ar/openSos';
+import {
+  ArHoldExceededError,
+  CreditLimitExceededError,
+} from '@/lib/errors/credit';
 import {
   cancelSalesOrderInputSchema,
   closeSalesOrderInputSchema,
@@ -270,6 +279,17 @@ export async function confirmSalesOrder(
     if (before.lines.length === 0) {
       throw new Error('Cannot confirm a SalesOrder with no lines');
     }
+
+    // Credit-limit + AR-hold enforcement. Both gates run before any
+    // inventory state change; bin locks are acquired only after they
+    // pass. Manager-override path waits for RBAC (Module 01); pilot
+    // always blocks. Errors are typed so the GUI can render an
+    // actionable banner without re-querying.
+    await enforceCreditAndArHold(tx, {
+      salesOrderId: id,
+      customerId: before.customerId,
+      orderTotal: computeSalesOrderTotal(before),
+    });
 
     // Lock every distinct (variant, warehouse) bin in deterministic order.
     // Single-warehouse SOs in pilot still land here so the multi-warehouse
@@ -711,6 +731,68 @@ export async function listSalesOrders(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+// Credit-limit + AR-hold gates for confirmSalesOrder. Reads run
+// against `tx` (same transaction as the confirm) so a concurrent
+// payment / invoice mutation either commits before our reads or
+// blocks until we finish. Both gates short-circuit when their
+// configured customer field is null (creditLimit IS NULL = no
+// limit; arHoldDays IS NULL = AR hold off).
+async function enforceCreditAndArHold(
+  tx: Prisma.TransactionClient,
+  args: { salesOrderId: string; customerId: string; orderTotal: Prisma.Decimal },
+): Promise<void> {
+  const customer = await tx.customer.findUniqueOrThrow({
+    where: { id: args.customerId },
+    select: { id: true, creditLimit: true, arHoldDays: true },
+  });
+
+  // Credit limit: AR + open SOs (excluding this one) + this order's
+  // total must be <= limit. Cast `tx` to the read-only PrismaClient
+  // shape the helpers expect — the helpers only do `findMany`, which
+  // is identical on tx and PrismaClient.
+  if (customer.creditLimit != null) {
+    const txAsClient = tx as unknown as PrismaClient;
+    const [{ arBalance }, openSosTotal] = await Promise.all([
+      arBalanceForCustomer(txAsClient, args.customerId),
+      getOpenSosNotInvoicedTotal(txAsClient, args.customerId, {
+        excludeSalesOrderId: args.salesOrderId,
+      }),
+    ]);
+    const projected = arBalance.plus(openSosTotal).plus(args.orderTotal);
+    if (projected.greaterThan(customer.creditLimit)) {
+      throw new CreditLimitExceededError({
+        customerId: args.customerId,
+        creditLimit: customer.creditLimit.toString(),
+        arBalance: arBalance.toString(),
+        openSosTotal: openSosTotal.toString(),
+        thisOrderTotal: args.orderTotal.toString(),
+        projectedExposure: projected.toString(),
+      });
+    }
+  }
+
+  // AR hold: any open invoice with daysPastDue >= arHoldDays blocks.
+  // Reuses the aging service so PaymentTerm.netDays semantics +
+  // bucket math stay in one place.
+  if (customer.arHoldDays != null) {
+    const txAsClient = tx as unknown as PrismaClient;
+    const aging = await agingForCustomer(txAsClient, args.customerId);
+    const overdue = aging.invoices.filter(
+      (inv) => inv.daysPastDue >= customer.arHoldDays!,
+    );
+    if (overdue.length > 0) {
+      // Worst = most days past due (aging.invoices is already sorted DESC).
+      const worst = overdue[0]!;
+      throw new ArHoldExceededError({
+        customerId: args.customerId,
+        arHoldDays: customer.arHoldDays,
+        worstInvoiceNumber: worst.number,
+        worstInvoiceDaysPastDue: worst.daysPastDue,
+      });
+    }
+  }
+}
 
 // Sort by (variantId, warehouseId) so concurrent confirms/closes against
 // overlapping bins acquire locks in the same order — no deadlocks.
