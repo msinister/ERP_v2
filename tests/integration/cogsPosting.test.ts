@@ -276,6 +276,9 @@ suite('COGS posting (Part 3 of costing engine)', () => {
 
     const invoice = await getInvoiceForSO(soId);
     expect(invoice.cogsPosted).toBe(true);
+    // Snapshot for MARGIN-basis commission accrual — same value as
+    // the COGS JE's debit total.
+    expect(invoice.cogsAtClose?.toString()).toBe(new Prisma.Decimal('24').toString());
 
     const je = await getCogsJe(invoice.id);
     expect(je).not.toBeNull();
@@ -535,6 +538,9 @@ suite('COGS posting (Part 3 of costing engine)', () => {
     // Flag flipped on the persisted row.
     const after = await db.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
     expect(after.cogsPosted).toBe(true);
+    // Zero-COGS path snapshots 0 (not NULL) so MARGIN-basis commission
+    // accrual sees a definite value.
+    expect(after.cogsAtClose?.toString()).toBe(new Prisma.Decimal('0').toString());
 
     // No COGS JE was posted.
     const cogsJe = await getCogsJe(invoice.id);

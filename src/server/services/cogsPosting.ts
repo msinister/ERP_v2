@@ -220,7 +220,10 @@ export async function postCogsForInvoiceTx(
   if (totalCogs.lessThanOrEqualTo(0)) {
     await tx.invoice.update({
       where: { id: invoiceId },
-      data: { cogsPosted: true },
+      // Snapshot 0 so MARGIN-basis commission accrual sees a definite
+      // zero, not NULL — distinguishes "this invoice produced no
+      // COGS" from "this invoice predates the field."
+      data: { cogsPosted: true, cogsAtClose: new Prisma.Decimal(0) },
     });
     await audit(tx, {
       action: AuditAction.UPDATE,
@@ -284,7 +287,10 @@ export async function postCogsForInvoiceTx(
 
   await tx.invoice.update({
     where: { id: invoiceId },
-    data: { cogsPosted: true },
+    // Snapshot total COGS for fast MARGIN-basis commission accrual
+    // lookups. Same value as the JE's debit total; storing it avoids
+    // re-walking FifoConsumption per payment-application.
+    data: { cogsPosted: true, cogsAtClose: totalCogs },
   });
 
   await audit(tx, {
@@ -294,6 +300,7 @@ export async function postCogsForInvoiceTx(
     before: { cogsPosted: false },
     after: {
       cogsPosted: true,
+      cogsAtClose: totalCogs.toString(),
       cogsJournalEntryId: je.id,
       cogsAmount: totalCogs.toString(),
       warehousesPosted: orderedBins.map((b) => b.warehouseId),

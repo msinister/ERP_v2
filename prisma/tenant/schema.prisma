@@ -706,6 +706,10 @@ model SalesRep {
   active            Boolean          @default(true)
   // Reserved for future User-model FK. Nullable + no @relation defined yet.
   userId            String?
+  // Per-rep gate. Salaried reps have this off so commission accruals
+  // skip them entirely. Default false so newly-created reps don't
+  // accidentally accrue.
+  commissionEnabled Boolean          @default(false)
   commissionBasis   CommissionBasis?
   commissionPercent Decimal?         @db.Decimal(18, 5)
   // Group rate placeholder (future SalesRepGroup model).
@@ -714,7 +718,8 @@ model SalesRep {
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
-  customers Customer[]
+  customers          Customer[]
+  commissionAccruals CommissionAccrual[]
 
   @@index([userId])
 }
@@ -975,6 +980,11 @@ model Invoice {
   voidReason     String?
   // Flipped to true by the costing engine slice when COGS is retro-posted.
   cogsPosted     Boolean       @default(false)
+  // Total COGS computed at posting time (sum across all bins). Stored
+  // for fast MARGIN-basis commission accrual lookups; zero-COGS
+  // invoices (drop-ship/service-only) write 0. NULL on pre-migration
+  // closed invoices — accrual treats NULL as 0 for MARGIN math.
+  cogsAtClose    Decimal?      @db.Decimal(18, 5)
   // Flipped to true by reverseCogsForInvoiceTx (Part 3.5) when voidInvoice
   // reverses the COGS leg. Idempotency anchor: re-call after reversal
   // sees this and short-circuits.
@@ -983,13 +993,14 @@ model Invoice {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  salesOrder   SalesOrder          @relation(fields: [salesOrderId], references: [id])
-  customer     Customer            @relation(fields: [customerId], references: [id])
-  warehouse    Warehouse           @relation(fields: [warehouseId], references: [id])
-  lines        InvoiceLine[]
-  applications CreditApplication[]
-  creditMemos  CreditMemo[]
-  rmas         Rma[]
+  salesOrder         SalesOrder          @relation(fields: [salesOrderId], references: [id])
+  customer           Customer            @relation(fields: [customerId], references: [id])
+  warehouse          Warehouse           @relation(fields: [warehouseId], references: [id])
+  lines              InvoiceLine[]
+  applications       CreditApplication[]
+  creditMemos        CreditMemo[]
+  rmas               Rma[]
+  commissionAccruals CommissionAccrual[]
 
   @@index([customerId, status])
   @@index([status, invoiceDate])
@@ -1044,11 +1055,54 @@ model Payment {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  customer     Customer            @relation(fields: [customerId], references: [id])
-  applications CreditApplication[]
+  customer            Customer            @relation(fields: [customerId], references: [id])
+  applications        CreditApplication[]
+  commissionAccruals  CommissionAccrual[] @relation("CommissionPaymentSource")
+  reversedCommissions CommissionAccrual[] @relation("CommissionReversedBy")
 
   @@index([customerId, receivedAt])
   @@index([status, receivedAt])
+}
+
+// Commission ledger. One row per (payment-application × salesRep)
+// when a payment posts; reversal writes a negative-amount mirror row
+// that points back to the original via reversedByPaymentId. Original
+// rows are NEVER mutated except for reversedAt — the audit trail is
+// the sequence of rows.
+//
+// basis + percent are snapshotted from the SalesRep at accrual time
+// so subsequent rep edits don't rewrite history. amount =
+// basisAmount * percent / 100 (REVENUE) or = (basisAmount - propCogs)
+// * percent / 100 (MARGIN); always Decimal precision, never JS Number.
+model CommissionAccrual {
+  id                  String          @id @default(cuid())
+  salesRepId          String
+  paymentId           String
+  invoiceId           String
+  basis               CommissionBasis
+  basisAmount         Decimal         @db.Decimal(18, 5) // applied amount on REVENUE; (applied − propCOGS) on MARGIN — what the percent multiplied
+  percent             Decimal         @db.Decimal(18, 5)
+  amount              Decimal         @db.Decimal(18, 5) // signed: positive on accrual, negative on reversal
+  accruedAt           DateTime
+  // When set, this row was reversed by a later reversal row. Original
+  // row stays untouched in the ledger; the back-reference is via
+  // reversedByPaymentId on the negative mirror row.
+  reversedAt          DateTime?
+  // On a negative reversal row: the Payment whose reversal triggered
+  // the mirror. Same as paymentId for self-payment reversals; differs
+  // for future RMA-triggered reversals.
+  reversedByPaymentId String?
+  createdAt           DateTime        @default(now())
+
+  salesRep         SalesRep @relation(fields: [salesRepId], references: [id])
+  payment          Payment  @relation("CommissionPaymentSource", fields: [paymentId], references: [id])
+  invoice          Invoice  @relation(fields: [invoiceId], references: [id])
+  reversedByPayment Payment? @relation("CommissionReversedBy", fields: [reversedByPaymentId], references: [id])
+
+  @@index([salesRepId, accruedAt])
+  @@index([paymentId])
+  @@index([invoiceId])
+  @@index([reversedByPaymentId])
 }
 
 // Admin-managed list of credit-memo categories. Self-serve in admin
