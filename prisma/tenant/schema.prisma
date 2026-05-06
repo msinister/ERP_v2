@@ -134,6 +134,18 @@ enum VendorAddressKind {
   BILLING
 }
 
+// Vendor payment-method record kind. Per docs/04 line 15, vendors can
+// have multiple payment methods on file; the payload (account/routing
+// numbers, payee details, card last4) is encrypted at rest. CREDIT_CARD
+// here is REFERENCE-ONLY metadata (last4 + brand + exp) — never a full
+// PAN. Full PANs go through Authorize.Net CIM, not this table.
+enum VendorPaymentMethodKind {
+  ACH
+  WIRE
+  CHECK
+  CREDIT_CARD
+}
+
 enum CustomerActivityKind {
   AUTO
   MANUAL
@@ -469,10 +481,11 @@ model Vendor {
   createdAt             DateTime   @default(now())
   updatedAt             DateTime   @updatedAt
 
-  paymentTerm    PaymentTerm?    @relation(fields: [paymentTermId], references: [id])
+  paymentTerm    PaymentTerm?          @relation(fields: [paymentTermId], references: [id])
   contacts       VendorContact[]
   addresses      VendorAddress[]
   products       VendorProduct[]
+  paymentMethods VendorPaymentMethod[]
   purchaseOrders PurchaseOrder[]
   receipts       Receipt[]
 
@@ -824,6 +837,49 @@ model VendorProduct {
   @@index([vendorId])
   @@index([variantId])
   @@index([deletedAt])
+}
+
+// Vendor payment-method record. The sensitive payload (account numbers,
+// routing numbers, payee details, card metadata) is stored as a single
+// AES-256-GCM ciphertext blob in `encryptedPayload` with the IV in
+// `encryptedPayloadIv`. The blob is JSON-serialized and shape-validated
+// by a kind-discriminated Zod schema after decrypt.
+//
+// `displayHint` (e.g. "ACH ****6789", "Check to: ACME LLC") is derived
+// server-side from the cleartext payload at create time and stored in
+// the clear so list/detail UIs don't have to decrypt to render a row.
+//
+// `isPreferred` invariant — at most one isPreferred=true per vendor
+// among non-deleted rows — is enforced at the SERVICE layer only via
+// row-locking the parent vendor and clearing other rows in the same
+// transaction. No partial unique index (deliberate; mirrors
+// CustomerDocument rather than CustomerPaymentMethod).
+//
+// SECURITY-CRITICAL: cleartext NEVER lands in the audit log or any
+// other persisted store. The audited cleartext path writes a
+// SENSITIVE_READ row with { vendorPaymentMethodId, kind } only, BEFORE
+// attempting decryption.
+model VendorPaymentMethod {
+  id                 String                  @id @default(cuid())
+  vendorId           String
+  kind               VendorPaymentMethodKind
+  // Optional human-readable label (e.g. "Operating account", "Backup ACH").
+  label              String?
+  // base64( ciphertext-bytes || 16-byte GCM auth tag )
+  encryptedPayload   String
+  // base64( 12-byte random IV )
+  encryptedPayloadIv String
+  // Server-derived non-sensitive summary for UI rows (e.g. "ACH ****6789").
+  displayHint        String?
+  isPreferred        Boolean                 @default(false)
+  active             Boolean                 @default(true)
+  deletedAt          DateTime?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([vendorId])
 }
 
 // Sales rep — minimal. userId is captured nullable now so the future User

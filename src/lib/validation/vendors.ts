@@ -175,6 +175,115 @@ export const updateVendorProductInputSchema = z.object({
 });
 
 // =============================================================================
+// Vendor payment methods (encrypted at rest)
+// =============================================================================
+//
+// Per docs/04 line 15, each vendor can have multiple payment-method
+// records on file. The cleartext payload is shape-discriminated by
+// `kind` and persisted as a single AES-256-GCM ciphertext blob; these
+// schemas validate the cleartext both BEFORE encryption (on create)
+// and AFTER decryption (on the audited cleartext read path).
+//
+// CREDIT_CARD here is REFERENCE METADATA ONLY — last4 + brand + exp
+// month/year. Full PAN never enters this table; full PAN goes through
+// Authorize.Net CIM token IDs (see CustomerPaymentMethod). The `last4`
+// regex below explicitly rejects 16-digit input as a defense-in-depth
+// guard against a caller accidentally passing a full PAN.
+
+const accountNumberRegex = /^[A-Za-z0-9-]{4,34}$/;
+const routingNumberRegex = /^\d{9}$/; // US ABA routing
+const swiftCodeRegex = /^[A-Z0-9]{8,11}$/;
+
+export const achPayloadSchema = z.object({
+  routingNumber: z.string().regex(routingNumberRegex, 'Must be a 9-digit ABA routing number'),
+  accountNumber: z.string().regex(accountNumberRegex, 'Invalid account number'),
+  accountName: z.string().min(1).max(255),
+  bankName: z.string().max(255).optional(),
+});
+
+export const wirePayloadSchema = z.object({
+  routingNumber: z.string().regex(routingNumberRegex, 'Must be a 9-digit ABA routing number'),
+  accountNumber: z.string().regex(accountNumberRegex, 'Invalid account number'),
+  accountName: z.string().min(1).max(255),
+  bankName: z.string().max(255).optional(),
+  swiftCode: z.string().regex(swiftCodeRegex, 'Invalid SWIFT/BIC').optional(),
+  intermediaryBank: z.string().max(255).optional(),
+});
+
+export const checkPayloadSchema = z.object({
+  payeeName: z.string().min(1).max(255),
+  line1: z.string().min(1).max(500),
+  line2: z.string().max(500).optional(),
+  city: z.string().min(1).max(255),
+  region: z.string().min(1).max(255),
+  postalCode: z.string().min(1).max(32),
+  country: z.string().length(2).optional(),
+});
+
+// last4 is exactly 4 digits — reject anything longer to keep a stray
+// full PAN from being silently accepted as a "really long last4".
+export const creditCardPayloadSchema = z.object({
+  last4: z.string().regex(/^\d{4}$/, 'last4 must be exactly 4 digits — never store a full PAN'),
+  brand: z.string().min(1).max(64),
+  expirationMonth: z.number().int().min(1).max(12).optional(),
+  expirationYear: z.number().int().min(2000).max(2100).optional(),
+});
+
+const paymentMethodBaseShape = {
+  label: z.string().max(255).optional(),
+  isPreferred: z.boolean().optional(),
+  active: z.boolean().optional(),
+};
+
+export const createAchPaymentMethodSchema = z.object({
+  ...paymentMethodBaseShape,
+  kind: z.literal('ACH'),
+  payload: achPayloadSchema,
+});
+
+export const createWirePaymentMethodSchema = z.object({
+  ...paymentMethodBaseShape,
+  kind: z.literal('WIRE'),
+  payload: wirePayloadSchema,
+});
+
+export const createCheckPaymentMethodSchema = z.object({
+  ...paymentMethodBaseShape,
+  kind: z.literal('CHECK'),
+  payload: checkPayloadSchema,
+});
+
+export const createCreditCardPaymentMethodSchema = z.object({
+  ...paymentMethodBaseShape,
+  kind: z.literal('CREDIT_CARD'),
+  payload: creditCardPayloadSchema,
+});
+
+export const createVendorPaymentMethodInputSchema = z.discriminatedUnion('kind', [
+  createAchPaymentMethodSchema,
+  createWirePaymentMethodSchema,
+  createCheckPaymentMethodSchema,
+  createCreditCardPaymentMethodSchema,
+]);
+
+// Update covers ONLY non-payload fields. Payload is immutable per design;
+// to change account/routing/etc., soft-delete the row and create a new one.
+export const updateVendorPaymentMethodInputSchema = z.object({
+  label: z.string().max(255).nullable().optional(),
+  isPreferred: z.boolean().optional(),
+  active: z.boolean().optional(),
+});
+
+// Discriminated union returned by readDecryptedPayload — the caller
+// gets a typed { kind, payload } pair so the per-kind shape is recovered
+// after decrypt + JSON.parse.
+export type DecryptedVendorPaymentMethod =
+  | { kind: 'ACH'; payload: z.infer<typeof achPayloadSchema> }
+  | { kind: 'WIRE'; payload: z.infer<typeof wirePayloadSchema> }
+  | { kind: 'CHECK'; payload: z.infer<typeof checkPayloadSchema> }
+  | { kind: 'CREDIT_CARD'; payload: z.infer<typeof creditCardPayloadSchema> };
+
+// =============================================================================
 // Inferred types
 // =============================================================================
 
@@ -190,3 +299,10 @@ export type UpdateVendorInput = z.infer<typeof updateVendorInputSchema>;
 
 export type CreateVendorProductInput = z.infer<typeof createVendorProductInputSchema>;
 export type UpdateVendorProductInput = z.infer<typeof updateVendorProductInputSchema>;
+
+export type CreateVendorPaymentMethodInput = z.infer<
+  typeof createVendorPaymentMethodInputSchema
+>;
+export type UpdateVendorPaymentMethodInput = z.infer<
+  typeof updateVendorPaymentMethodInputSchema
+>;
