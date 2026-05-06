@@ -120,6 +120,20 @@ enum CustomerType {
   RETAIL
 }
 
+enum VendorType {
+  STOCK
+  DROP_SHIP
+  SERVICE
+}
+
+// REMIT_TO is "where AP cuts checks" — the canonical AP destination
+// per spec. SHIPPING (origin/pickup) and BILLING (mailing) are rare.
+enum VendorAddressKind {
+  REMIT_TO
+  SHIPPING
+  BILLING
+}
+
 enum CustomerActivityKind {
   AUTO
   MANUAL
@@ -238,6 +252,7 @@ model ProductVariant {
   invoiceLines       InvoiceLine[]
   creditMemoLines    CreditMemoLine[]
   fifoLayers         FifoLayer[]
+  vendorProducts     VendorProduct[]
 
   @@index([productId])
 }
@@ -424,17 +439,45 @@ model Sequence {
 // in its own slice (see docs/04-vendors-purchasing.md). For now POs and
 // Receipts need *something* to FK against — this row holds the bare minimum.
 // EXPAND LATER.
+// Vendor master. Pilot scope: stock + service vendors used for PO entry
+// and AP. Drop-ship (commission model) gets schema room here
+// (`defaultCommissionRate`) but no service logic — see
+// docs/04-vendors-purchasing.md for the deferred drop-ship slice.
+//
+// `paymentTermId` is nullable on the model so legacy upsert-stub
+// fixtures keep working; the service create schema requires it. Same
+// pattern as `defaultCurrency`.
 model Vendor {
-  id        String    @id @default(cuid())
-  code      String    @unique
-  name      String
-  active    Boolean   @default(true)
-  deletedAt DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id                    String     @id @default(cuid())
+  code                  String     @unique
+  name                  String
+  type                  VendorType @default(STOCK)
+  active                Boolean    @default(true)
+  paymentTermId         String?
+  defaultCurrency       String?    @default("USD")
+  // Warning-level threshold for PO entry; null defers to a future global
+  // setting. Not block.
+  minimumOrderAmount    Decimal?   @db.Decimal(18, 5)
+  // Per-vendor cost-change threshold (% of prior cost). Null = use
+  // global default. Informational alert, not block.
+  costChangeAlertPct    Decimal?   @db.Decimal(18, 5)
+  notes                 String?
+  // Drop-ship schema room. Service logic lands in the deferred
+  // drop-ship slice; no readers in pilot.
+  defaultCommissionRate Decimal?   @db.Decimal(18, 5)
+  deletedAt             DateTime?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
 
+  paymentTerm    PaymentTerm?    @relation(fields: [paymentTermId], references: [id])
+  contacts       VendorContact[]
+  addresses      VendorAddress[]
+  products       VendorProduct[]
   purchaseOrders PurchaseOrder[]
   receipts       Receipt[]
+
+  @@index([type])
+  @@index([active, deletedAt])
 }
 
 model PurchaseOrder {
@@ -693,6 +736,94 @@ model PaymentTerm {
   updatedAt DateTime  @updatedAt
 
   customers Customer[]
+  vendors   Vendor[]
+}
+
+// Vendor address. Mirrors CustomerAddress but with VendorAddressKind
+// (REMIT_TO is the AP destination). Singleton invariant "exactly one
+// isDefault=true row per (vendorId, kind) among non-deleted rows" is
+// enforced both by the service layer and by the partial unique index
+// `vendoraddress_default_per_kind_idx`.
+model VendorAddress {
+  id         String            @id @default(cuid())
+  vendorId   String
+  kind       VendorAddressKind
+  isDefault  Boolean           @default(false)
+  label      String?
+  line1      String
+  line2      String?
+  city       String
+  region     String
+  postalCode String
+  country    String            @default("US")
+  attention  String?
+  phone      String?
+  deletedAt  DateTime?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([vendorId, kind])
+  @@index([vendorId, isDefault])
+}
+
+// Vendor contact — multi per vendor with free-text role. Singleton
+// invariant "exactly one isPrimary=true row per vendor among
+// non-deleted rows" enforced by service + partial unique index
+// `vendorcontact_primary_idx`.
+model VendorContact {
+  id        String    @id @default(cuid())
+  vendorId  String
+  name      String
+  // Free-form per spec; common values: Sales rep, AR, AP, Buyer, Owner.
+  role      String?
+  email     String?
+  phone     String?
+  mobile    String?
+  isPrimary Boolean   @default(false)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+
+  @@index([vendorId])
+}
+
+// Per-vendor per-variant catalog row. `latestCost` is "last known unit
+// cost from this vendor" — distinct from FIFO layers (per-receipt) and
+// WAC (computed). MOQ + lead time are deferred per docs/04 lines 30-31;
+// nullable schema room only.
+//
+// Multi-vendor for one product: rare per spec. At most one isPrimary=true
+// per variantId among non-deleted is enforced by partial unique index
+// `vendorproduct_primary_idx`. Composite uniqueness on (vendorId,
+// variantId) is enforced by partial unique index
+// `vendorproduct_active_key` ignoring soft-deleted rows (so a soft-
+// deleted catalog row can be re-created via the same upsert path).
+// Same pattern as CustomerPriceOverride; @@unique declaration omitted
+// because Prisma can't express partial indices.
+model VendorProduct {
+  id         String    @id @default(cuid())
+  vendorId   String
+  variantId  String
+  vendorSku  String?
+  latestCost Decimal?  @db.Decimal(18, 5)
+  packSize   Decimal?  @db.Decimal(18, 5)
+  isPrimary  Boolean   @default(false)
+  active     Boolean   @default(true)
+  notes      String?
+  deletedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  vendor  Vendor         @relation(fields: [vendorId], references: [id])
+  variant ProductVariant @relation(fields: [variantId], references: [id])
+
+  @@index([vendorId])
+  @@index([variantId])
+  @@index([deletedAt])
 }
 
 // Sales rep — minimal. userId is captured nullable now so the future User
