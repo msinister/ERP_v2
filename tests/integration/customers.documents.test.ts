@@ -13,11 +13,47 @@ import {
   softDeleteDocument,
 } from '@/server/services/customerDocuments';
 import { GET as cleartextRouteGet } from '@/app/api/customers/[id]/documents/[did]/cleartext/route';
+import { auth } from '@/lib/auth/auth';
 import { hasTenantDb, makeClient } from '../helpers/db';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
 const TAG = 'TEST-CDOC';
+
+// Cleartext-route tests below need an authenticated session (slice D
+// gated /api/* on requireAuth). Provision one user up front and reuse
+// the cookie across the suite. The user's name is intentionally NOT
+// TAG-prefixed because wipe() runs on beforeEach — we only want this
+// user cleaned up at suite end (see afterAll), not between tests.
+const AUTH_USER_EMAIL = 'cdoc-cleartext-suite-user@erp.test';
+const AUTH_USER_NAME = 'cdoc-cleartext-suite-user';
+
+async function makeAuthCookie(): Promise<string> {
+  await auth.api.signUpEmail({
+    body: { email: AUTH_USER_EMAIL, password: 'CdocTest-1!', name: AUTH_USER_NAME },
+  });
+  const signIn = (await auth.api.signInEmail({
+    body: { email: AUTH_USER_EMAIL, password: 'CdocTest-1!' },
+    asResponse: true,
+  })) as Response;
+  const setCookie = signIn.headers.get('set-cookie');
+  if (!setCookie) throw new Error('no Set-Cookie on sign-in response');
+  return setCookie
+    .split(/,(?=[^;]+=)/)
+    .map((c) => c.split(';')[0].trim())
+    .join('; ');
+}
+
+async function wipeAuthUser(db: PrismaClient): Promise<void> {
+  const u = await db.user.findUnique({ where: { email: AUTH_USER_EMAIL } });
+  if (!u) return;
+  await db.session.deleteMany({ where: { userId: u.id } });
+  await db.account.deleteMany({ where: { userId: u.id } });
+  await db.auditLog.deleteMany({
+    where: { entityType: 'User', entityId: u.id },
+  });
+  await db.user.delete({ where: { id: u.id } });
+}
 
 // A unique sentinel cleartext we can scan for in audit / activity tables.
 // Make it improbable enough that any accidental log/store would jump out.
@@ -27,11 +63,16 @@ suite('CustomerDocument service', () => {
   let db: PrismaClient;
   let salesRep: SalesRep;
   let term: PaymentTerm;
+  let authCookie: string;
 
   beforeAll(async () => {
     db = makeClient();
     salesRep = await db.salesRep.findFirstOrThrow({ where: { code: 'UNASSIGNED' } });
     term = await db.paymentTerm.findFirstOrThrow({ where: { code: 'NET30' } });
+    // Pre-clean any leftover suite-user from a prior interrupted run so
+    // signUpEmail doesn't trip the email-uniqueness constraint.
+    await wipeAuthUser(db);
+    authCookie = await makeAuthCookie();
   });
 
   beforeEach(async () => {
@@ -40,6 +81,7 @@ suite('CustomerDocument service', () => {
 
   afterAll(async () => {
     await wipe(db);
+    await wipeAuthUser(db);
     await db.$disconnect();
   });
 
@@ -300,9 +342,10 @@ suite('CustomerDocument service', () => {
       kind: 'EIN',
       cleartextValue: 'EIN-HDR-TEST',
     });
-    const res = await cleartextRouteGet(new Request('http://test/x'), {
-      params: Promise.resolve({ id: c.id, did: doc.id }),
-    });
+    const res = await cleartextRouteGet(
+      new Request('http://test/x', { headers: { cookie: authCookie } }),
+      { params: Promise.resolve({ id: c.id, did: doc.id }) },
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('pragma')).toBe('no-cache');
@@ -318,9 +361,10 @@ suite('CustomerDocument service', () => {
       fileName: 'f',
       contentType: 'application/pdf',
     });
-    const res = await cleartextRouteGet(new Request('http://test/x'), {
-      params: Promise.resolve({ id: c.id, did: doc.id }),
-    });
+    const res = await cleartextRouteGet(
+      new Request('http://test/x', { headers: { cookie: authCookie } }),
+      { params: Promise.resolve({ id: c.id, did: doc.id }) },
+    );
     expect(res.status).toBe(400);
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('pragma')).toBe('no-cache');

@@ -7,59 +7,69 @@ import {
   createVariant,
   listVariantsForProduct,
 } from '@/server/services/variants';
+import { requireAuth } from '@/lib/auth/requireAuth';
+import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
+import { authErrorResponse } from '@/lib/auth/errors';
 
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(req: Request, ctx: Ctx) {
-  const { id } = await ctx.params;
-  const url = new URL(req.url);
-  const includeArchived = url.searchParams.get('includeArchived') === 'true';
-
-  const product = await getProduct(db, id);
-  if (!product) {
-    return NextResponse.json({ error: 'not found' }, { status: 404 });
-  }
-
   try {
+    await requireAuth(req);
+    const { id } = await ctx.params;
+    const url = new URL(req.url);
+    const includeArchived = url.searchParams.get('includeArchived') === 'true';
+
+    const product = await getProduct(db, id);
+    if (!product) {
+      return NextResponse.json({ error: 'not found' }, { status: 404 });
+    }
+
     const variants = await listVariantsForProduct(db, id, { includeArchived });
     return NextResponse.json({ variants });
-  } catch {
+  } catch (e) {
+    const authResp = authErrorResponse(e);
+    if (authResp) return authResp;
     return NextResponse.json({ error: 'internal' }, { status: 500 });
   }
 }
 
 export async function POST(req: Request, ctx: Ctx) {
-  const { id } = await ctx.params;
-
-  let body: unknown;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'invalid json' }, { status: 400 });
-  }
+    const user = await requireAuth(req);
+    const auditCtx = auditCtxFromRequest(req, user);
+    const { id } = await ctx.params;
 
-  const merged =
-    body && typeof body === 'object'
-      ? { ...(body as Record<string, unknown>), productId: id }
-      : { productId: id };
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: 'invalid json' }, { status: 400 });
+    }
 
-  const parsed = variantCreateSchema.safeParse(merged);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: 'validation', issues: parsed.error.issues },
-      { status: 400 },
-    );
-  }
+    const merged =
+      body && typeof body === 'object'
+        ? { ...(body as Record<string, unknown>), productId: id }
+        : { productId: id };
 
-  const product = await getProduct(db, id);
-  if (!product) {
-    return NextResponse.json({ error: 'not found' }, { status: 404 });
-  }
+    const parsed = variantCreateSchema.safeParse(merged);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'validation', issues: parsed.error.issues },
+        { status: 400 },
+      );
+    }
 
-  try {
-    const variant = await createVariant(db, parsed.data);
+    const product = await getProduct(db, id);
+    if (!product) {
+      return NextResponse.json({ error: 'not found' }, { status: 404 });
+    }
+
+    const variant = await createVariant(db, parsed.data, auditCtx);
     return NextResponse.json(variant, { status: 201 });
   } catch (err) {
+    const authResp = authErrorResponse(err);
+    if (authResp) return authResp;
     if (
       err instanceof Prisma.PrismaClientKnownRequestError &&
       err.code === 'P2002'

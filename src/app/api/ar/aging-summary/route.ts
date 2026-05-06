@@ -1,32 +1,35 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { agingSummary } from '@/server/services/ar';
+import { requireAuth } from '@/lib/auth/requireAuth';
+import { authErrorResponse } from '@/lib/auth/errors';
 
 export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const asOfRaw = url.searchParams.get('asOf');
-  let asOf: Date | undefined;
-  if (asOfRaw) {
-    const parsed = new Date(asOfRaw);
-    if (Number.isNaN(parsed.getTime())) {
-      return NextResponse.json(
-        { error: 'invalid asOf — must be ISO 8601' },
-        { status: 400 },
-      );
-    }
-    asOf = parsed;
-  }
-  const limitRaw = url.searchParams.get('limit');
-  const offsetRaw = url.searchParams.get('offset');
-  const limit = limitRaw ? Number(limitRaw) : undefined;
-  const offset = offsetRaw ? Number(offsetRaw) : undefined;
-  if (limit !== undefined && (!Number.isFinite(limit) || limit < 1)) {
-    return NextResponse.json({ error: 'invalid limit' }, { status: 400 });
-  }
-  if (offset !== undefined && (!Number.isFinite(offset) || offset < 0)) {
-    return NextResponse.json({ error: 'invalid offset' }, { status: 400 });
-  }
   try {
+    await requireAuth(req);
+    const url = new URL(req.url);
+    const asOfRaw = url.searchParams.get('asOf');
+    let asOf: Date | undefined;
+    if (asOfRaw) {
+      const parsed = new Date(asOfRaw);
+      if (Number.isNaN(parsed.getTime())) {
+        return NextResponse.json(
+          { error: 'invalid asOf — must be ISO 8601' },
+          { status: 400 },
+        );
+      }
+      asOf = parsed;
+    }
+    const limitRaw = url.searchParams.get('limit');
+    const offsetRaw = url.searchParams.get('offset');
+    const limit = limitRaw ? Number(limitRaw) : undefined;
+    const offset = offsetRaw ? Number(offsetRaw) : undefined;
+    if (limit !== undefined && (!Number.isFinite(limit) || limit < 1)) {
+      return NextResponse.json({ error: 'invalid limit' }, { status: 400 });
+    }
+    if (offset !== undefined && (!Number.isFinite(offset) || offset < 0)) {
+      return NextResponse.json({ error: 'invalid offset' }, { status: 400 });
+    }
     const rows = await agingSummary(db, asOf, { limit, offset });
     return NextResponse.json({
       asOf: (asOf ?? new Date()).toISOString(),
@@ -43,6 +46,8 @@ export async function GET(req: Request) {
       })),
     });
   } catch (e) {
+    const authResp = authErrorResponse(e);
+    if (authResp) return authResp;
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'internal' },
       { status: 400 },

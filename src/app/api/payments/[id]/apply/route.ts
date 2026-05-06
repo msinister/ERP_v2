@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { db } from '@/lib/db';
 import { decimalString } from '@/lib/validation/common';
 import { applyPaymentToInvoice } from '@/server/services/payments';
+import { requireAuth } from '@/lib/auth/requireAuth';
+import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
+import { authErrorResponse } from '@/lib/auth/errors';
 
 const bodySchema = z.object({
   invoiceId: z.string().min(1),
@@ -13,24 +16,34 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const { id } = await ctx.params;
-  let body: unknown;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'invalid json' }, { status: 400 });
-  }
-  const parsed = bodySchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: 'validation', issues: parsed.error.issues },
-      { status: 400 },
+    const user = await requireAuth(req);
+    const auditCtx = auditCtxFromRequest(req, user);
+    const { id } = await ctx.params;
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: 'invalid json' }, { status: 400 });
+    }
+    const parsed = bodySchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'validation', issues: parsed.error.issues },
+        { status: 400 },
+      );
+    }
+    const app = await applyPaymentToInvoice(
+      db,
+      id,
+      parsed.data.invoiceId,
+      parsed.data.amount,
+      auditCtx,
     );
-  }
-  try {
-    const app = await applyPaymentToInvoice(db, id, parsed.data.invoiceId, parsed.data.amount);
     return NextResponse.json(app, { status: 201 });
   } catch (e) {
+    const authResp = authErrorResponse(e);
+    if (authResp) return authResp;
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'internal' },
       { status: 400 },

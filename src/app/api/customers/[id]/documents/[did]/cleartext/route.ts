@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { readEncryptedValue } from '@/server/services/customerDocuments';
+import { requireAuth } from '@/lib/auth/requireAuth';
+import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
+import { authErrorResponse } from '@/lib/auth/errors';
 
 /**
  * Audited cleartext-read endpoint for sensitive customer documents
@@ -16,12 +19,14 @@ import { readEncryptedValue } from '@/server/services/customerDocuments';
  * route returns; the response body is never persisted server-side.
  */
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string; did: string }> },
 ) {
-  const { did } = await ctx.params;
   try {
-    const value = await readEncryptedValue(db, did);
+    const user = await requireAuth(req);
+    const auditCtx = auditCtxFromRequest(req, user);
+    const { did } = await ctx.params;
+    const value = await readEncryptedValue(db, did, auditCtx);
     return new NextResponse(JSON.stringify({ value }), {
       status: 200,
       headers: {
@@ -31,6 +36,8 @@ export async function GET(
       },
     });
   } catch (e) {
+    const authResp = authErrorResponse(e);
+    if (authResp) return authResp;
     return new NextResponse(
       JSON.stringify({ error: e instanceof Error ? e.message : 'internal' }),
       {
