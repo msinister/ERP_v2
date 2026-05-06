@@ -288,6 +288,7 @@ model Warehouse {
   salesOrderLines    SalesOrderLine[]
   invoices           Invoice[]
   fifoLayers         FifoLayer[]
+  users              User[]
   inventoryAccount   GlAccount?          @relation(fields: [inventoryAccountId], references: [id])
 }
 
@@ -371,11 +372,11 @@ model FifoLayer {
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
-  variant           ProductVariant     @relation(fields: [variantId], references: [id])
-  warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
-  sourceReceiptLine ReceiptLine?       @relation(fields: [sourceReceiptLineId], references: [id])
-  sourceMovement    InventoryMovement? @relation(fields: [sourceMovementId], references: [id])
-  consumptions      FifoConsumption[]
+  variant                   ProductVariant             @relation(fields: [variantId], references: [id])
+  warehouse                 Warehouse                  @relation(fields: [warehouseId], references: [id])
+  sourceReceiptLine         ReceiptLine?               @relation(fields: [sourceReceiptLineId], references: [id])
+  sourceMovement            InventoryMovement?         @relation(fields: [sourceMovementId], references: [id])
+  consumptions              FifoConsumption[]
   // Back-relation: rows in LandedCostAllocationLine that mutated this
   // layer's unitCost. One layer can be touched by multiple non-reversed
   // allocations over its lifetime (e.g., freight bill + later customs
@@ -420,6 +421,8 @@ model FifoConsumption {
 
 model AuditLog {
   id         String      @id @default(cuid())
+  // No FK to User — audit log is append-only and must survive a user
+  // hard-delete. Keep the id-as-string reference instead of a relation.
   userId     String?
   action     AuditAction
   entityType String
@@ -434,6 +437,112 @@ model AuditLog {
   @@index([userId, createdAt])
   @@index([action, createdAt])
   @@index([createdAt])
+}
+
+// =========================================================================
+// Auth tables — owned by BetterAuth (better-auth v1.6.x).
+//
+// IMPORTANT: do NOT rename columns or drop fields without consulting
+// BetterAuth's schema docs — the prisma adapter looks them up by name.
+// ERP-specific extensions live on User as additional columns; they do
+// not interfere with BetterAuth's reads. See src/lib/auth/auth.ts for
+// the matching `additionalFields` declaration.
+//
+// Pilot RBAC model: a single `isSuperAdmin` boolean. Role/Permission
+// tables are deferred per slice plan — they will land additively post
+// pilot without disturbing this section.
+// =========================================================================
+
+model User {
+  // BetterAuth core fields ------------------------------------------------
+  id                 String    @id @default(cuid())
+  email              String    @unique
+  emailVerified      Boolean   @default(false)
+  name               String
+  image              String?
+  // ERP additional fields (declared in auth.ts under user.additionalFields)
+  phone              String?
+  title              String?
+  department         String?
+  warehouseId        String?
+  salesRepId         String?   @unique
+  // Two-tier RBAC for pilot: Super Admin vs. everyone else. Custom roles
+  // land in a future slice as additive Role / RolePermission / UserRole
+  // tables — no migration of this column required.
+  isSuperAdmin       Boolean   @default(false)
+  // Disabling a user prevents login but preserves audit trail. Distinct
+  // from soft-delete (deletedAt) — a disabled-but-not-deleted account
+  // can be re-enabled without rehydrating relationships.
+  enabled            Boolean   @default(true)
+  forcePasswordReset Boolean   @default(false)
+  lastLoginAt        DateTime?
+  deletedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  warehouse Warehouse? @relation(fields: [warehouseId], references: [id])
+  salesRep  SalesRep?  @relation(fields: [salesRepId], references: [id])
+  sessions  Session[]
+  accounts  Account[]
+
+  @@index([enabled, deletedAt])
+  @@index([warehouseId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Account {
+  // Per-provider credential record. For email+password BetterAuth uses
+  // providerId="credential" and stores the password hash in `password`.
+  // Hashing is handled by BetterAuth (Scrypt by default) — never store
+  // plaintext here.
+  id                    String    @id @default(cuid())
+  userId                String
+  providerId            String
+  accountId             String
+  password              String?
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  idToken               String?
+  scope                 String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model Verification {
+  // Email-verification tokens, password-reset tokens, etc. (all of which
+  // are deferred for pilot but the table is required by BetterAuth so it
+  // can issue tokens for whatever flows we later turn on).
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([identifier, value])
+  @@index([expiresAt])
 }
 
 // Generic monotonic sequence with optional annual reset. Allocate via
@@ -555,9 +664,9 @@ model Receipt {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  vendor    Vendor        @relation(fields: [vendorId], references: [id])
-  warehouse Warehouse     @relation(fields: [warehouseId], references: [id])
-  lines     ReceiptLine[]
+  vendor                Vendor                        @relation(fields: [vendorId], references: [id])
+  warehouse             Warehouse                     @relation(fields: [warehouseId], references: [id])
+  lines                 ReceiptLine[]
   // Back-relation: M:N to LandedCostAllocation via the join table.
   // Used by both the apply path (validate receipts → walk to layers)
   // and the reverse-lookup query "all landed-cost allocations applied
@@ -882,17 +991,19 @@ model VendorPaymentMethod {
   @@index([vendorId])
 }
 
-// Sales rep — minimal. userId is captured nullable now so the future User
-// model can FK in without a migration. Commission rate fields are captured
-// here for the commission slice; computation lives elsewhere.
+// Sales rep — minimal. The User ↔ SalesRep link is owned by User: a User
+// optionally references a SalesRep via User.salesRepId (unique). The
+// back-relation lives here as `user User?`. The orphan `userId String?`
+// column that previously existed (slice 0 placeholder) is dropped in
+// the auth-tables migration; all rows were NULL so the drop is safe.
+// Commission rate fields are captured here for the commission slice;
+// computation lives elsewhere.
 model SalesRep {
   id                String           @id @default(cuid())
   code              String           @unique
   name              String
   email             String?
   active            Boolean          @default(true)
-  // Reserved for future User-model FK. Nullable + no @relation defined yet.
-  userId            String?
   // Per-rep gate. Salaried reps have this off so commission accruals
   // skip them entirely. Default false so newly-created reps don't
   // accidentally accrue.
@@ -907,8 +1018,7 @@ model SalesRep {
 
   customers          Customer[]
   commissionAccruals CommissionAccrual[]
-
-  @@index([userId])
+  user               User?
 }
 
 model CustomerAddress {
@@ -1281,9 +1391,9 @@ model CommissionAccrual {
   reversedByPaymentId String?
   createdAt           DateTime        @default(now())
 
-  salesRep         SalesRep @relation(fields: [salesRepId], references: [id])
-  payment          Payment  @relation("CommissionPaymentSource", fields: [paymentId], references: [id])
-  invoice          Invoice  @relation(fields: [invoiceId], references: [id])
+  salesRep          SalesRep @relation(fields: [salesRepId], references: [id])
+  payment           Payment  @relation("CommissionPaymentSource", fields: [paymentId], references: [id])
+  invoice           Invoice  @relation(fields: [invoiceId], references: [id])
   reversedByPayment Payment? @relation("CommissionReversedBy", fields: [reversedByPaymentId], references: [id])
 
   @@index([salesRepId, accruedAt])
@@ -1312,8 +1422,8 @@ model CreditMemoCategory {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  memos        CreditMemo[]
-  lossAccount  GlAccount?   @relation(fields: [lossAccountId], references: [id])
+  memos       CreditMemo[]
+  lossAccount GlAccount?   @relation(fields: [lossAccountId], references: [id])
 
   @@index([lossAccountId])
 }
@@ -1506,7 +1616,7 @@ model JournalEntry {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  lines JournalEntryLine[]
+  lines                     JournalEntryLine[]
   // Back-relation: rows in LandedCostAllocationLine that point to this
   // JE as the per-layer COGS adjustment anchor. Forward COGS adjustment
   // JEs and reversal JEs both flow through here; query by

@@ -6,13 +6,15 @@ const nonNegativeDecimal = decimalString.refine(
   'Must be >= 0',
 );
 
+// The User ↔ SalesRep link is owned by User.salesRepId, not by a column
+// on SalesRep. To attach a user to a sales rep, update the User row.
+// (The orphan SalesRep.userId placeholder column was dropped in the
+// auth-tables migration.)
 export const createSalesRepInputSchema = z.object({
   code: z.string().min(1).max(64),
   name: z.string().min(1).max(255),
   email: z.string().email().max(255).optional(),
   active: z.boolean().optional(),
-  // Reserved for future User-model link.
-  userId: z.string().min(1).optional(),
   commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
   commissionPercent: nonNegativeDecimal.nullable().optional(),
   groupId: z.string().min(1).nullable().optional(),
@@ -22,7 +24,6 @@ export const updateSalesRepInputSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   email: z.string().email().max(255).nullable().optional(),
   active: z.boolean().optional(),
-  userId: z.string().min(1).nullable().optional(),
   commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
   commissionPercent: nonNegativeDecimal.nullable().optional(),
   groupId: z.string().min(1).nullable().optional(),

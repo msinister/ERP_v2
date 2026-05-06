@@ -28,7 +28,6 @@ export async function createSalesRep(
         name: data.name,
         email: data.email,
         active: data.active ?? true,
-        userId: data.userId,
         commissionBasis: data.commissionBasis ?? null,
         commissionPercent:
           data.commissionPercent != null
@@ -64,7 +63,6 @@ export async function updateSalesRep(
     if (data.name !== undefined) updateData.name = data.name;
     if ('email' in data) updateData.email = data.email ?? null;
     if (data.active !== undefined) updateData.active = data.active;
-    if ('userId' in data) updateData.userId = data.userId ?? null;
     if ('commissionBasis' in data) updateData.commissionBasis = data.commissionBasis ?? null;
     if ('commissionPercent' in data) {
       updateData.commissionPercent =

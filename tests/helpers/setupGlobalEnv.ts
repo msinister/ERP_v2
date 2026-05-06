@@ -17,3 +17,15 @@ if (!process.env.TENANT_FIELD_ENCRYPTION_KEY) {
   process.env.TENANT_FIELD_ENCRYPTION_KEY =
     'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 }
+
+// BetterAuth requires both a secret (>=32 chars) and a base URL at
+// module-load time. Same rationale as the encryption key above:
+// deterministic test values so importing src/lib/auth/auth.ts works
+// in any test that touches it (directly or transitively).
+if (!process.env.BETTER_AUTH_SECRET) {
+  process.env.BETTER_AUTH_SECRET =
+    'test-better-auth-secret-deterministic-do-not-use-in-prod-32+chars';
+}
+if (!process.env.BETTER_AUTH_URL) {
+  process.env.BETTER_AUTH_URL = 'http://localhost:3000';
+}
