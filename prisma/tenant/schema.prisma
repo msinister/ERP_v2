@@ -59,6 +59,16 @@ enum AuditAction {
   INVOICE_GENERATED
   PAYMENT_REVERSED
   RMA_STATUS_CHANGE
+  // AP slice. Mirrors INVOICE_GENERATED (system-triggered draft from
+  // receipt post) and PAYMENT_REVERSED (filterable AP-side reversal).
+  // BILL_CONFIRMED is the GL-posting moment, distinct from CREATE
+  // (which only writes the DRAFT row).
+  DRAFT_BILL_GENERATED
+  BILL_CONFIRMED
+  BILL_PAYMENT_RECORDED
+  BILL_PAYMENT_REVERSED
+  VENDOR_CREDIT_CONFIRMED
+  VENDOR_CREDIT_APPLIED
 }
 
 enum InvoiceStatus {
@@ -212,6 +222,42 @@ enum AllocationMethod {
   BOX_COUNT
 }
 
+// ---------------------------------------------------------------------------
+// Bills / AP — phase 8 slice. Vendor-invoice lifecycle.
+// docs/07-accounts-payable.md.
+//
+// Bill lifecycle is intentionally simpler than spec docs/07:33's
+// PO-aligned states — the "shipped/in transit/received" phases describe
+// the receipt, not the bill. A bill is a financial record: still being
+// entered, posted to AP, or cancelled. Payment status is a separate
+// dimension, denormalized for filterability.
+// ---------------------------------------------------------------------------
+enum BillStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+enum BillPaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum VendorCreditStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+// PRODUCT bills carry variantId-bearing lines tied to receipts (DR
+// Accrued Receipts on confirm). EXPENSE bills carry expenseAccountId-
+// bearing lines (DR <expenseAccount> on confirm). One bill = one source.
+enum BillSource {
+  PRODUCT
+  EXPENSE
+}
+
 model Product {
   id               String      @id @default(cuid())
   sku              String      @unique
@@ -265,6 +311,7 @@ model ProductVariant {
   creditMemoLines    CreditMemoLine[]
   fifoLayers         FifoLayer[]
   vendorProducts     VendorProduct[]
+  billLines          BillLine[]
 
   @@index([productId])
 }
@@ -597,6 +644,9 @@ model Vendor {
   paymentMethods VendorPaymentMethod[]
   purchaseOrders PurchaseOrder[]
   receipts       Receipt[]
+  bills          Bill[]
+  billPayments   BillPayment[]
+  vendorCredits  VendorCredit[]
 
   @@index([type])
   @@index([active, deletedAt])
@@ -618,8 +668,9 @@ model PurchaseOrder {
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
-  vendor Vendor              @relation(fields: [vendorId], references: [id])
-  lines  PurchaseOrderLine[]
+  vendor    Vendor              @relation(fields: [vendorId], references: [id])
+  lines     PurchaseOrderLine[]
+  billLinks BillPurchaseOrder[]
 
   @@index([vendorId, status])
   @@index([status, expectedReceiveDate])
@@ -672,6 +723,7 @@ model Receipt {
   // and the reverse-lookup query "all landed-cost allocations applied
   // to this receipt" (vendor freight-bill reconciliation).
   landedCostAllocations LandedCostAllocationReceipt[]
+  billLinks             BillReceipt[]
 
   @@index([vendorId, status])
   @@index([warehouseId, receivedAt])
@@ -702,6 +754,7 @@ model ReceiptLine {
   warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
   inventoryMovement InventoryMovement? @relation(fields: [inventoryMovementId], references: [id])
   fifoLayer         FifoLayer?
+  billLines         BillLine[]
 
   @@index([receiptId])
   @@index([purchaseOrderLineId])
@@ -1593,6 +1646,8 @@ model GlAccount {
   journalEntryLines    JournalEntryLine[]
   warehouses           Warehouse[]
   creditMemoCategories CreditMemoCategory[]
+  billLines            BillLine[]
+  billPayments         BillPayment[]
 
   @@index([type])
 }
@@ -1747,4 +1802,258 @@ model LandedCostAllocationReceipt {
 
   @@unique([allocationId, receiptId])
   @@index([receiptId])
+}
+
+// =========================================================================
+// Bills / AP — phase 8 slice. Vendor invoices, bill payments, vendor
+// credits. Spec: docs/07-accounts-payable.md.
+//
+// Architecture: PO ↔ Receipt ↔ Bill is many-to-many. Realized via
+// BillReceipt + BillPurchaseOrder join tables — one bill can cover lines
+// from multiple receipts and POs (one vendor invoice, three POs, one
+// receipt is a real case). Mirrors the PO↔Receipt M:N convention which
+// is realized via ReceiptLine.purchaseOrderLineId rather than a dedicated
+// join table; here we use explicit join rows because the linkage is at
+// the header level, not the line level.
+//
+// Auto-JE postings (via lib/gl/post.ts):
+//   Bill confirmed (PRODUCT) → DR 2020 Accrued Receipts / CR 2010 AP
+//   Bill confirmed (EXPENSE) → DR <expenseAccount> / CR 2010 AP
+//   Bill payment recorded   → DR 2010 AP / CR <cashAccount>
+//   VC confirmed            → DR 2010 AP / CR 2030 Vendor Credits Avail
+//   VC applied to bill      → DR 2030 Vendor Credits Avail / CR 2010 AP
+// =========================================================================
+
+model Bill {
+  id              String            @id @default(cuid())
+  number          String            @unique // BILL-YYYY-NNNNN via Sequence
+  vendorId        String
+  // Vendor's own invoice number — operator-entered reference for
+  // reconciliation. Not unique (vendor numbering can recycle across
+  // years; we don't police it).
+  vendorReference String?
+  source          BillSource        @default(PRODUCT)
+  status          BillStatus        @default(DRAFT)
+  paymentStatus   BillPaymentStatus @default(UNPAID)
+  billDate        DateTime          @default(now())
+  // Computed at confirm time from vendor.paymentTerm.netDays. Null on
+  // DRAFT (and on CONFIRMED if the vendor's payment term is COD/Prepay
+  // — matches AR semantics: netDays === null → due immediately).
+  dueDate         DateTime?
+  // Money snapshot. Immutable after CONFIRMED except via cancel.
+  // Decimal(18,5) per the project-wide money rule.
+  subtotal        Decimal           @db.Decimal(18, 5)
+  freight         Decimal           @default(0) @db.Decimal(18, 5)
+  tax             Decimal           @default(0) @db.Decimal(18, 5)
+  total           Decimal           @db.Decimal(18, 5)
+  // Denormalized counters; recompute helpers in the service.
+  // amountCredited = SUM of non-reversed VendorCreditApplication.amount
+  // pointing at this bill. paymentStatus is derived: total > 0 and
+  // (amountPaid + amountCredited) >= total → PAID; > 0 → PARTIAL.
+  amountPaid      Decimal           @default(0) @db.Decimal(18, 5)
+  amountCredited  Decimal           @default(0) @db.Decimal(18, 5)
+  currency        String?           @default("USD")
+  notes           String?
+  createdById     String?
+  confirmedAt     DateTime?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  deletedAt       DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  vendor             Vendor                    @relation(fields: [vendorId], references: [id])
+  lines              BillLine[]
+  payments           BillPayment[]
+  creditApplications VendorCreditApplication[]
+  receipts           BillReceipt[]
+  purchaseOrders     BillPurchaseOrder[]
+
+  @@index([vendorId, status])
+  @@index([status, billDate])
+  @@index([paymentStatus])
+  @@index([deletedAt])
+}
+
+// M:N join. Composite PK enforces (billId, receiptId) uniqueness; no
+// soft-delete on join rows — cancel the parent Bill instead.
+model BillReceipt {
+  billId    String
+  receiptId String
+  createdAt DateTime @default(now())
+
+  bill    Bill    @relation(fields: [billId], references: [id])
+  receipt Receipt @relation(fields: [receiptId], references: [id])
+
+  @@id([billId, receiptId])
+  @@index([receiptId])
+}
+
+model BillPurchaseOrder {
+  billId          String
+  purchaseOrderId String
+  createdAt       DateTime @default(now())
+
+  bill          Bill          @relation(fields: [billId], references: [id])
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+
+  @@id([billId, purchaseOrderId])
+  @@index([purchaseOrderId])
+}
+
+// Discriminator: when bill.source = PRODUCT, variantId is required and
+// expenseAccountId is null. When bill.source = EXPENSE, expenseAccountId
+// is required and variantId is null. Service-layer validates;
+// schema-level enforcement of the XOR is via raw SQL CHECK constraint
+// in the migration.
+model BillLine {
+  id               String    @id @default(cuid())
+  billId           String
+  lineNumber       Int
+  // PRODUCT path:
+  variantId        String?
+  // Optional traceability to specific receipt line (when this bill
+  // line was matched against a receipt during bill entry). Helps
+  // reconcile receipt-vs-bill cost variances downstream. Null on
+  // bills entered without a receipt match.
+  receiptLineId    String?
+  // EXPENSE path:
+  expenseAccountId String? // FK to GlAccount; service validates type=EXPENSE
+  description      String
+  qty              Decimal   @db.Decimal(18, 5)
+  unitCost         Decimal   @db.Decimal(18, 5)
+  lineTotal        Decimal   @db.Decimal(18, 5)
+  notes            String?
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  bill           Bill            @relation(fields: [billId], references: [id])
+  variant        ProductVariant? @relation(fields: [variantId], references: [id])
+  receiptLine    ReceiptLine?    @relation(fields: [receiptLineId], references: [id])
+  expenseAccount GlAccount?      @relation(fields: [expenseAccountId], references: [id])
+
+  @@index([billId])
+  @@index([variantId])
+  @@index([receiptLineId])
+  @@index([expenseAccountId])
+}
+
+// A money-leaving event on the AP side. Mirrors Payment on AR.
+// Reuses PaymentMethod and PaymentStatus enums — same money-movement
+// semantics, different table. APPLIED_CREDIT method is NOT used here:
+// vendor credits flow via VendorCreditApplication with their own JE
+// (DR 2030 / CR 2010), not as a BillPayment row.
+model BillPayment {
+  id             String        @id @default(cuid())
+  number         String        @unique // BPMT-YYYY-NNNNN via Sequence
+  billId         String
+  // Denorm for vendor-payment-history queries without a Bill join.
+  vendorId       String
+  paymentDate    DateTime      @default(now())
+  amount         Decimal       @db.Decimal(18, 5)
+  method         PaymentMethod
+  // Bank/cash account credited. FK to GlAccount; service validates
+  // type = ASSET (typically 1110 Cash/Bank).
+  cashAccountId  String?
+  reference      String? // check #, wire ref, ACH trace, etc.
+  notes          String?
+  status         PaymentStatus @default(RECORDED)
+  reversedAt     DateTime?
+  reversedReason String?
+  createdById    String?
+  deletedAt      DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  bill        Bill       @relation(fields: [billId], references: [id])
+  vendor      Vendor     @relation(fields: [vendorId], references: [id])
+  cashAccount GlAccount? @relation(fields: [cashAccountId], references: [id])
+
+  @@index([billId, status])
+  @@index([vendorId, paymentDate])
+  @@index([status, paymentDate])
+}
+
+// Vendor credit memo. DRAFT → CONFIRMED → CANCELLED, mirroring
+// CreditMemo on the AR side. Lines are simple expense-style
+// (description + amount) per pilot scope (Q6 of the discovery).
+//
+// Auto-creation: overpaying a bill (BillPayment.amount > remaining
+// balance) creates a CONFIRMED VendorCredit for the excess, with
+// sourceTag = "OVERPAYMENT:<billPaymentId>" for traceability. Manual
+// VCs leave sourceTag null.
+model VendorCredit {
+  id            String             @id @default(cuid())
+  number        String             @unique // VCM-YYYY-NNNNN via Sequence
+  vendorId      String
+  status        VendorCreditStatus @default(DRAFT)
+  creditDate    DateTime           @default(now())
+  amount        Decimal            @db.Decimal(18, 5)
+  // Denormalized counter; recompute helper in the service.
+  appliedAmount Decimal            @default(0) @db.Decimal(18, 5)
+  currency      String?            @default("USD")
+  reason        String?
+  notes         String?
+  createdById   String?
+  confirmedAt   DateTime?
+  cancelledAt   DateTime?
+  cancelReason  String?
+  // Origin tag for auto-created credits. Plain text (no FK to BillPayment
+  // to avoid cycles). Format: "OVERPAYMENT:<billPaymentId>" or NULL.
+  sourceTag     String?
+  deletedAt     DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  vendor       Vendor                    @relation(fields: [vendorId], references: [id])
+  lines        VendorCreditLine[]
+  applications VendorCreditApplication[]
+
+  @@index([vendorId, status])
+  @@index([sourceTag])
+  @@index([deletedAt])
+}
+
+model VendorCreditLine {
+  id             String    @id @default(cuid())
+  vendorCreditId String
+  lineNumber     Int
+  description    String
+  amount         Decimal   @db.Decimal(18, 5)
+  notes          String?
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  vendorCredit VendorCredit @relation(fields: [vendorCreditId], references: [id])
+
+  @@index([vendorCreditId])
+}
+
+// Single source of truth for "this dollar of vendor credit was applied
+// to that dollar of bill." Reversed apps are kept (reversedAt set) so
+// the audit trail survives. Mirrors CreditApplication on the AR side.
+//
+// Partial unique index on (vendorCreditId, billId) WHERE reversedAt IS
+// NULL prevents multi-applying the same VC to the same bill while live.
+// Created in raw SQL in the migration since Prisma can't express
+// partial indices.
+model VendorCreditApplication {
+  id             String    @id @default(cuid())
+  vendorCreditId String
+  billId         String
+  amount         Decimal   @db.Decimal(18, 5)
+  appliedAt      DateTime  @default(now())
+  appliedById    String?
+  reversedAt     DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  vendorCredit VendorCredit @relation(fields: [vendorCreditId], references: [id])
+  bill         Bill         @relation(fields: [billId], references: [id])
+
+  @@index([billId, reversedAt])
+  @@index([vendorCreditId])
 }
