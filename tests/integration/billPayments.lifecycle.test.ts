@@ -49,7 +49,6 @@ suite('BillPayment lifecycle (slice D)', () => {
   let product: Product;
   let variant: ProductVariant;
   let cashAccount: GlAccount;
-  let arAccount: GlAccount;
 
   beforeAll(async () => {
     db = makeClient();
@@ -70,7 +69,6 @@ suite('BillPayment lifecycle (slice D)', () => {
       update: { productId: product.id, active: true, deletedAt: null },
     });
     cashAccount = await db.glAccount.findFirstOrThrow({ where: { code: '1110' } });
-    arAccount = await db.glAccount.findFirstOrThrow({ where: { code: '1210' } });
   });
 
   beforeEach(async () => {
@@ -234,11 +232,13 @@ suite('BillPayment lifecycle (slice D)', () => {
 
   it('rejects APPLIED_CREDIT method (vendor credits flow through their own endpoint)', async () => {
     const bill = await makeConfirmedBill('50');
+    // Cast to bypass the TS refinement — the validation schema rejects
+    // APPLIED_CREDIT at runtime; this test verifies that runtime guard.
     await expect(
       recordBillPayment(db, {
         billId: bill.id,
         amount: '50',
-        method: PaymentMethod.APPLIED_CREDIT,
+        method: PaymentMethod.APPLIED_CREDIT as unknown as typeof PaymentMethod.CHECK,
         cashAccountId: cashAccount.id,
       }),
     ).rejects.toThrow(/APPLIED_CREDIT is not valid/);
@@ -261,23 +261,12 @@ suite('BillPayment lifecycle (slice D)', () => {
     ).rejects.toThrow(/Cannot record payment on bill in status DRAFT/);
   });
 
-  it('rejects non-ASSET cashAccountId', async () => {
+  it('rejects non-ASSET cashAccountId (e.g., AP/2010 LIABILITY)', async () => {
+    const apAccount = await db.glAccount.findFirstOrThrow({ where: { code: '2010' } });
     const bill = await makeConfirmedBill('50');
     await expect(
       recordBillPayment(db, {
         billId: bill.id,
-        amount: '50',
-        method: PaymentMethod.CHECK,
-        cashAccountId: arAccount.id, // 1210 AR is ASSET... let's use a LIABILITY
-      }),
-    ).resolves.toBeDefined(); // 1210 is ASSET, so this would actually work.
-
-    // Use the AP account (LIABILITY) to trigger the reject.
-    const apAccount = await db.glAccount.findFirstOrThrow({ where: { code: '2010' } });
-    const bill2 = await makeConfirmedBill('50');
-    await expect(
-      recordBillPayment(db, {
-        billId: bill2.id,
         amount: '50',
         method: PaymentMethod.CHECK,
         cashAccountId: apAccount.id,
@@ -398,8 +387,6 @@ suite('BillPayment lifecycle (slice D)', () => {
       /applied payments or credits/,
     );
   });
-
-  void arAccount; // referenced in cashAccount-validation test above
 });
 
 async function wipe(): Promise<void> {

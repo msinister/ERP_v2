@@ -286,8 +286,8 @@ npm run typecheck
 5. ✅ Sales Orders (DRAFT → CONFIRMED → DISPATCHED → CLOSED + CANCELLED, reservation, advisory locks, audit, INSUFFICIENT_STOCK_AT_CLOSE visibility)
 6. ✅ Purchase Orders + Receipts (M:N PO ↔ Receipt model, Sequence helper, RECEIVE_REVERSE)
 7. ✅ Invoicing / AR (auto-invoice on SO close, void-blocked-by-applied-payments guard, recordPayment with FIFO CM apply, CreditMemo DRAFT→CONFIRMED→VOIDED with auto-apply on confirm, RMA → creditFromRma atomic flow, AR aging service: balance + per-customer buckets + summary, end-to-end smoke script in `scripts/smoke-test-ar-flow.ts`)
-8. ⏳ Bills / AP ← **CURRENT** (separate phase — depends on Receipts, which are done)
-9. ⏳ GL/Costing engine + Reports
+8. ✅ Bills / AP (Bill DRAFT → CONFIRMED → CANCELLED with M:N PO/Receipt joins; receipt → auto-draft bill hook with cancel cascade + CONFIRMED-bill guard; BillPayment with overpayment → auto-VC; VendorCredit DRAFT → CONFIRMED → CANCELLED with manual application; AP aging service mirroring AR; end-to-end smoke script in `scripts/smoke-test-ap-flow.ts`)
+9. ⏳ GL/Costing engine + Reports ← **CURRENT**
 10. ⏳ Integrations (Shopify, Authorize.Net runtime, Mailgun)
 11. ⏳ Document/email templates + admin UI
 12. ⏳ Migration tooling + Naked Kratom data import
