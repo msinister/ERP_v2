@@ -513,11 +513,6 @@ suite('Financial reports — trialBalance, glDetail, journalReport (slice B)', (
     expect(is.expenses.rows.find((r) => r.accountCode === ACCT_EXPENSE)).toBeUndefined();
   });
 
-  // Suppress unused-var warnings for the GL account fixtures that are
-  // exercised only via the inline JE posts above.
-  void expense;
-  void ap;
-  void equity;
 });
 
 async function wipe(): Promise<void> {

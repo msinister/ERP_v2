@@ -31,6 +31,16 @@ function dateInMonth(month: number, day: number = 15): Date {
   return new Date(Date.UTC(TEST_YEAR, month - 1, day, 12));
 }
 
+// Slice A lifecycle tests focus on close/reopen mechanics, not on recon
+// outcomes. The recon gate added in slice D would otherwise fail these
+// tests because the cumulative ledger state at TEST_YEAR-09-01 includes
+// activity from concurrent test files. Bypass via the explicit override
+// (the same operator path an admin would use to close a known-imperfect
+// period). Slice D tests exercise the gate behavior on its own.
+const FORCE_CLOSE = {
+  forceCloseWithDiscrepancies: { reason: 'lifecycle test bypass' },
+};
+
 suite('FiscalPeriod lifecycle (slice A)', () => {
   let db: PrismaClient;
 
@@ -138,7 +148,7 @@ suite('FiscalPeriod lifecycle (slice A)', () => {
 
   it('softClosePeriod refuses on HARD_CLOSED period', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(2));
-    await hardClosePeriod(db, p.id);
+    await hardClosePeriod(db, p.id, FORCE_CLOSE);
     await expect(softClosePeriod(db, p.id)).rejects.toThrow(/HARD_CLOSED.*Reopen first/);
   });
 
@@ -146,21 +156,21 @@ suite('FiscalPeriod lifecycle (slice A)', () => {
 
   it('hardClosePeriod: OPEN → HARD_CLOSED', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(8));
-    const after = await hardClosePeriod(db, p.id);
+    const after = await hardClosePeriod(db, p.id, FORCE_CLOSE);
     expect(after.status).toBe(FiscalPeriodStatus.HARD_CLOSED);
   });
 
   it('hardClosePeriod: SOFT_CLOSED → HARD_CLOSED is allowed', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(8));
     await softClosePeriod(db, p.id);
-    const after = await hardClosePeriod(db, p.id);
+    const after = await hardClosePeriod(db, p.id, FORCE_CLOSE);
     expect(after.status).toBe(FiscalPeriodStatus.HARD_CLOSED);
   });
 
   it('hardClosePeriod refuses re-hard on already-hard period', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(8));
-    await hardClosePeriod(db, p.id);
-    await expect(hardClosePeriod(db, p.id)).rejects.toThrow(/already HARD_CLOSED/);
+    await hardClosePeriod(db, p.id, FORCE_CLOSE);
+    await expect(hardClosePeriod(db, p.id, FORCE_CLOSE)).rejects.toThrow(/already HARD_CLOSED/);
   });
 
   // ---------- reopen ----------
@@ -181,14 +191,14 @@ suite('FiscalPeriod lifecycle (slice A)', () => {
 
   it('reopenPeriod: HARD_CLOSED → OPEN allowed with reason', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(9));
-    await hardClosePeriod(db, p.id);
+    await hardClosePeriod(db, p.id, FORCE_CLOSE);
     const after = await reopenPeriod(db, p.id, 'auditor request');
     expect(after.status).toBe(FiscalPeriodStatus.OPEN);
   });
 
   it('reopenPeriod requires non-empty reason', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(9));
-    await hardClosePeriod(db, p.id);
+    await hardClosePeriod(db, p.id, FORCE_CLOSE);
     await expect(reopenPeriod(db, p.id, '')).rejects.toThrow(/non-empty reason/);
     await expect(reopenPeriod(db, p.id, '   ')).rejects.toThrow(/non-empty reason/);
   });
@@ -222,7 +232,7 @@ suite('FiscalPeriod lifecycle (slice A)', () => {
 
   it('assertPostingAllowedTx blocks HARD_CLOSED without override', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(11));
-    await hardClosePeriod(db, p.id);
+    await hardClosePeriod(db, p.id, FORCE_CLOSE);
     await expect(
       db.$transaction((tx) => assertPostingAllowedTx(tx, dateInMonth(11))),
     ).rejects.toThrow(/HARD_CLOSED.*Reopen the period or supply/);
@@ -230,7 +240,7 @@ suite('FiscalPeriod lifecycle (slice A)', () => {
 
   it('assertPostingAllowedTx allows HARD_CLOSED with override + writes MANUAL_JE_POSTED audit', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(11));
-    await hardClosePeriod(db, p.id);
+    await hardClosePeriod(db, p.id, FORCE_CLOSE);
     await db.$transaction((tx) =>
       assertPostingAllowedTx(tx, dateInMonth(11), {
         reason: 'auditor adjustment',
@@ -250,7 +260,7 @@ suite('FiscalPeriod lifecycle (slice A)', () => {
 
   it('assertPostingAllowedTx rejects override with empty reason', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(11));
-    await hardClosePeriod(db, p.id);
+    await hardClosePeriod(db, p.id, FORCE_CLOSE);
     await expect(
       db.$transaction((tx) =>
         assertPostingAllowedTx(tx, dateInMonth(11), { reason: '   ' }),
@@ -262,7 +272,7 @@ suite('FiscalPeriod lifecycle (slice A)', () => {
 
   it('post() into HARD_CLOSED period throws and does NOT consume a JE sequence', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(12));
-    await hardClosePeriod(db, p.id);
+    await hardClosePeriod(db, p.id, FORCE_CLOSE);
 
     // Snapshot the JE sequence before the failed post.
     const seqBefore = await db.sequence.findUnique({
@@ -299,7 +309,7 @@ suite('FiscalPeriod lifecycle (slice A)', () => {
 
   it('post() into HARD_CLOSED period with closedPeriodOverride succeeds + writes both JE and override audit', async () => {
     const p = await getOrCreatePeriodForDate(db, dateInMonth(12));
-    await hardClosePeriod(db, p.id);
+    await hardClosePeriod(db, p.id, FORCE_CLOSE);
 
     const apAccount = await db.glAccount.findFirstOrThrow({ where: { code: '2010' } });
     const cashAccount = await db.glAccount.findFirstOrThrow({ where: { code: '1110' } });

@@ -8,6 +8,10 @@ import type {
   PrismaClient,
 } from '@/generated/tenant';
 import { audit, type AuditContext } from '@/lib/audit/audit';
+import {
+  runAllReconChecks,
+  type ReconCheckResult,
+} from './reconciliation';
 
 // =============================================================================
 // FiscalPeriod service. Spec: docs/08-gl-costing-reporting.md#period-close.
@@ -238,8 +242,10 @@ export type HardCloseOptions = {
 
 /**
  * OPEN | SOFT_CLOSED → HARD_CLOSED. From here, posting requires an
- * override. Slice D will add a reconciliation-checks gate that this
- * function calls before flipping status.
+ * override. Runs reconciliation checks first; if any fail and
+ * `forceCloseWithDiscrepancies` is not supplied, throws with a summary
+ * of failures. The recon snapshot persists regardless of close outcome
+ * — the recon Tx commits independently of the close Tx.
  */
 export async function hardClosePeriod(
   db: PrismaClient,
@@ -247,18 +253,49 @@ export async function hardClosePeriod(
   options: HardCloseOptions = {},
   ctx?: AuditContext,
 ): Promise<FiscalPeriod> {
+  // 1. Pre-check: confirm the period exists and isn't already hard-
+  //    closed. Doing this before the recon run avoids the noisy side
+  //    effect of running checks against a non-existent or already-
+  //    closed period.
+  const pre = await db.fiscalPeriod.findUnique({ where: { id: periodId } });
+  if (!pre) throw new Error(`FiscalPeriod not found: ${periodId}`);
+  if (pre.status === FiscalPeriodStatus.HARD_CLOSED) {
+    throw new Error(`Period ${pre.code} is already HARD_CLOSED`);
+  }
+
+  // 2. Run reconciliation checks in their own transaction so the
+  //    snapshot persists regardless of whether the close itself
+  //    succeeds. The forceCloseWithDiscrepancies override applies only
+  //    to the close-gate decision below; it does NOT suppress the recon
+  //    run or alter what gets persisted.
+  const reconResults: ReconCheckResult[] = await runAllReconChecks(
+    db,
+    periodId,
+    ctx,
+  );
+  const failed = reconResults.filter((r) => !r.passed);
+
+  if (failed.length > 0 && !options.forceCloseWithDiscrepancies) {
+    const summary = failed
+      .map(
+        (r) =>
+          `${r.checkType} (gl=${r.glBalance.toString()} sub=${r.subledgerBalance.toString()} diff=${r.difference.toString()})`,
+      )
+      .join('; ');
+    throw new Error(
+      `Cannot hard-close period ${pre.code}: ${failed.length} reconciliation check(s) failed: ${summary}. Investigate the differences or supply forceCloseWithDiscrepancies override with a reason.`,
+    );
+  }
+
+  // 3. Now perform the actual status flip + audit.
   return db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT 1 FROM "FiscalPeriod" WHERE "id" = ${periodId} FOR UPDATE`;
     const before = await tx.fiscalPeriod.findUnique({ where: { id: periodId } });
     if (!before) throw new Error(`FiscalPeriod not found: ${periodId}`);
     if (before.status === FiscalPeriodStatus.HARD_CLOSED) {
+      // Race-safe re-check.
       throw new Error(`Period ${before.code} is already HARD_CLOSED`);
     }
-
-    // Slice-D hook: runAllReconChecksTx + gate goes here. Calling code
-    // already passes `options.forceCloseWithDiscrepancies` for forward
-    // compatibility; the gate isn't enforced yet.
-    void options;
 
     const now = new Date();
     const after = await tx.fiscalPeriod.update({
@@ -274,8 +311,24 @@ export async function hardClosePeriod(
       entityType: 'FiscalPeriod',
       entityId: periodId,
       before: { status: before.status },
-      after: { status: after.status, closedAt: after.closedAt },
-      ctx,
+      after: {
+        status: after.status,
+        closedAt: after.closedAt,
+        reconFailedCount: failed.length,
+        forcedWithDiscrepanciesReason:
+          failed.length > 0 && options.forceCloseWithDiscrepancies
+            ? options.forceCloseWithDiscrepancies.reason
+            : null,
+      },
+      ctx: {
+        ...ctx,
+        // Capture the override reason in the audit `reason` field too,
+        // so audit-log filtering by reason surfaces forced closes.
+        reason:
+          failed.length > 0 && options.forceCloseWithDiscrepancies
+            ? options.forceCloseWithDiscrepancies.reason
+            : (ctx?.reason ?? null),
+      },
     });
     return after;
   });
