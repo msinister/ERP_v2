@@ -287,8 +287,8 @@ npm run typecheck
 6. ✅ Purchase Orders + Receipts (M:N PO ↔ Receipt model, Sequence helper, RECEIVE_REVERSE)
 7. ✅ Invoicing / AR (auto-invoice on SO close, void-blocked-by-applied-payments guard, recordPayment with FIFO CM apply, CreditMemo DRAFT→CONFIRMED→VOIDED with auto-apply on confirm, RMA → creditFromRma atomic flow, AR aging service: balance + per-customer buckets + summary, end-to-end smoke script in `scripts/smoke-test-ar-flow.ts`)
 8. ✅ Bills / AP (Bill DRAFT → CONFIRMED → CANCELLED with M:N PO/Receipt joins; receipt → auto-draft bill hook with cancel cascade + CONFIRMED-bill guard; BillPayment with overpayment → auto-VC; VendorCredit DRAFT → CONFIRMED → CANCELLED with manual application; AP aging service mirroring AR; end-to-end smoke script in `scripts/smoke-test-ap-flow.ts`)
-9. ⏳ GL/Costing engine + Reports ← **CURRENT**
-10. ⏳ Integrations (Shopify, Authorize.Net runtime, Mailgun)
+9. ✅ GL / Costing engine + Reports (FiscalPeriod monthly with soft/hard close + reopen; lazy auto-create; assertPostingAllowedTx gate wired into `lib/gl/post.ts` with closedPeriodOverride; financial reports — trialBalance, glDetail, journalReport, balanceSheet, incomeStatement; operational reports — salesByCustomer, salesByItem, inventoryValuation, cashPosition; 6 dashboard widgets; reconciliation service with 5 spec'd checks wired into hardClose with forceCloseWithDiscrepancies override; end-to-end smoke in `scripts/smoke-test-financial-close.ts`)
+10. ⏳ Integrations (Shopify, Authorize.Net runtime, Mailgun) ← **CURRENT**
 11. ⏳ Document/email templates + admin UI
 12. ⏳ Migration tooling + Naked Kratom data import
 13. ⏳ Parallel run
