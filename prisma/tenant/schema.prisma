@@ -69,6 +69,19 @@ enum AuditAction {
   BILL_PAYMENT_REVERSED
   VENDOR_CREDIT_CONFIRMED
   VENDOR_CREDIT_APPLIED
+  // GL/period-close slice (phase 9). PERIOD_CLOSED covers both soft and
+  // hard close; the audit row's afterJson carries the new status so the
+  // distinction is filterable. PERIOD_REOPENED is its own action because
+  // reopening is a sensitive operation that warrants distinct reporting.
+  // MANUAL_JE_POSTED fires from the assertPostingAllowedTx gate when an
+  // override bypasses a HARD_CLOSED period — entityType=FiscalPeriod,
+  // afterJson carries the override reason.
+  // RECONCILIATION_RUN fires when the slice-D recon checks execute; the
+  // afterJson carries the per-check pass/fail summary.
+  PERIOD_CLOSED
+  PERIOD_REOPENED
+  MANUAL_JE_POSTED
+  RECONCILIATION_RUN
 }
 
 enum InvoiceStatus {
@@ -2070,4 +2083,85 @@ model VendorCreditApplication {
 
   @@index([billId, reversedAt])
   @@index([vendorCreditId])
+}
+
+// =========================================================================
+// GL period close — phase 9 slice A. Spec: docs/08-gl-costing-reporting.md.
+//
+// Pilot scope: monthly periods only. Quarterly/yearly aggregations are
+// computed at report time from monthly data — no separate records.
+//
+// Lifecycle:
+//   OPEN         — accepts JE posts freely.
+//   SOFT_CLOSED  — still accepts posts (per Q4 sign-off; permission
+//                  layer will tighten later). Marks the month as
+//                  "closed for normal users."
+//   HARD_CLOSED  — assertPostingAllowedTx blocks posts unless caller
+//                  supplies an override with reason. Override fires a
+//                  MANUAL_JE_POSTED audit row tied to the period.
+//
+// Auto-creation: getOrCreatePeriodForDate creates a period the first
+// time a JE is posted into that month. UPSERT on the unique `code` is
+// race-safe.
+//
+// Reconciliation: PeriodReconciliationCheck rows are persisted snapshots
+// of the slice-D recon results at close time. Row-per-check, JSON
+// details for bucket-level numbers. Live re-runs append fresh rows
+// rather than mutating prior ones — append-only audit trail.
+// =========================================================================
+
+enum FiscalPeriodStatus {
+  OPEN
+  SOFT_CLOSED
+  HARD_CLOSED
+}
+
+model FiscalPeriod {
+  id           String             @id @default(cuid())
+  // YYYY-MM, e.g., "2026-04". Unique by code; service derives this from
+  // a Date via UTC year/month components.
+  code         String             @unique
+  // Inclusive start, exclusive end. e.g., 2026-04 → start 2026-04-01T00Z,
+  // end 2026-05-01T00Z. Half-open interval lets postedAt < endDate be
+  // the canonical containment check.
+  startDate    DateTime
+  endDate      DateTime
+  status       FiscalPeriodStatus @default(OPEN)
+  // Set on the most recent close transition (soft or hard). Cleared on
+  // reopen. Use the audit log for full close/reopen history.
+  closedAt     DateTime?
+  closedById   String?
+  reopenedAt   DateTime?
+  reopenedById String?
+  reopenReason String?
+  notes        String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  reconChecks PeriodReconciliationCheck[]
+
+  @@index([status])
+  @@index([startDate])
+}
+
+model PeriodReconciliationCheck {
+  id               String   @id @default(cuid())
+  fiscalPeriodId   String
+  // Stable string key. Slice D defines the canonical set:
+  //   AR_CONTROL, AP_CONTROL, INVENTORY_<warehouseCode>, CASH,
+  //   ACCRUED_RECEIPTS. Per-warehouse INVENTORY checks fan out at
+  //   runtime, hence string rather than enum.
+  checkType        String
+  glBalance        Decimal  @db.Decimal(18, 5)
+  subledgerBalance Decimal  @db.Decimal(18, 5)
+  difference       Decimal  @db.Decimal(18, 5)
+  passed           Boolean
+  // Bucket-level numbers, aged rows, etc. Schema-less by design —
+  // each checkType writes its own shape. Read with care.
+  details          Json?
+  checkedAt        DateTime @default(now())
+
+  fiscalPeriod FiscalPeriod @relation(fields: [fiscalPeriodId], references: [id])
+
+  @@index([fiscalPeriodId, checkedAt])
 }

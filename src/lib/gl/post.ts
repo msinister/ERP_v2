@@ -1,6 +1,10 @@
 import { Prisma } from '@/generated/tenant';
 import type { JournalEntry, JournalEntryLine } from '@/generated/tenant';
 import { getNextSequence } from '@/lib/sequences/sequences';
+import {
+  assertPostingAllowedTx,
+  type PostingOverride,
+} from '@/server/services/fiscalPeriods';
 
 /**
  * Foundational journal-entry posting helper. Every operational event
@@ -55,6 +59,12 @@ export type PostInput = {
   // reporting per docs/08-gl-costing-reporting.md:167. createdAt is
   // never overridden — it stays at insertion time as audit history.
   postedAt?: Date;
+  // Phase 9 slice A. When the resolved period for postedAt is
+  // HARD_CLOSED, post() throws unless this override is supplied.
+  // Override fires a MANUAL_JE_POSTED audit row tied to the period
+  // (with reason + userId). Override enforcement at the API layer
+  // restricts who can pass this — services pass through unchecked.
+  closedPeriodOverride?: PostingOverride;
 };
 
 export type PostedJournalEntry = JournalEntry & { lines: JournalEntryLine[] };
@@ -125,6 +135,15 @@ export async function post(
       `post(): journal entry already posted for this event (entityType=${input.entityType} entityId=${input.entityId} description='${input.description}' existing=${existing.number})`,
     );
   }
+
+  // 3.5. Period-close gate. assertPostingAllowedTx auto-creates the
+  //      period if it doesn't exist (lazy bootstrap), and throws when
+  //      the period is HARD_CLOSED unless closedPeriodOverride is
+  //      supplied. Override fires a MANUAL_JE_POSTED audit row.
+  //      Runs BEFORE sequence allocation so a blocked post doesn't
+  //      burn a JE-NNNNN.
+  const effectivePostedAt = input.postedAt ?? new Date();
+  await assertPostingAllowedTx(tx, effectivePostedAt, input.closedPeriodOverride);
 
   // 4. Resolve account codes → ids. Single batched query.
   const codes = Array.from(new Set(input.lines.map((l) => l.accountCode)));
