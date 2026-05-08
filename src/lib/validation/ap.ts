@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BillSource, Prisma } from '@/generated/tenant';
+import { BillSource, PaymentMethod, Prisma } from '@/generated/tenant';
 import { decimalString } from './common';
 
 // =============================================================================
@@ -115,3 +115,103 @@ export type BillLineInput = z.infer<typeof billLineInputSchema>;
 export type CreateBillInput = z.infer<typeof createBillInputSchema>;
 export type UpdateBillInput = z.infer<typeof updateBillInputSchema>;
 export type CancelBillInput = z.infer<typeof cancelBillInputSchema>;
+
+// =============================================================================
+// Bill payments
+// =============================================================================
+//
+// APPLIED_CREDIT is NOT a valid method for BillPayment — vendor credit
+// applications flow through applyVendorCreditToBill (its own service)
+// with their own JE pair, not as a BillPayment row. Restricting at
+// validation time prevents accidental misuse.
+
+const billPaymentMethodSchema = z
+  .nativeEnum(PaymentMethod)
+  .refine((m) => m !== PaymentMethod.APPLIED_CREDIT, {
+    message:
+      'APPLIED_CREDIT is not valid for bill payments — apply vendor credits via /api/vendor-credits/[id]/apply',
+  });
+
+export const recordBillPaymentInputSchema = z.object({
+  billId: z.string().min(1),
+  amount: decimalString.refine(
+    (v) => new Prisma.Decimal(v).greaterThan(0),
+    'Must be greater than 0',
+  ),
+  method: billPaymentMethodSchema,
+  // FK to a GlAccount of type=ASSET (typically 1110 Cash/Bank). Service
+  // validates type. Optional at the DB level for record-only entries
+  // missing bank-account specification, but the service requires it
+  // for non-zero amounts because the JE needs an account to credit.
+  cashAccountId: z.string().min(1),
+  paymentDate: z.coerce.date().optional(),
+  reference: z.string().max(255).optional(),
+  notes: z.string().max(2000).optional(),
+});
+
+export const reverseBillPaymentInputSchema = z.object({
+  // Reversals always need a reason — accounting trail requires it.
+  reason: z.string().min(1).max(2000),
+});
+
+export type RecordBillPaymentInput = z.infer<typeof recordBillPaymentInputSchema>;
+export type ReverseBillPaymentInput = z.infer<typeof reverseBillPaymentInputSchema>;
+
+// =============================================================================
+// Vendor credits
+// =============================================================================
+//
+// Lines are simple expense-style (description + amount) per pilot Q6.
+// Math invariant — SUM(line.amount) === amount — is enforced at the
+// SERVICE LAYER, not here (same precedent as createCreditMemoInputSchema).
+
+const vendorCreditLineInputSchema = z.object({
+  description: z.string().min(1).max(500),
+  amount: decimalString.refine(
+    (v) => new Prisma.Decimal(v).greaterThan(0),
+    'Must be greater than 0',
+  ),
+  notes: z.string().max(2000).optional(),
+});
+
+export const createVendorCreditInputSchema = z.object({
+  vendorId: z.string().min(1),
+  amount: decimalString.refine(
+    (v) => new Prisma.Decimal(v).greaterThan(0),
+    'Must be greater than 0',
+  ),
+  creditDate: z.coerce.date().optional(),
+  currency: z.string().min(3).max(3).optional(),
+  reason: z.string().max(2000).optional(),
+  notes: z.string().max(2000).optional(),
+  lines: z.array(vendorCreditLineInputSchema).min(1),
+});
+
+export const updateVendorCreditInputSchema = z.object({
+  amount: decimalString
+    .refine((v) => new Prisma.Decimal(v).greaterThan(0), 'Must be greater than 0')
+    .optional(),
+  creditDate: z.coerce.date().optional(),
+  reason: z.string().max(2000).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  lines: z.array(vendorCreditLineInputSchema).min(1).optional(),
+});
+
+export const cancelVendorCreditInputSchema = z.object({
+  reason: z.string().min(1).max(2000),
+});
+
+export const applyVendorCreditInputSchema = z.object({
+  billId: z.string().min(1),
+  amount: decimalString.refine(
+    (v) => new Prisma.Decimal(v).greaterThan(0),
+    'Must be greater than 0',
+  ),
+  notes: z.string().max(2000).optional(),
+});
+
+export type VendorCreditLineInput = z.infer<typeof vendorCreditLineInputSchema>;
+export type CreateVendorCreditInput = z.infer<typeof createVendorCreditInputSchema>;
+export type UpdateVendorCreditInput = z.infer<typeof updateVendorCreditInputSchema>;
+export type CancelVendorCreditInput = z.infer<typeof cancelVendorCreditInputSchema>;
+export type ApplyVendorCreditInput = z.infer<typeof applyVendorCreditInputSchema>;

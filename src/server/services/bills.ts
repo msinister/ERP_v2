@@ -861,6 +861,70 @@ export async function softDeleteBill(
 }
 
 // ---------------------------------------------------------------------------
+// recomputeBillDenorms — self-heal Bill.amountPaid + amountCredited +
+// paymentStatus from authoritative source rows.
+//
+// amountPaid       = SUM(BillPayment.amount WHERE status=RECORDED)
+// amountCredited   = SUM(VendorCreditApplication.amount WHERE reversedAt IS NULL)
+// paymentStatus    = derived from (amountPaid + amountCredited) vs total
+//
+// Mirrors recomputeAmountPaidForInvoice on the AR side. Service-internal
+// helper — direct mutation of these fields by other paths is forbidden.
+// ---------------------------------------------------------------------------
+
+export async function recomputeBillDenormsTx(
+  tx: Prisma.TransactionClient,
+  billId: string,
+): Promise<void> {
+  const bill = await tx.bill.findUnique({
+    where: { id: billId },
+    select: { id: true, total: true, status: true },
+  });
+  if (!bill) return;
+
+  const [paymentAgg, creditAgg] = await Promise.all([
+    tx.billPayment.aggregate({
+      where: { billId, status: 'RECORDED' },
+      _sum: { amount: true },
+    }),
+    tx.vendorCreditApplication.aggregate({
+      where: { billId, reversedAt: null },
+      _sum: { amount: true },
+    }),
+  ]);
+
+  const amountPaid = paymentAgg._sum.amount ?? new Prisma.Decimal(0);
+  // Cap amountPaid at bill.total — overpayments flow into a vendor
+  // credit, NOT into a denorm value > total. Keeps the paymentStatus
+  // derivation monotonic (PAID can't be silently breached by an
+  // overpayment that should have triggered VC creation).
+  const cappedPaid = amountPaid.greaterThan(bill.total) ? bill.total : amountPaid;
+  const amountCredited = creditAgg._sum.amount ?? new Prisma.Decimal(0);
+
+  const settled = cappedPaid.plus(amountCredited);
+  let paymentStatus: 'UNPAID' | 'PARTIAL' | 'PAID' = 'UNPAID';
+  // Only CONFIRMED bills can transition past UNPAID — DRAFT bills
+  // shouldn't accept payments anyway, but defending here keeps the
+  // denorm honest if a future path bypasses validation.
+  if (bill.status === 'CONFIRMED') {
+    if (settled.greaterThanOrEqualTo(bill.total) && bill.total.greaterThan(0)) {
+      paymentStatus = 'PAID';
+    } else if (settled.greaterThan(0)) {
+      paymentStatus = 'PARTIAL';
+    }
+  }
+
+  await tx.bill.update({
+    where: { id: billId },
+    data: {
+      amountPaid: cappedPaid,
+      amountCredited,
+      paymentStatus,
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // createDraftBillFromReceiptTx — system-triggered hook called by
 // postReceipt to auto-draft a bill matching the just-posted receipt.
 // AP staff cross-references the vendor's actual invoice, edits +
