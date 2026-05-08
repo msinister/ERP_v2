@@ -28,6 +28,11 @@ import {
   recomputeQtyReceivedForPoLine,
 } from '@/server/services/purchaseOrders';
 import { createFifoLayerOnReceiveTx } from '@/server/services/fifoLayers';
+import {
+  cancelDraftBillsForReceiptTx,
+  createDraftBillFromReceiptTx,
+  hasConfirmedBillForReceiptTx,
+} from '@/server/services/bills';
 import { post } from '@/lib/gl/post';
 
 const RECEIPT_SEQUENCE_NAME = 'receipt';
@@ -374,6 +379,14 @@ export async function postReceipt(
       await applyComputedPoStatus(tx, poId, ctx);
     }
 
+    // AP slice: auto-create a DRAFT bill matching this receipt. AP staff
+    // cross-references the vendor's actual invoice when it arrives,
+    // edits the bill if needed, and confirms (which posts the AP JE).
+    // The auto-create is idempotent (skips if a non-cancelled bill
+    // already references this receipt) and writes a DRAFT_BILL_GENERATED
+    // audit row distinct from a manual-entry CREATE.
+    await createDraftBillFromReceiptTx(tx, id, ctx);
+
     // Re-read with linked movements for the response.
     const final = (await tx.receipt.findUnique({
       where: { id },
@@ -422,6 +435,17 @@ export async function cancelReceipt(
     if (!before.warehouse.inventoryAccount?.code) {
       throw new Error(
         `cancelReceipt: warehouse '${before.warehouse.code}' has no inventoryAccountId — link it to a GL account before cancelling receipts against it`,
+      );
+    }
+
+    // AP guard: refuse if any CONFIRMED Bill links to this receipt.
+    // The bill carries an AP balance against this receipt's accrued
+    // receipts; cancelling the receipt would orphan the bill's GL
+    // claim. AP staff must cancel the bill first.
+    const blockingBill = await hasConfirmedBillForReceiptTx(tx, id);
+    if (blockingBill) {
+      throw new Error(
+        `Cannot cancel receipt: confirmed bill ${blockingBill.number} is linked. Cancel the bill first.`,
       );
     }
 
@@ -560,6 +584,17 @@ export async function cancelReceipt(
       after: { status: after.status },
       ctx: { ...ctx, reason: data.reason ?? ctx?.reason ?? null },
     });
+
+    // 8. AP slice cascade: cancel any DRAFT bill that auto-drafted (or
+    // was manually linked) from this receipt. CONFIRMED bills were
+    // refused upfront by hasConfirmedBillForReceiptTx, so this only
+    // touches drafts.
+    await cancelDraftBillsForReceiptTx(
+      tx,
+      id,
+      `Source receipt ${before.number} cancelled: ${data.reason ?? ctx?.reason ?? 'no reason given'}`,
+      ctx,
+    );
 
     return { ...after, affectedPurchaseOrderIds: Array.from(affectedPoIds) };
   });

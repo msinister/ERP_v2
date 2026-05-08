@@ -1877,13 +1877,18 @@ model Bill {
 
 // M:N join. Composite PK enforces (billId, receiptId) uniqueness; no
 // soft-delete on join rows — cancel the parent Bill instead.
+//
+// onDelete: Cascade on both sides — the join row is pure association
+// and meaningless without either parent. Production never hard-deletes
+// either Bill or Receipt (soft-delete only), so cascade fires only in
+// test cleanup; data integrity is unchanged in production.
 model BillReceipt {
   billId    String
   receiptId String
   createdAt DateTime @default(now())
 
-  bill    Bill    @relation(fields: [billId], references: [id])
-  receipt Receipt @relation(fields: [receiptId], references: [id])
+  bill    Bill    @relation(fields: [billId], references: [id], onDelete: Cascade)
+  receipt Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
 
   @@id([billId, receiptId])
   @@index([receiptId])
@@ -1894,8 +1899,8 @@ model BillPurchaseOrder {
   purchaseOrderId String
   createdAt       DateTime @default(now())
 
-  bill          Bill          @relation(fields: [billId], references: [id])
-  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  bill          Bill          @relation(fields: [billId], references: [id], onDelete: Cascade)
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
 
   @@id([billId, purchaseOrderId])
   @@index([purchaseOrderId])
@@ -1928,10 +1933,19 @@ model BillLine {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
+  // variantId + expenseAccountId use ON DELETE RESTRICT (NOT the
+  // Prisma default of SET NULL for nullable FKs). Reason: BillLine_source_xor
+  // CHECK constraint requires exactly one of the two to be non-null —
+  // if a SET NULL fires from the discriminator column it sets, the
+  // remaining discriminator stays null and the row violates the CHECK.
+  // RESTRICT forces test cleanup (production never hard-deletes
+  // variants or GL accounts) to delete bills first.
+  // receiptLineId stays SET NULL — losing the receipt traceability
+  // doesn't violate XOR because variantId stays set on the PRODUCT line.
   bill           Bill            @relation(fields: [billId], references: [id])
-  variant        ProductVariant? @relation(fields: [variantId], references: [id])
+  variant        ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
   receiptLine    ReceiptLine?    @relation(fields: [receiptLineId], references: [id])
-  expenseAccount GlAccount?      @relation(fields: [expenseAccountId], references: [id])
+  expenseAccount GlAccount?      @relation(fields: [expenseAccountId], references: [id], onDelete: Restrict)
 
   @@index([billId])
   @@index([variantId])

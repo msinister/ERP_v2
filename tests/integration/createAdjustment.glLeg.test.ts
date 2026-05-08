@@ -12,6 +12,7 @@ import {
 } from '@/server/services/receipts';
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { upsertTestWarehouse } from '../helpers/warehouseStub';
+import { wipeBillArtifactsForVendors } from '../helpers/wipeBillArtifacts';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -87,6 +88,10 @@ suite('createAdjustmentTx GL counterpart leg (Module 08)', () => {
   async function wipe(): Promise<void> {
     const variantIds = [variantId];
     const warehouseIds = [warehouseId];
+
+    // Phase 8: clear bills auto-drafted by postReceipt before any
+    // variant/vendor cleanup hits BillLine RESTRICT FKs.
+    await wipeBillArtifactsForVendors(db, [vendorId]);
 
     const receipts = await db.receipt.findMany({
       where: { vendorId },

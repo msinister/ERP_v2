@@ -206,6 +206,7 @@ export async function createBillTx(
   tx: Prisma.TransactionClient,
   input: CreateBillInput,
   ctx?: AuditContext,
+  options?: { auditAction?: AuditAction },
 ): Promise<BillWithLines> {
   const data = createBillInputSchema.parse(input);
   const source = data.source ?? BillSource.PRODUCT;
@@ -279,7 +280,7 @@ export async function createBillTx(
   });
 
   await audit(tx, {
-    action: AuditAction.CREATE,
+    action: options?.auditAction ?? AuditAction.CREATE,
     entityType: 'Bill',
     entityId: bill.id,
     after: bill,
@@ -857,4 +858,144 @@ export async function softDeleteBill(
     });
     return after;
   });
+}
+
+// ---------------------------------------------------------------------------
+// createDraftBillFromReceiptTx — system-triggered hook called by
+// postReceipt to auto-draft a bill matching the just-posted receipt.
+// AP staff cross-references the vendor's actual invoice, edits +
+// confirms (or cancels and starts over).
+//
+// Idempotency: skips when a non-cancelled bill already references this
+// receipt — re-calling postReceipt (which currently can't happen because
+// of the DRAFT-only status guard, but covers future re-posting paths)
+// won't multi-create. Returns null on skip.
+//
+// Audit: writes DRAFT_BILL_GENERATED (not CREATE) so reports can filter
+// system-triggered drafts apart from user-entered bills. Mirrors the
+// INVOICE_GENERATED convention from invoices.ts.
+// ---------------------------------------------------------------------------
+
+export async function createDraftBillFromReceiptTx(
+  tx: Prisma.TransactionClient,
+  receiptId: string,
+  ctx?: AuditContext,
+): Promise<BillWithLines | null> {
+  // Skip if a non-cancelled bill already references this receipt.
+  // Includes DRAFT, CONFIRMED, and any future intermediate state — we
+  // only re-create after explicit cancel.
+  const existing = await tx.billReceipt.findFirst({
+    where: {
+      receiptId,
+      bill: { status: { not: BillStatus.CANCELLED }, deletedAt: null },
+    },
+    select: { billId: true },
+  });
+  if (existing) return null;
+
+  const receipt = await tx.receipt.findUnique({
+    where: { id: receiptId },
+    include: {
+      lines: {
+        where: { deletedAt: null },
+        include: { variant: { select: { sku: true, name: true } } },
+      },
+    },
+  });
+  if (!receipt) throw new Error(`Receipt not found: ${receiptId}`);
+
+  // Only positive-qty lines flow into the bill — zero-qty lines exist
+  // on receipts in pathological cases but createBill validation
+  // requires qty > 0 (positiveDecimal).
+  const billLines = receipt.lines
+    .filter((l) => l.qtyReceived.greaterThan(0))
+    .map((l) => ({
+      variantId: l.variantId,
+      receiptLineId: l.id,
+      description: l.variant.name ?? l.variant.sku,
+      qty: l.qtyReceived.toString(),
+      unitCost: l.unitCost.toString(),
+    }));
+
+  if (billLines.length === 0) return null;
+
+  return createBillTx(
+    tx,
+    {
+      vendorId: receipt.vendorId,
+      source: BillSource.PRODUCT,
+      notes: `Auto-drafted from receipt ${receipt.number}. Edit + confirm when vendor invoice arrives.`,
+      lines: billLines,
+    },
+    ctx,
+    { auditAction: AuditAction.DRAFT_BILL_GENERATED },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// cancelDraftBillsForReceiptTx — system-triggered hook called by
+// cancelReceipt to cascade-cancel any DRAFT bill that was auto-created
+// (or manually linked) from the receipt being cancelled. CONFIRMED bills
+// are NOT touched here — they're guarded against in cancelReceipt's
+// pre-check, which throws upfront.
+// ---------------------------------------------------------------------------
+
+export async function cancelDraftBillsForReceiptTx(
+  tx: Prisma.TransactionClient,
+  receiptId: string,
+  reason: string,
+  ctx?: AuditContext,
+): Promise<string[]> {
+  const links = await tx.billReceipt.findMany({
+    where: {
+      receiptId,
+      bill: { status: BillStatus.DRAFT, deletedAt: null },
+    },
+    select: { billId: true },
+  });
+  const cancelledIds: string[] = [];
+  const now = new Date();
+  for (const link of links) {
+    // DRAFT cancel is status-flip-only (no JE to reverse). Inline rather
+    // than calling cancelBill (which would open a nested transaction).
+    await tx.bill.update({
+      where: { id: link.billId },
+      data: {
+        status: BillStatus.CANCELLED,
+        cancelledAt: now,
+        cancelReason: reason,
+      },
+    });
+    await audit(tx, {
+      action: AuditAction.STATUS_CHANGE,
+      entityType: 'Bill',
+      entityId: link.billId,
+      before: { status: BillStatus.DRAFT },
+      after: { status: BillStatus.CANCELLED },
+      ctx: { ...ctx, reason },
+    });
+    cancelledIds.push(link.billId);
+  }
+  return cancelledIds;
+}
+
+// ---------------------------------------------------------------------------
+// hasConfirmedBillForReceipt — guard helper for cancelReceipt to refuse
+// when a confirmed bill links to the receipt. Returns the blocking
+// bill's number for the error message, or null if clear to cancel.
+// ---------------------------------------------------------------------------
+
+export async function hasConfirmedBillForReceiptTx(
+  tx: Prisma.TransactionClient,
+  receiptId: string,
+): Promise<{ billId: string; number: string } | null> {
+  const link = await tx.billReceipt.findFirst({
+    where: {
+      receiptId,
+      bill: { status: BillStatus.CONFIRMED, deletedAt: null },
+    },
+    select: { billId: true, bill: { select: { number: true } } },
+  });
+  if (!link) return null;
+  return { billId: link.billId, number: link.bill.number };
 }

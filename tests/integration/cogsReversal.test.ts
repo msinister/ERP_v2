@@ -34,6 +34,7 @@ import {
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { upsertTestCustomer } from '../helpers/customerStub';
 import { upsertTestWarehouse } from '../helpers/warehouseStub';
+import { wipeBillArtifactsForVendors } from '../helpers/wipeBillArtifacts';
 
 const suite = hasTenantDb ? describe : describe.skip;
 const TAG = 'TEST-COGSREV';
@@ -141,6 +142,10 @@ suite('COGS reversal (Part 3.5)', () => {
   async function wipe(): Promise<void> {
     const variantIds = [variantAId, variantBId];
     const warehouseIds = [warehouseAId, warehouseBId];
+
+    // Phase 8: clear bills auto-drafted by postReceipt before any
+    // variant/vendor cleanup hits BillLine RESTRICT FKs.
+    await wipeBillArtifactsForVendors(db, [vendorId]);
 
     const sos = await db.salesOrder.findMany({
       where: { customerId },

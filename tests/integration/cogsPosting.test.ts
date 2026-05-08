@@ -20,6 +20,7 @@ import { hasTenantDb, makeClient } from '../helpers/db';
 import { upsertTestCustomer } from '../helpers/customerStub';
 import { upsertTestWarehouse } from '../helpers/warehouseStub';
 import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
+import { wipeBillArtifactsForVendors } from '../helpers/wipeBillArtifacts';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -139,6 +140,11 @@ suite('COGS posting (Part 3 of costing engine)', () => {
   async function wipe(): Promise<void> {
     const variantIds = [variantId, variantBId];
     const warehouseIds = [warehouseAId, warehouseBId, unlinkedWarehouseId];
+
+    // Phase 8: bills auto-drafted by postReceipt point at this vendor
+    // and at variants — clear them before any variant/vendor cleanup
+    // hits the BillLine RESTRICT FKs.
+    await wipeBillArtifactsForVendors(db, [vendorId]);
 
     // Collect SO ids first so wipeInvoiceArtifacts can join the invoices.
     const sos = await db.salesOrder.findMany({

@@ -17,6 +17,7 @@ import {
 } from '@/server/services/receipts';
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { upsertTestWarehouse } from '../helpers/warehouseStub';
+import { wipeBillArtifactsForVendors } from '../helpers/wipeBillArtifacts';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -84,6 +85,13 @@ suite('Receipt service', () => {
   // deleteMany. Same pattern as fifoLayers.test.ts.
   async function wipeRow(): Promise<void> {
     const variantIds = [variantAId, variantBId];
+
+    // Phase 8: clear bills auto-drafted by postReceipt before any
+    // variant/vendor cleanup hits BillLine RESTRICT FKs. Sub-suites in
+    // this file may create alternate vendors (otherVendor) — those are
+    // delete-cleaned in their own afterAll, so we only need the
+    // suite-wide vendorId here.
+    await wipeBillArtifactsForVendors(db, [vendorId]);
     const ourMovements = await db.inventoryMovement.findMany({
       where: { variantId: { in: variantIds } },
       select: { id: true },

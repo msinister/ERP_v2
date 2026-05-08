@@ -26,6 +26,7 @@ import {
 import { recordPayment, reversePayment } from '@/server/services/payments';
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { upsertTestWarehouse } from '../helpers/warehouseStub';
+import { wipeBillArtifactsForVendorCodePrefix } from '../helpers/wipeBillArtifacts';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -451,6 +452,10 @@ suite('Commission reversal — reversePayment integration', () => {
 });
 
 async function wipe(db: PrismaClient): Promise<void> {
+  // Phase 8: clear bills auto-drafted by postReceipt before any
+  // variant/vendor cleanup hits BillLine RESTRICT FKs.
+  await wipeBillArtifactsForVendorCodePrefix(db, TAG);
+
   const accruals = await db.commissionAccrual.findMany({
     where: { salesRep: { code: { startsWith: TAG } } },
     select: { id: true },

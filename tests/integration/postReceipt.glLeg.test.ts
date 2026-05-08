@@ -12,6 +12,7 @@ import {
 } from '@/server/services/receipts';
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { upsertTestWarehouse } from '../helpers/warehouseStub';
+import { wipeBillArtifactsForVendors } from '../helpers/wipeBillArtifacts';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
@@ -102,6 +103,10 @@ suite('postReceipt + cancelReceipt GL counterpart leg (Modules 07 + 08)', () => 
   async function wipe(): Promise<void> {
     const variantIds = [variantId];
     const warehouseIds = [warehouseLinkedId, warehouseUnlinkedId];
+
+    // Phase 8: clear bills auto-drafted by postReceipt before any
+    // variant/vendor cleanup hits BillLine RESTRICT FKs.
+    await wipeBillArtifactsForVendors(db, [vendorId]);
 
     // Receipts owned by this suite's vendor — collect ids so we can
     // delete JEs referencing them by entityId.
