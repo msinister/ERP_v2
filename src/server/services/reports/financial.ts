@@ -2,16 +2,28 @@ import { AccountType, Prisma } from '@/generated/tenant';
 import type { PrismaClient } from '@/generated/tenant';
 
 // =============================================================================
-// Financial reports — slice B of phase 9.
-//   - trialBalance(db, { from, to })
-//   - glDetail(db, { accountCode, from, to })
-//   - journalReport(db, { from, to, entityType?, accountCode? })
+// Financial reports.
+//   Slice B:
+//     - trialBalance(db, { from, to })
+//     - glDetail(db, { accountCode, from, to })
+//     - journalReport(db, { from, to, entityType?, accountCode? })
+//   Slice C:
+//     - balanceSheet(db, asOf)
+//     - incomeStatement(db, { from, to })
 //
 // Date semantics (per Q6 sign-off): all reports use postedAt as the
 // dimension, with [from, to) half-open for activity windows. asOf is
-// computed as { lt: to }. Deleted JEs are excluded; reversed JEs are
+// computed as { lt: asOf }. Deleted JEs are excluded; reversed JEs are
 // included (they're real history; in TB they cancel out the original,
 // which is the correct portrayal of the audit trail).
+//
+// Sign convention for Balance Sheet / Income Statement display:
+//   ASSET   / EXPENSE   → natural debit  → display = Dr − Cr
+//   LIABILITY / EQUITY  → natural credit → display = Cr − Dr
+//   REVENUE             → natural credit → display = Cr − Dr
+// Negative display values mean an account is in its non-natural state
+// (e.g., overdrawn cash, debit balance on AP). Surfaced as-is for the
+// caller to render with parentheses or sign convention of choice.
 //
 // All Decimal math via Prisma.Decimal — never JS Number. Read-only;
 // these functions never mutate.
@@ -481,4 +493,319 @@ export async function journalReport(
   }));
 
   return { asOfFrom: from ?? null, asOfTo: to, entries };
+}
+
+// ---------------------------------------------------------------------------
+// balanceSheet (slice C)
+// ---------------------------------------------------------------------------
+
+export type BalanceSheetRow = {
+  accountId: string;
+  accountCode: string;
+  accountName: string;
+  // Display value at natural sign — positive = "in normal posture,"
+  // negative = "abnormal" (e.g., overdrawn cash, debit balance on AP).
+  // Caller decides how to render negatives.
+  balance: Prisma.Decimal;
+};
+
+export type BalanceSheetSection = {
+  rows: BalanceSheetRow[];
+  total: Prisma.Decimal;
+};
+
+export type BalanceSheetEquitySection = {
+  rows: BalanceSheetRow[]; // EQUITY-typed accounts only
+  // Cumulative net income (Revenue − Expenses) through asOf, NOT yet
+  // closed to retained earnings. Until year-end-close ships, this is
+  // where since-inception undistributed profit appears on the BS. The
+  // year-end JE that zeros revenue/expense to retained earnings will
+  // collapse this into rows[] and reset currentPeriodEarnings to 0.
+  currentPeriodEarnings: Prisma.Decimal;
+  total: Prisma.Decimal; // sum(rows) + currentPeriodEarnings
+};
+
+export type BalanceSheetReport = {
+  asOf: Date;
+  assets: BalanceSheetSection;
+  liabilities: BalanceSheetSection;
+  equity: BalanceSheetEquitySection;
+  totalLiabilitiesAndEquity: Prisma.Decimal;
+  // assets.total − totalLiabilitiesAndEquity. Should be zero if every
+  // post went through lib/gl/post() (which enforces SUM(Dr)=SUM(Cr)).
+  // Non-zero surfaces a data-integrity issue — investigate before
+  // trusting downstream reports.
+  imbalance: Prisma.Decimal;
+};
+
+/**
+ * Point-in-time Balance Sheet as of `asOf` (exclusive — i.e., the
+ * report includes everything posted strictly before `asOf`).
+ *
+ * Math:
+ *   Assets    = SUM(Dr − Cr) per ASSET account, displayed at natural sign
+ *   Liab      = SUM(Cr − Dr) per LIABILITY account, displayed at natural sign
+ *   Equity    = SUM(Cr − Dr) per EQUITY account
+ *               + currentPeriodEarnings (cumulative Revenue − Expenses)
+ *   Invariant: Assets total ≡ Liabilities total + Equity total.
+ *              imbalance field surfaces any drift.
+ */
+export async function balanceSheet(
+  db: PrismaClient,
+  asOf: Date,
+): Promise<BalanceSheetReport> {
+  const aggs = await db.journalEntryLine.groupBy({
+    by: ['accountId'],
+    where: {
+      journalEntry: {
+        postedAt: { lt: asOf },
+        deletedAt: null,
+      },
+    },
+    _sum: { debit: true, credit: true },
+  });
+
+  if (aggs.length === 0) {
+    return {
+      asOf,
+      assets: { rows: [], total: new Prisma.Decimal(0) },
+      liabilities: { rows: [], total: new Prisma.Decimal(0) },
+      equity: {
+        rows: [],
+        currentPeriodEarnings: new Prisma.Decimal(0),
+        total: new Prisma.Decimal(0),
+      },
+      totalLiabilitiesAndEquity: new Prisma.Decimal(0),
+      imbalance: new Prisma.Decimal(0),
+    };
+  }
+
+  const accountIds = aggs.map((a) => a.accountId);
+  const accounts = await db.glAccount.findMany({
+    where: { id: { in: accountIds } },
+    select: { id: true, code: true, name: true, type: true },
+  });
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+
+  const assets: BalanceSheetRow[] = [];
+  const liabilities: BalanceSheetRow[] = [];
+  const equity: BalanceSheetRow[] = [];
+  let revenueNatural = new Prisma.Decimal(0); // Cr − Dr cumulative
+  let expenseNatural = new Prisma.Decimal(0); // Dr − Cr cumulative
+
+  for (const agg of aggs) {
+    const account = accountById.get(agg.accountId);
+    if (!account) continue; // soft-deleted account with prior activity — skip
+    const debit = agg._sum.debit ?? new Prisma.Decimal(0);
+    const credit = agg._sum.credit ?? new Prisma.Decimal(0);
+
+    switch (account.type) {
+      case AccountType.ASSET: {
+        const balance = debit.minus(credit);
+        if (!balance.equals(0)) {
+          assets.push({
+            accountId: account.id,
+            accountCode: account.code,
+            accountName: account.name,
+            balance,
+          });
+        }
+        break;
+      }
+      case AccountType.LIABILITY: {
+        const balance = credit.minus(debit);
+        if (!balance.equals(0)) {
+          liabilities.push({
+            accountId: account.id,
+            accountCode: account.code,
+            accountName: account.name,
+            balance,
+          });
+        }
+        break;
+      }
+      case AccountType.EQUITY: {
+        const balance = credit.minus(debit);
+        if (!balance.equals(0)) {
+          equity.push({
+            accountId: account.id,
+            accountCode: account.code,
+            accountName: account.name,
+            balance,
+          });
+        }
+        break;
+      }
+      case AccountType.REVENUE: {
+        revenueNatural = revenueNatural.plus(credit).minus(debit);
+        break;
+      }
+      case AccountType.EXPENSE: {
+        expenseNatural = expenseNatural.plus(debit).minus(credit);
+        break;
+      }
+    }
+  }
+
+  assets.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+  liabilities.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+  equity.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+
+  const assetsTotal = assets.reduce(
+    (acc, r) => acc.plus(r.balance),
+    new Prisma.Decimal(0),
+  );
+  const liabilitiesTotal = liabilities.reduce(
+    (acc, r) => acc.plus(r.balance),
+    new Prisma.Decimal(0),
+  );
+  const equityRowsTotal = equity.reduce(
+    (acc, r) => acc.plus(r.balance),
+    new Prisma.Decimal(0),
+  );
+  const currentPeriodEarnings = revenueNatural.minus(expenseNatural);
+  const equityTotal = equityRowsTotal.plus(currentPeriodEarnings);
+  const totalLiabilitiesAndEquity = liabilitiesTotal.plus(equityTotal);
+  const imbalance = assetsTotal.minus(totalLiabilitiesAndEquity);
+
+  return {
+    asOf,
+    assets: { rows: assets, total: assetsTotal },
+    liabilities: { rows: liabilities, total: liabilitiesTotal },
+    equity: { rows: equity, currentPeriodEarnings, total: equityTotal },
+    totalLiabilitiesAndEquity,
+    imbalance,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// incomeStatement (slice C)
+// ---------------------------------------------------------------------------
+
+export type IncomeStatementFilters = {
+  from?: Date;
+  to: Date;
+};
+
+export type IncomeStatementRow = {
+  accountId: string;
+  accountCode: string;
+  accountName: string;
+  // Natural-sign activity in [from, to). Revenue: Cr − Dr (positive =
+  // income). Expense: Dr − Cr (positive = expense). Negative values
+  // are correct accounting (e.g., a return JE that DRs revenue shows
+  // as negative revenue activity, which is the right portrayal).
+  amount: Prisma.Decimal;
+};
+
+export type IncomeStatementSection = {
+  rows: IncomeStatementRow[];
+  total: Prisma.Decimal;
+};
+
+export type IncomeStatementReport = {
+  asOfFrom: Date | null;
+  asOfTo: Date;
+  revenue: IncomeStatementSection;
+  expenses: IncomeStatementSection;
+  netIncome: Prisma.Decimal; // revenue.total − expenses.total
+};
+
+/**
+ * Period Income Statement (Revenue − Expenses) for [from, to). Half-
+ * open window; `from` may be omitted to mean "since system inception."
+ *
+ * Excludes accounts with zero activity in the window.
+ */
+export async function incomeStatement(
+  db: PrismaClient,
+  filters: IncomeStatementFilters,
+): Promise<IncomeStatementReport> {
+  const { from, to } = filters;
+
+  const aggs = await db.journalEntryLine.groupBy({
+    by: ['accountId'],
+    where: {
+      journalEntry: {
+        postedAt: { ...(from ? { gte: from } : {}), lt: to },
+        deletedAt: null,
+      },
+    },
+    _sum: { debit: true, credit: true },
+  });
+
+  if (aggs.length === 0) {
+    return {
+      asOfFrom: from ?? null,
+      asOfTo: to,
+      revenue: { rows: [], total: new Prisma.Decimal(0) },
+      expenses: { rows: [], total: new Prisma.Decimal(0) },
+      netIncome: new Prisma.Decimal(0),
+    };
+  }
+
+  // Restrict to revenue/expense accounts only — no need to fetch ASSET/
+  // LIABILITY/EQUITY accounts for the IS.
+  const accountIds = aggs.map((a) => a.accountId);
+  const accounts = await db.glAccount.findMany({
+    where: {
+      id: { in: accountIds },
+      type: { in: [AccountType.REVENUE, AccountType.EXPENSE] },
+    },
+    select: { id: true, code: true, name: true, type: true },
+  });
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+
+  const revenue: IncomeStatementRow[] = [];
+  const expenses: IncomeStatementRow[] = [];
+
+  for (const agg of aggs) {
+    const account = accountById.get(agg.accountId);
+    if (!account) continue; // not a revenue/expense account — skip
+    const debit = agg._sum.debit ?? new Prisma.Decimal(0);
+    const credit = agg._sum.credit ?? new Prisma.Decimal(0);
+
+    if (account.type === AccountType.REVENUE) {
+      const amount = credit.minus(debit);
+      if (!amount.equals(0)) {
+        revenue.push({
+          accountId: account.id,
+          accountCode: account.code,
+          accountName: account.name,
+          amount,
+        });
+      }
+    } else if (account.type === AccountType.EXPENSE) {
+      const amount = debit.minus(credit);
+      if (!amount.equals(0)) {
+        expenses.push({
+          accountId: account.id,
+          accountCode: account.code,
+          accountName: account.name,
+          amount,
+        });
+      }
+    }
+  }
+
+  revenue.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+  expenses.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+
+  const revenueTotal = revenue.reduce(
+    (acc, r) => acc.plus(r.amount),
+    new Prisma.Decimal(0),
+  );
+  const expensesTotal = expenses.reduce(
+    (acc, r) => acc.plus(r.amount),
+    new Prisma.Decimal(0),
+  );
+  const netIncome = revenueTotal.minus(expensesTotal);
+
+  return {
+    asOfFrom: from ?? null,
+    asOfTo: to,
+    revenue: { rows: revenue, total: revenueTotal },
+    expenses: { rows: expenses, total: expensesTotal },
+    netIncome,
+  };
 }

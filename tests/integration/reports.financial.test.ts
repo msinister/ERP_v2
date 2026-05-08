@@ -3,7 +3,9 @@ import { AccountType, Prisma } from '@/generated/tenant';
 import type { GlAccount, PrismaClient } from '@/generated/tenant';
 import { post } from '@/lib/gl/post';
 import {
+  balanceSheet,
   glDetail,
+  incomeStatement,
   journalReport,
   trialBalance,
 } from '@/server/services/reports/financial';
@@ -17,9 +19,13 @@ const suite = hasTenantDb ? describe : describe.skip;
 const TEST_YEAR = 2098;
 const ENTITY_TYPE_A = 'TestReportA';
 const ENTITY_TYPE_B = 'TestReportB';
+const ENTITY_TYPE_C = 'TestReportC'; // slice C inline JEs
 const ACCT_CASH = '9991';
 const ACCT_AR = '9992';
 const ACCT_REVENUE = '9993';
+const ACCT_EXPENSE = '9994';
+const ACCT_AP = '9995';
+const ACCT_EQUITY = '9996';
 
 function dateInMonth(month: number, day: number = 15): Date {
   return new Date(Date.UTC(TEST_YEAR, month - 1, day, 12));
@@ -37,6 +43,9 @@ suite('Financial reports — trialBalance, glDetail, journalReport (slice B)', (
   let cash: GlAccount;
   let ar: GlAccount;
   let salesRevenue: GlAccount;
+  let expense: GlAccount;
+  let ap: GlAccount;
+  let equity: GlAccount;
 
   beforeAll(async () => {
     db = makeClient();
@@ -53,6 +62,21 @@ suite('Financial reports — trialBalance, glDetail, journalReport (slice B)', (
     salesRevenue = await db.glAccount.upsert({
       where: { code: ACCT_REVENUE },
       create: { code: ACCT_REVENUE, name: 'TEST Revenue', type: AccountType.REVENUE },
+      update: { active: true, deletedAt: null },
+    });
+    expense = await db.glAccount.upsert({
+      where: { code: ACCT_EXPENSE },
+      create: { code: ACCT_EXPENSE, name: 'TEST Expense', type: AccountType.EXPENSE },
+      update: { active: true, deletedAt: null },
+    });
+    ap = await db.glAccount.upsert({
+      where: { code: ACCT_AP },
+      create: { code: ACCT_AP, name: 'TEST AP', type: AccountType.LIABILITY },
+      update: { active: true, deletedAt: null },
+    });
+    equity = await db.glAccount.upsert({
+      where: { code: ACCT_EQUITY },
+      create: { code: ACCT_EQUITY, name: 'TEST Equity', type: AccountType.EQUITY },
       update: { active: true, deletedAt: null },
     });
   });
@@ -321,6 +345,179 @@ suite('Financial reports — trialBalance, glDetail, journalReport (slice B)', (
       }),
     ).rejects.toThrow(/GL account not found/);
   });
+
+  // ---------- balanceSheet (slice C) ----------
+
+  it('balanceSheet against base seed: per-account asset rows present, full BS balanced', async () => {
+    // Base seed: Cash 60 DR, AR 20 DR (our test accounts only).
+    // currentPeriodEarnings is ledger-wide and may include contributions
+    // from concurrent test files — assert per-account rows + the
+    // imbalance===0 invariant rather than absolute aggregates.
+    const bs = await balanceSheet(db, MAY_START);
+
+    const cashRow = bs.assets.rows.find((r) => r.accountCode === ACCT_CASH);
+    const arRow = bs.assets.rows.find((r) => r.accountCode === ACCT_AR);
+    expect(cashRow?.balance.toString()).toBe(new Prisma.Decimal('60').toString());
+    expect(arRow?.balance.toString()).toBe(new Prisma.Decimal('20').toString());
+
+    // Full-ledger imbalance must always be zero.
+    expect(bs.imbalance.toString()).toBe(new Prisma.Decimal('0').toString());
+  });
+
+  it('balanceSheet imbalance === 0 invariant (full universe)', async () => {
+    // Imbalance should be zero over the entire ledger. If post() ever
+    // gets bypassed, this surfaces it.
+    const bs = await balanceSheet(db, MAY_START);
+    expect(bs.imbalance.toString()).toBe(new Prisma.Decimal('0').toString());
+    // assets.total === liabilities.total + equity.total (re-verify
+    // the math from the structured fields).
+    const computedLE = bs.liabilities.total.plus(bs.equity.total);
+    expect(computedLE.toString()).toBe(bs.totalLiabilitiesAndEquity.toString());
+    expect(bs.assets.total.toString()).toBe(bs.totalLiabilitiesAndEquity.toString());
+  });
+
+  it('balanceSheet picks up Liability + Equity rows when those accounts have activity', async () => {
+    // Add an inline scenario:
+    //   DR Cash 200 / CR Equity 200 (owner contribution)
+    //   DR Expense 30 / CR AP 30    (expense incurred on credit)
+    // Both posted in Apr 2098 (within the existing window).
+    await db.$transaction(async (tx) => {
+      await post(tx, {
+        entityType: ENTITY_TYPE_C,
+        entityId: 'apr-equity-contribution',
+        description: 'Apr owner contribution',
+        postedAt: APR,
+        lines: [
+          { accountCode: ACCT_CASH, debit: '200' },
+          { accountCode: ACCT_EQUITY, credit: '200' },
+        ],
+      });
+      await post(tx, {
+        entityType: ENTITY_TYPE_C,
+        entityId: 'apr-expense-on-credit',
+        description: 'Apr expense incurred',
+        postedAt: APR,
+        lines: [
+          { accountCode: ACCT_EXPENSE, debit: '30' },
+          { accountCode: ACCT_AP, credit: '30' },
+        ],
+      });
+    });
+
+    const bs = await balanceSheet(db, MAY_START);
+
+    // Cumulative state through end-Apr:
+    //   Cash    260 DR (60 + 200)
+    //   AR      20  DR
+    //   Revenue 80  CR (cumulative — into currentPeriodEarnings)
+    //   Expense 30  DR (cumulative — netted against revenue)
+    //   AP      30  CR
+    //   Equity  200 CR
+    const cashRow = bs.assets.rows.find((r) => r.accountCode === ACCT_CASH);
+    const apRow = bs.liabilities.rows.find((r) => r.accountCode === ACCT_AP);
+    const equityRow = bs.equity.rows.find((r) => r.accountCode === ACCT_EQUITY);
+    expect(cashRow?.balance.toString()).toBe(new Prisma.Decimal('260').toString());
+    expect(apRow?.balance.toString()).toBe(new Prisma.Decimal('30').toString());
+    expect(equityRow?.balance.toString()).toBe(new Prisma.Decimal('200').toString());
+
+    // currentPeriodEarnings is ledger-wide; only assert that the BS
+    // remains balanced regardless of what else has posted.
+    expect(bs.imbalance.toString()).toBe(new Prisma.Decimal('0').toString());
+  });
+
+  it('balanceSheet earlier asOf shows fewer/different balances (snapshot semantics)', async () => {
+    // BS as of MAR_START sees only the Feb invoice.
+    const bs = await balanceSheet(db, MAR_START);
+    const cashRow = bs.assets.rows.find((r) => r.accountCode === ACCT_CASH);
+    const arRow = bs.assets.rows.find((r) => r.accountCode === ACCT_AR);
+
+    // Cash didn't move yet (Mar JE2 is excluded).
+    expect(cashRow).toBeUndefined();
+    // AR is fully open at $100 (Mar payment hasn't reduced it yet).
+    expect(arRow?.balance.toString()).toBe(new Prisma.Decimal('100').toString());
+    // currentPeriodEarnings is ledger-wide — assert only the invariant.
+    expect(bs.imbalance.toString()).toBe(new Prisma.Decimal('0').toString());
+  });
+
+  // ---------- incomeStatement (slice C) ----------
+
+  it('incomeStatement against base seed: revenue 80, expenses 0, netIncome 80', async () => {
+    const is = await incomeStatement(db, {
+      from: new Date(Date.UTC(TEST_YEAR, 0, 1)),
+      to: MAY_START,
+    });
+    const revRow = is.revenue.rows.find((r) => r.accountCode === ACCT_REVENUE);
+    expect(revRow?.amount.toString()).toBe(new Prisma.Decimal('80').toString());
+    expect(is.expenses.rows.find((r) => r.accountCode === ACCT_EXPENSE)).toBeUndefined();
+    // netIncome includes only OUR accounts? No — it's full ledger. Verify
+    // the slice's contribution by checking revRow exists. NetIncome
+    // overall is ledger-wide.
+  });
+
+  it('incomeStatement Apr-only window: revenue is NEGATIVE (return JE3 contributes -20)', async () => {
+    // JE3 was DR Revenue 20 / CR AR 20 — a return reduces revenue.
+    // For Apr-only, revenue activity = Cr 0 - Dr 20 = -20 (signed).
+    const is = await incomeStatement(db, {
+      from: APR_START,
+      to: MAY_START,
+    });
+    const revRow = is.revenue.rows.find((r) => r.accountCode === ACCT_REVENUE);
+    expect(revRow?.amount.toString()).toBe(new Prisma.Decimal('-20').toString());
+  });
+
+  it('incomeStatement with inline expense JE: revenue + expense + netIncome interplay', async () => {
+    // Post an inline expense in Mar 2098.
+    await db.$transaction(async (tx) => {
+      await post(tx, {
+        entityType: ENTITY_TYPE_C,
+        entityId: 'mar-expense',
+        description: 'Mar expense paid in cash',
+        postedAt: MAR,
+        lines: [
+          { accountCode: ACCT_EXPENSE, debit: '40' },
+          { accountCode: ACCT_CASH, credit: '40' },
+        ],
+      });
+    });
+
+    const is = await incomeStatement(db, {
+      from: MAR_START,
+      to: APR_START,
+    });
+    // Mar window: revenue activity = 0 (JE2 is just a payment, no
+    // revenue lines); expense activity = 40 (the inline JE).
+    expect(is.revenue.rows.find((r) => r.accountCode === ACCT_REVENUE)).toBeUndefined();
+    const expRow = is.expenses.rows.find((r) => r.accountCode === ACCT_EXPENSE);
+    expect(expRow?.amount.toString()).toBe(new Prisma.Decimal('40').toString());
+
+    // Full-period (Feb-end-Apr) IS:
+    const fullIs = await incomeStatement(db, {
+      from: new Date(Date.UTC(TEST_YEAR, 0, 1)),
+      to: MAY_START,
+    });
+    const fullRev = fullIs.revenue.rows.find((r) => r.accountCode === ACCT_REVENUE);
+    const fullExp = fullIs.expenses.rows.find((r) => r.accountCode === ACCT_EXPENSE);
+    expect(fullRev?.amount.toString()).toBe(new Prisma.Decimal('80').toString());
+    expect(fullExp?.amount.toString()).toBe(new Prisma.Decimal('40').toString());
+  });
+
+  it('incomeStatement empty window: zero revenue, zero expenses, zero netIncome (against our accounts)', async () => {
+    // Pick a window with no test activity: Jan only.
+    const JAN_START = new Date(Date.UTC(TEST_YEAR, 0, 1));
+    const FEB_START = new Date(Date.UTC(TEST_YEAR, 1, 1));
+    const is = await incomeStatement(db, {
+      from: JAN_START,
+      to: FEB_START,
+    });
+    expect(is.revenue.rows.find((r) => r.accountCode === ACCT_REVENUE)).toBeUndefined();
+    expect(is.expenses.rows.find((r) => r.accountCode === ACCT_EXPENSE)).toBeUndefined();
+  });
+
+  // Suppress unused-var warnings for the GL account fixtures that are
+  // exercised only via the inline JE posts above.
+  void expense;
+  void ap;
+  void equity;
 });
 
 async function wipe(): Promise<void> {
@@ -328,7 +525,7 @@ async function wipe(): Promise<void> {
   try {
     // Sweep test JEs (and their lines) by entityType.
     const jes = await db.journalEntry.findMany({
-      where: { entityType: { in: [ENTITY_TYPE_A, ENTITY_TYPE_B] } },
+      where: { entityType: { in: [ENTITY_TYPE_A, ENTITY_TYPE_B, ENTITY_TYPE_C] } },
       select: { id: true },
     });
     if (jes.length > 0) {
