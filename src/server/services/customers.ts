@@ -298,27 +298,59 @@ export type CustomerListFilters = {
   take?: number;
 };
 
+// Internal where-clause builder shared by listCustomers + listCustomersPaged
+// so the two stay byte-identical on filter semantics.
+function customerWhere(
+  filters: Omit<CustomerListFilters, 'skip' | 'take'>,
+): Prisma.CustomerWhereInput {
+  const { active, type, salesRepId, tagId, categoryId, q } = filters;
+  return {
+    deletedAt: null,
+    ...(active !== undefined ? { active } : {}),
+    ...(type ? { type } : {}),
+    ...(salesRepId ? { salesRepId } : {}),
+    ...(tagId ? { tags: { some: { tagId } } } : {}),
+    ...(categoryId ? { categories: { some: { categoryId } } } : {}),
+    // CITEXT is only case-insensitive for equality, not LIKE; use Prisma's
+    // mode: 'insensitive' which produces ILIKE on Postgres.
+    ...(q ? { name: { contains: q, mode: 'insensitive' as const } } : {}),
+  };
+}
+
 export async function listCustomers(
   db: PrismaClient,
   filters: CustomerListFilters = {},
 ): Promise<Customer[]> {
-  const { skip = 0, take = 100, active, type, salesRepId, tagId, categoryId, q } = filters;
+  const { skip = 0, take = 100, ...rest } = filters;
   return db.customer.findMany({
-    where: {
-      deletedAt: null,
-      ...(active !== undefined ? { active } : {}),
-      ...(type ? { type } : {}),
-      ...(salesRepId ? { salesRepId } : {}),
-      ...(tagId ? { tags: { some: { tagId } } } : {}),
-      ...(categoryId ? { categories: { some: { categoryId } } } : {}),
-      // CITEXT is only case-insensitive for equality, not LIKE; use Prisma's
-      // mode: 'insensitive' which produces ILIKE on Postgres.
-      ...(q ? { name: { contains: q, mode: 'insensitive' as const } } : {}),
-    },
+    where: customerWhere(rest),
     orderBy: { createdAt: 'desc' },
     skip,
     take,
   });
+}
+
+/**
+ * Paginated variant. Returns the page of rows plus the unfiltered-by-
+ * pagination total so callers can render "X of Y" + page links without
+ * a second round-trip. Same filter semantics as listCustomers.
+ */
+export async function listCustomersPaged(
+  db: PrismaClient,
+  filters: CustomerListFilters = {},
+): Promise<{ rows: Customer[]; total: number }> {
+  const { skip = 0, take = 100, ...rest } = filters;
+  const where = customerWhere(rest);
+  const [rows, total] = await Promise.all([
+    db.customer.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take,
+    }),
+    db.customer.count({ where }),
+  ]);
+  return { rows, total };
 }
 
 /**

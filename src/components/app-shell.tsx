@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { SidebarNav } from '@/components/sidebar-nav';
 import { UserMenu } from '@/components/user-menu';
+import { Toaster } from '@/components/ui/sonner';
 import type { AuthedUser } from '@/lib/auth/getCurrentUser';
 
 export function AppShell({
@@ -77,6 +78,9 @@ export function AppShell({
         </header>
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>
+      {/* Global toast outlet — mounted once at the shell level so any
+          page or client component can call toast() and have it render. */}
+      <Toaster richColors position="top-right" />
     </div>
   );
 }
