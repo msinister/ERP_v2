@@ -1,12 +1,22 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 
-// Minimal login form. No styling polish, no remember-me, no forgot-
-// password — those flows land alongside Mailgun integration in a
-// future slice. The only goal here is to unblock GUI work: a working
-// session cookie after a successful POST.
+// Minimal login form. No remember-me, no forgot-password — those flows
+// land alongside Mailgun integration in a future slice. The only goal
+// here is to unblock GUI work: a working session cookie after a
+// successful POST.
 
 type LoginErrorBody = { error?: string; message?: string };
 
@@ -20,7 +30,6 @@ async function readErrorMessage(res: Response): Promise<string> {
 }
 
 export default function LoginPage() {
-  const router = useRouter();
   const params = useSearchParams();
   const next = params.get('next') ?? '/';
   const [email, setEmail] = useState('');
@@ -43,8 +52,8 @@ export default function LoginPage() {
         return;
       }
       // BetterAuth sets the session cookie on the success response.
-      // Use a hard navigation so server components reload with the
-      // new cookie (router.push wouldn't re-run RSC layouts).
+      // Hard navigation so server components reload with the new
+      // cookie (router.push wouldn't re-run RSC layouts).
       window.location.assign(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Network error');
@@ -54,44 +63,50 @@ export default function LoginPage() {
   }
 
   return (
-    <main style={{ maxWidth: 360, margin: '4rem auto', padding: '0 1rem' }}>
-      <h1>Sign in</h1>
-      <form onSubmit={onSubmit}>
-        <label style={{ display: 'block', marginTop: '1rem' }}>
-          Email
-          <input
-            type="email"
-            autoComplete="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            style={{ display: 'block', width: '100%', marginTop: '0.25rem' }}
-          />
-        </label>
-        <label style={{ display: 'block', marginTop: '1rem' }}>
-          Password
-          <input
-            type="password"
-            autoComplete="current-password"
-            required
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={{ display: 'block', width: '100%', marginTop: '0.25rem' }}
-          />
-        </label>
-        {error ? (
-          <p role="alert" style={{ color: 'crimson', marginTop: '1rem' }}>
-            {error}
-          </p>
-        ) : null}
-        <button
-          type="submit"
-          disabled={pending}
-          style={{ marginTop: '1.5rem', padding: '0.5rem 1rem' }}
-        >
-          {pending ? 'Signing in…' : 'Sign in'}
-        </button>
-      </form>
+    <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle className="text-xl">Sign in</CardTitle>
+          <CardDescription>Access the ERP dashboard.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                autoComplete="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+            {error ? (
+              <p
+                role="alert"
+                className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+              >
+                {error}
+              </p>
+            ) : null}
+            <Button type="submit" disabled={pending} className="w-full">
+              {pending ? 'Signing in…' : 'Sign in'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </main>
   );
 }
