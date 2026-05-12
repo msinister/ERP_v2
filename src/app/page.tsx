@@ -1,3 +1,7 @@
-export default function HomePage() {
-  return <main>ERP — bootstrapped</main>;
+import { redirect } from 'next/navigation';
+import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+
+export default async function HomePage() {
+  const user = await getCurrentUser();
+  redirect(user ? '/dashboard' : '/login');
 }
