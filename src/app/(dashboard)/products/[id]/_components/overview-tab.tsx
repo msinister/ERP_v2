@@ -46,10 +46,22 @@ export function OverviewTab({ product }: { product: Product }) {
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm md:grid-cols-4">
-            <Row label="Weight" value={formatMeasure(product.weight)} />
-            <Row label="Length" value={formatMeasure(product.lengthDim)} />
-            <Row label="Width" value={formatMeasure(product.widthDim)} />
-            <Row label="Height" value={formatMeasure(product.heightDim)} />
+            <Row
+              label="Weight"
+              value={formatMeasure(product.weight, product.weightUnit)}
+            />
+            <Row
+              label="Length"
+              value={formatMeasure(product.lengthDim, product.dimensionUnit)}
+            />
+            <Row
+              label="Width"
+              value={formatMeasure(product.widthDim, product.dimensionUnit)}
+            />
+            <Row
+              label="Height"
+              value={formatMeasure(product.heightDim, product.dimensionUnit)}
+            />
           </dl>
         </CardContent>
       </Card>
@@ -78,13 +90,12 @@ function Row({
 
 function formatMeasure(
   d: { toString: () => string } | null,
+  unit: string | null,
 ): string {
   if (d == null) return '—';
-  // Units aren't stored on the product — display the raw number until
-  // we land a units column. Strip trailing zeros for readability.
   const s = d.toString();
-  if (!s.includes('.')) return s;
-  return s.replace(/\.?0+$/, '');
+  const trimmed = s.includes('.') ? s.replace(/\.?0+$/, '') : s;
+  return unit ? `${trimmed} ${unit}` : trimmed;
 }
 
 function formatDate(d: Date): string {

@@ -283,9 +283,11 @@ model Product {
   tracksInventory  Boolean     @default(true)
   basePrice        Decimal?    @db.Decimal(18, 5)
   weight           Decimal?    @db.Decimal(18, 5)
+  weightUnit       String?     @default("lb")
   lengthDim        Decimal?    @db.Decimal(18, 5)
   widthDim         Decimal?    @db.Decimal(18, 5)
   heightDim        Decimal?    @db.Decimal(18, 5)
+  dimensionUnit    String?     @default("in")
   shopifyProductId String?
   active           Boolean     @default(true)
   deletedAt        DateTime?

@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { decimalString } from './common';
 
+export const weightUnitSchema = z.enum(['oz', 'lb', 'kg', 'g']);
+export const dimensionUnitSchema = z.enum(['in', 'mm', 'cm']);
+
 export const productCreateSchema = z.object({
   sku: z.string().min(1).max(64),
   name: z.string().min(1).max(255),
@@ -12,9 +15,11 @@ export const productCreateSchema = z.object({
   tracksInventory: z.boolean().default(true),
   basePrice: decimalString.optional(),
   weight: decimalString.optional(),
+  weightUnit: weightUnitSchema.optional(),
   lengthDim: decimalString.optional(),
   widthDim: decimalString.optional(),
   heightDim: decimalString.optional(),
+  dimensionUnit: dimensionUnitSchema.optional(),
   shopifyProductId: z.string().optional(),
   active: z.boolean().default(true),
 });
