@@ -1,0 +1,96 @@
+import type { Product } from '@/generated/tenant';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { formatCurrency } from '@/lib/format';
+import { TabShell } from './tab-shell';
+
+export function OverviewTab({ product }: { product: Product }) {
+  return (
+    <TabShell>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Catalog</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm md:grid-cols-2">
+            <Row label="Base price" value={
+              product.basePrice != null ? formatCurrency(product.basePrice) : '—'
+            } />
+            <Row label="Tracks inventory" value={product.tracksInventory ? 'Yes' : 'No'} />
+            <Row label="Shopify product ID" value={product.shopifyProductId ?? '—'} mono={!!product.shopifyProductId} />
+            <Row label="Last updated" value={formatDate(product.updatedAt)} />
+          </dl>
+        </CardContent>
+      </Card>
+
+      {product.shortDescription || product.longDescription ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Description</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {product.shortDescription ? (
+              <p className="text-sm font-medium">{product.shortDescription}</p>
+            ) : null}
+            {product.longDescription ? (
+              <p className="whitespace-pre-line text-sm text-muted-foreground">
+                {product.longDescription}
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Dimensions &amp; weight</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm md:grid-cols-4">
+            <Row label="Weight" value={formatMeasure(product.weight)} />
+            <Row label="Length" value={formatMeasure(product.lengthDim)} />
+            <Row label="Width" value={formatMeasure(product.widthDim)} />
+            <Row label="Height" value={formatMeasure(product.heightDim)} />
+          </dl>
+        </CardContent>
+      </Card>
+    </TabShell>
+  );
+}
+
+function Row({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="space-y-0.5">
+      <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+        {label}
+      </dt>
+      <dd className={mono ? 'font-mono text-sm' : 'text-sm'}>{value}</dd>
+    </div>
+  );
+}
+
+function formatMeasure(
+  d: { toString: () => string } | null,
+): string {
+  if (d == null) return '—';
+  // Units aren't stored on the product — display the raw number until
+  // we land a units column. Strip trailing zeros for readability.
+  const s = d.toString();
+  if (!s.includes('.')) return s;
+  return s.replace(/\.?0+$/, '');
+}
+
+function formatDate(d: Date): string {
+  return d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
