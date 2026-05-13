@@ -1,0 +1,840 @@
+'use client';
+
+import { useEffect, useMemo, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import {
+  Controller,
+  useFieldArray,
+  useForm,
+  type UseFormReturn,
+} from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { toast } from 'sonner';
+import { Plus, Trash2 } from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
+import { formatCurrency } from '@/lib/format';
+
+// ===========================================================================
+// Lookup option shapes (kept narrow so the server fetches stay shallow)
+// ===========================================================================
+
+export type CustomerOption = { id: string; code: string; name: string };
+export type WarehouseOption = { id: string; code: string; name: string };
+export type VariantOption = {
+  id: string;
+  sku: string;
+  variantName: string | null;
+  productName: string;
+  basePrice: string | null;
+};
+
+// ===========================================================================
+// Form schema — mirrors createSalesOrderInputSchema's shape but uses
+// '' as the carrier for "no value" instead of undefined, because
+// RHF + native inputs always produce strings.
+// ===========================================================================
+
+const decimalStr = z
+  .union([
+    z.literal(''),
+    z.string().regex(/^\d+(\.\d+)?$/, 'Must be a non-negative decimal'),
+  ])
+  .optional();
+
+const percentStr = z
+  .union([
+    z.literal(''),
+    z.string().regex(/^\d+(\.\d+)?$/, 'Must be a number'),
+  ])
+  .optional();
+
+const qtyStr = z
+  .string()
+  .min(1, 'Required')
+  .regex(/^\d+(\.\d+)?$/, 'Must be a non-negative decimal')
+  .refine((v) => Number(v) > 0, 'Must be greater than 0');
+
+const lineSchema = z
+  .object({
+    variantId: z.string().min(1, 'Required'),
+    qtyOrdered: qtyStr,
+    manualUnitPrice: decimalStr,
+    discountPercent: percentStr,
+    discountAmount: decimalStr,
+    customerNote: z.string().max(2000).optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.discountPercent && data.discountAmount) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['discountAmount'],
+        message: 'Set % or $, not both',
+      });
+    }
+  });
+
+const formSchema = z
+  .object({
+    customerId: z.string().min(1, 'Required'),
+    warehouseId: z.string().min(1, 'Required'),
+    customerPo: z.string().max(255).optional(),
+    promisedShipDate: z
+      .union([
+        z.literal(''),
+        z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
+      ])
+      .optional(),
+    shippingAddress: z.string().max(2000).optional(),
+    customerNotes: z.string().max(2000).optional(),
+    internalNotes: z.string().max(2000).optional(),
+    orderDiscountPercent: percentStr,
+    orderDiscountAmount: decimalStr,
+    shippingAmount: decimalStr,
+    handlingAmount: decimalStr,
+    lines: z
+      .array(lineSchema)
+      .min(1, 'At least one line is required'),
+  })
+  .superRefine((data, ctx) => {
+    if (data.orderDiscountPercent && data.orderDiscountAmount) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['orderDiscountAmount'],
+        message: 'Set % or $, not both',
+      });
+    }
+  });
+
+export type OrderFormValues = z.infer<typeof formSchema>;
+
+export type OrderFormMode =
+  | { kind: 'create' }
+  | { kind: 'edit'; salesOrderId: string };
+
+const DEFAULT_VALUES: OrderFormValues = {
+  customerId: '',
+  warehouseId: '',
+  customerPo: '',
+  promisedShipDate: '',
+  shippingAddress: '',
+  customerNotes: '',
+  internalNotes: '',
+  orderDiscountPercent: '',
+  orderDiscountAmount: '',
+  shippingAmount: '',
+  handlingAmount: '',
+  lines: [emptyLine()],
+};
+
+function emptyLine(): OrderFormValues['lines'][number] {
+  return {
+    variantId: '',
+    qtyOrdered: '1',
+    manualUnitPrice: '',
+    discountPercent: '',
+    discountAmount: '',
+    customerNote: '',
+  };
+}
+
+function nullEmpty(v: string | undefined): string | undefined {
+  if (v == null) return undefined;
+  const trimmed = v.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+type ApiErrorBody = {
+  error?: string;
+  issues?: Array<{ path?: Array<string | number>; message?: string }>;
+};
+
+async function readApiError(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as ApiErrorBody;
+    if (body.issues?.length) {
+      const issue = body.issues[0];
+      const path = issue.path?.length ? issue.path.join('.') + ': ' : '';
+      return `${path}${issue.message ?? 'validation error'}`;
+    }
+    return body.error ?? `Request failed (${res.status})`;
+  } catch {
+    return `Request failed (${res.status})`;
+  }
+}
+
+// ===========================================================================
+// Form
+// ===========================================================================
+
+export function OrderForm({
+  mode,
+  customers,
+  warehouses,
+  variants,
+  defaultValues,
+}: {
+  mode: OrderFormMode;
+  customers: CustomerOption[];
+  warehouses: WarehouseOption[];
+  variants: VariantOption[];
+  defaultValues?: Partial<OrderFormValues>;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+
+  const form = useForm<OrderFormValues>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      ...DEFAULT_VALUES,
+      // Pilot: one warehouse. Pre-select it so the operator doesn't
+      // have to. If/when there are multiple, the default falls through.
+      warehouseId:
+        warehouses.length === 1 ? warehouses[0].id : DEFAULT_VALUES.warehouseId,
+      ...defaultValues,
+    },
+  });
+
+  const {
+    register,
+    handleSubmit,
+    control,
+    watch,
+    formState: { errors },
+  } = form;
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: 'lines',
+  });
+
+  const customerId = watch('customerId');
+
+  function submit(values: OrderFormValues) {
+    startTransition(async () => {
+      const payload = {
+        customerId: values.customerId,
+        warehouseId: values.warehouseId,
+        customerPo: nullEmpty(values.customerPo),
+        promisedShipDate: nullEmpty(values.promisedShipDate),
+        shippingAddress: nullEmpty(values.shippingAddress),
+        customerNotes: nullEmpty(values.customerNotes),
+        internalNotes: nullEmpty(values.internalNotes),
+        orderDiscountPercent: nullEmpty(values.orderDiscountPercent),
+        orderDiscountAmount: nullEmpty(values.orderDiscountAmount),
+        shippingAmount: nullEmpty(values.shippingAmount),
+        handlingAmount: nullEmpty(values.handlingAmount),
+        lines: values.lines.map((l) => ({
+          variantId: l.variantId,
+          // Every line carries the SO-level warehouse for pilot. Multi-
+          // warehouse per-line lands in a later slice; the schema
+          // already supports it.
+          warehouseId: values.warehouseId,
+          qtyOrdered: l.qtyOrdered,
+          manualUnitPrice: nullEmpty(l.manualUnitPrice),
+          discountPercent: nullEmpty(l.discountPercent),
+          discountAmount: nullEmpty(l.discountAmount),
+          customerNote: nullEmpty(l.customerNote),
+        })),
+      };
+      try {
+        const endpoint =
+          mode.kind === 'create'
+            ? '/api/sales-orders'
+            : `/api/sales-orders/${mode.salesOrderId}`;
+        const method = mode.kind === 'create' ? 'POST' : 'PATCH';
+        // PATCH omits customerId — updateSalesOrderInputSchema doesn't
+        // accept it. Strip at the edge so the same payload shape works
+        // for both paths.
+        const body =
+          mode.kind === 'create'
+            ? payload
+            : (() => {
+                const { customerId: _c, ...rest } = payload;
+                void _c;
+                return rest;
+              })();
+        const res = await fetch(endpoint, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          toast.error(await readApiError(res));
+          return;
+        }
+        const saved = (await res.json()) as { id: string; number: string };
+        toast.success(
+          mode.kind === 'create'
+            ? `Created ${saved.number}`
+            : `Saved ${saved.number}`,
+        );
+        router.push(`/sales-orders/${saved.id}`);
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Network error');
+      }
+    });
+  }
+
+  const linesError = errors.lines?.message ?? errors.lines?.root?.message;
+
+  return (
+    <form onSubmit={handleSubmit(submit)} className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Customer &amp; warehouse</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Field>
+              <FieldLabel htmlFor="customerId">Customer</FieldLabel>
+              <Controller
+                control={control}
+                name="customerId"
+                render={({ field }) => (
+                  <Select
+                    value={field.value || undefined}
+                    onValueChange={field.onChange}
+                    disabled={mode.kind === 'edit'}
+                  >
+                    <SelectTrigger
+                      id="customerId"
+                      className="w-full"
+                      aria-invalid={!!errors.customerId}
+                    >
+                      <SelectValue placeholder="Select a customer" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {customers.length === 0 ? (
+                        <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                          No active customers — create one first.
+                        </div>
+                      ) : (
+                        customers.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            <span className="font-mono text-xs text-muted-foreground">
+                              {c.code}
+                            </span>{' '}
+                            {c.name}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+              <FieldError errors={[errors.customerId]} />
+            </Field>
+
+            <Field>
+              <FieldLabel htmlFor="warehouseId">Warehouse</FieldLabel>
+              <Controller
+                control={control}
+                name="warehouseId"
+                render={({ field }) => (
+                  <Select
+                    value={field.value || undefined}
+                    onValueChange={field.onChange}
+                    disabled={mode.kind === 'edit'}
+                  >
+                    <SelectTrigger
+                      id="warehouseId"
+                      className="w-full"
+                      aria-invalid={!!errors.warehouseId}
+                    >
+                      <SelectValue placeholder="Select a warehouse" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {warehouses.map((w) => (
+                        <SelectItem key={w.id} value={w.id}>
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {w.code}
+                          </span>{' '}
+                          {w.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+              <FieldError errors={[errors.warehouseId]} />
+            </Field>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Line items</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!customerId ? (
+            <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+              Pick a customer first — pricing depends on it.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {fields.map((field, index) => (
+                <LineRow
+                  key={field.id}
+                  form={form}
+                  index={index}
+                  customerId={customerId}
+                  variants={variants}
+                  canRemove={fields.length > 1}
+                  onRemove={() => remove(index)}
+                />
+              ))}
+              <div className="flex items-center justify-between gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => append(emptyLine())}
+                >
+                  <Plus />
+                  Add line
+                </Button>
+                {linesError ? (
+                  <span className="text-xs text-destructive">{linesError}</span>
+                ) : null}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Order details</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="customerPo">Customer PO</FieldLabel>
+                <Input id="customerPo" {...register('customerPo')} />
+                <FieldError errors={[errors.customerPo]} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="promisedShipDate">
+                  Promised ship date
+                </FieldLabel>
+                <Input
+                  id="promisedShipDate"
+                  type="date"
+                  {...register('promisedShipDate')}
+                />
+                <FieldError errors={[errors.promisedShipDate]} />
+              </Field>
+            </div>
+            <Field>
+              <FieldLabel htmlFor="shippingAddress">Ship-to address</FieldLabel>
+              <Textarea
+                id="shippingAddress"
+                rows={3}
+                placeholder="Free-text address. Customer addresses become a relation in a later slice."
+                {...register('shippingAddress')}
+              />
+              <FieldError errors={[errors.shippingAddress]} />
+            </Field>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="customerNotes">
+                  Customer notes (printed)
+                </FieldLabel>
+                <Textarea
+                  id="customerNotes"
+                  rows={3}
+                  {...register('customerNotes')}
+                />
+                <FieldError errors={[errors.customerNotes]} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="internalNotes">Internal notes</FieldLabel>
+                <Textarea
+                  id="internalNotes"
+                  rows={3}
+                  {...register('internalNotes')}
+                />
+                <FieldError errors={[errors.internalNotes]} />
+              </Field>
+            </div>
+          </FieldGroup>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Adjustments</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <Field>
+              <FieldLabel htmlFor="orderDiscountPercent">
+                Order discount %
+              </FieldLabel>
+              <Input
+                id="orderDiscountPercent"
+                inputMode="decimal"
+                placeholder="—"
+                {...register('orderDiscountPercent')}
+              />
+              <FieldError errors={[errors.orderDiscountPercent]} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="orderDiscountAmount">
+                Order discount $
+              </FieldLabel>
+              <Input
+                id="orderDiscountAmount"
+                inputMode="decimal"
+                placeholder="—"
+                {...register('orderDiscountAmount')}
+              />
+              <FieldError errors={[errors.orderDiscountAmount]} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="shippingAmount">Shipping</FieldLabel>
+              <Input
+                id="shippingAmount"
+                inputMode="decimal"
+                placeholder="—"
+                {...register('shippingAmount')}
+              />
+              <FieldError errors={[errors.shippingAmount]} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="handlingAmount">Handling</FieldLabel>
+              <Input
+                id="handlingAmount"
+                inputMode="decimal"
+                placeholder="—"
+                {...register('handlingAmount')}
+              />
+              <FieldError errors={[errors.handlingAmount]} />
+            </Field>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="flex items-center justify-end gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={pending}
+          render={
+            <Link
+              href={
+                mode.kind === 'create'
+                  ? '/sales-orders'
+                  : `/sales-orders/${mode.salesOrderId}`
+              }
+            />
+          }
+        >
+          Cancel
+        </Button>
+        <Button type="submit" size="sm" disabled={pending}>
+          {pending
+            ? 'Saving…'
+            : mode.kind === 'create'
+              ? 'Create draft'
+              : 'Save changes'}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+// ===========================================================================
+// Per-line subcomponent: owns its own live pricing-preview state. Re-runs
+// the resolve when customer / variant / qty / manualUnitPrice changes
+// (debounced to avoid hammering the endpoint while the operator types).
+// ===========================================================================
+
+type LinePriceResolve = {
+  unitPrice: string;
+  rule: string;
+  discountPercent: string | null;
+};
+
+function LineRow({
+  form,
+  index,
+  customerId,
+  variants,
+  canRemove,
+  onRemove,
+}: {
+  form: UseFormReturn<OrderFormValues>;
+  index: number;
+  customerId: string;
+  variants: VariantOption[];
+  canRemove: boolean;
+  onRemove: () => void;
+}) {
+  const {
+    register,
+    control,
+    watch,
+    formState: { errors },
+  } = form;
+
+  const variantId = watch(`lines.${index}.variantId`);
+  const qty = watch(`lines.${index}.qtyOrdered`);
+  const manualUnitPrice = watch(`lines.${index}.manualUnitPrice`);
+
+  const [resolved, setResolved] = useState<LinePriceResolve | null>(null);
+  const [resolving, setResolving] = useState(false);
+
+  // Debounced resolve. The endpoint is cheap (a few reads) but
+  // operators type fast; 200ms tames the burst without feeling slow.
+  useEffect(() => {
+    if (!customerId || !variantId || !qty) {
+      setResolved(null);
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      const params = new URLSearchParams({
+        customerId,
+        variantId,
+        qty,
+      });
+      if (manualUnitPrice) params.set('manualUnitPrice', manualUnitPrice);
+      setResolving(true);
+      fetch(`/api/pricing/resolve?${params.toString()}`)
+        .then(async (res) => {
+          if (!res.ok) {
+            setResolved(null);
+            return;
+          }
+          const body = (await res.json()) as LinePriceResolve;
+          setResolved(body);
+        })
+        .catch(() => setResolved(null))
+        .finally(() => setResolving(false));
+    }, 200);
+    return () => window.clearTimeout(handle);
+  }, [customerId, variantId, qty, manualUnitPrice]);
+
+  const lineErrors = errors.lines?.[index];
+  const selectedVariant = useMemo(
+    () => variants.find((v) => v.id === variantId) ?? null,
+    [variants, variantId],
+  );
+
+  return (
+    <div className="rounded-md border border-border p-3">
+      <div className="grid grid-cols-12 gap-3">
+        <div className="col-span-12 md:col-span-5">
+          <Field>
+            <FieldLabel htmlFor={`lines.${index}.variantId`}>SKU</FieldLabel>
+            <Controller
+              control={control}
+              name={`lines.${index}.variantId`}
+              render={({ field }) => (
+                <Select
+                  value={field.value || undefined}
+                  onValueChange={field.onChange}
+                >
+                  <SelectTrigger
+                    id={`lines.${index}.variantId`}
+                    className="w-full"
+                    aria-invalid={!!lineErrors?.variantId}
+                  >
+                    <SelectValue placeholder="Pick a product…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {variants.length === 0 ? (
+                      <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                        No active variants.
+                      </div>
+                    ) : (
+                      variants.map((v) => (
+                        <SelectItem key={v.id} value={v.id}>
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {v.sku}
+                          </span>{' '}
+                          {v.productName}
+                          {v.variantName ? ` — ${v.variantName}` : ''}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+            <FieldError errors={[lineErrors?.variantId]} />
+          </Field>
+        </div>
+
+        <div className="col-span-4 md:col-span-1">
+          <Field>
+            <FieldLabel htmlFor={`lines.${index}.qtyOrdered`}>Qty</FieldLabel>
+            <Input
+              id={`lines.${index}.qtyOrdered`}
+              inputMode="decimal"
+              aria-invalid={!!lineErrors?.qtyOrdered}
+              {...register(`lines.${index}.qtyOrdered`)}
+            />
+            <FieldError errors={[lineErrors?.qtyOrdered]} />
+          </Field>
+        </div>
+
+        <div className="col-span-8 md:col-span-3">
+          <Field>
+            <FieldLabel htmlFor={`lines.${index}.manualUnitPrice`}>
+              Unit price
+            </FieldLabel>
+            <Input
+              id={`lines.${index}.manualUnitPrice`}
+              inputMode="decimal"
+              placeholder={
+                resolved ? formatCurrency(resolved.unitPrice) : 'auto'
+              }
+              aria-invalid={!!lineErrors?.manualUnitPrice}
+              {...register(`lines.${index}.manualUnitPrice`)}
+            />
+            <PriceHint
+              resolved={resolved}
+              resolving={resolving}
+              overridden={!!manualUnitPrice}
+            />
+            <FieldError errors={[lineErrors?.manualUnitPrice]} />
+          </Field>
+        </div>
+
+        <div className="col-span-6 md:col-span-1">
+          <Field>
+            <FieldLabel htmlFor={`lines.${index}.discountPercent`}>
+              Disc %
+            </FieldLabel>
+            <Input
+              id={`lines.${index}.discountPercent`}
+              inputMode="decimal"
+              placeholder="—"
+              aria-invalid={!!lineErrors?.discountPercent}
+              {...register(`lines.${index}.discountPercent`)}
+            />
+            <FieldError errors={[lineErrors?.discountPercent]} />
+          </Field>
+        </div>
+
+        <div className="col-span-6 md:col-span-1">
+          <Field>
+            <FieldLabel htmlFor={`lines.${index}.discountAmount`}>
+              Disc $
+            </FieldLabel>
+            <Input
+              id={`lines.${index}.discountAmount`}
+              inputMode="decimal"
+              placeholder="—"
+              aria-invalid={!!lineErrors?.discountAmount}
+              {...register(`lines.${index}.discountAmount`)}
+            />
+            <FieldError errors={[lineErrors?.discountAmount]} />
+          </Field>
+        </div>
+
+        <div className="col-span-12 flex items-end justify-end md:col-span-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            disabled={!canRemove}
+            aria-label="Remove line"
+            onClick={onRemove}
+          >
+            <Trash2 />
+          </Button>
+        </div>
+      </div>
+
+      <div className="mt-2">
+        <Field>
+          <FieldLabel htmlFor={`lines.${index}.customerNote`}>
+            Line note (printed)
+          </FieldLabel>
+          <Input
+            id={`lines.${index}.customerNote`}
+            placeholder="Optional note printed on documents for this line."
+            {...register(`lines.${index}.customerNote`)}
+          />
+        </Field>
+      </div>
+
+      {selectedVariant?.basePrice ? (
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          List price {formatCurrency(selectedVariant.basePrice)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function PriceHint({
+  resolved,
+  resolving,
+  overridden,
+}: {
+  resolved: LinePriceResolve | null;
+  resolving: boolean;
+  overridden: boolean;
+}) {
+  if (resolving) {
+    return <p className="text-[10px] text-muted-foreground">resolving…</p>;
+  }
+  if (!resolved) return null;
+  const tone = overridden
+    ? 'text-amber-600 dark:text-amber-400'
+    : 'text-muted-foreground';
+  const label = overridden ? 'manual override' : ruleLabel(resolved.rule);
+  return (
+    <p className={`text-[10px] ${tone}`}>
+      {label} · {formatCurrency(resolved.unitPrice)}
+      {resolved.discountPercent
+        ? ` · −${Number(resolved.discountPercent)}%`
+        : ''}
+    </p>
+  );
+}
+
+function ruleLabel(rule: string): string {
+  switch (rule) {
+    case 'MANUAL_OVERRIDE':
+      return 'manual';
+    case 'CUSTOMER_SPECIFIC':
+      return 'customer price';
+    case 'TIER_DISCOUNT':
+      return 'tier';
+    case 'BASE_PRICE':
+      return 'list price';
+    case 'QTY_BREAK':
+      return 'qty break';
+    case 'PROMO':
+      return 'promo';
+    case 'COST_PLUS':
+      return 'cost+';
+    default:
+      return rule.toLowerCase();
+  }
+}
