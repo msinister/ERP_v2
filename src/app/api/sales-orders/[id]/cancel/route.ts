@@ -5,6 +5,7 @@ import { cancelSalesOrder } from '@/server/services/salesOrders';
 import { requireAuth } from '@/lib/auth/requireAuth';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
+import { SalesOrderCancelBlockedError } from '@/lib/errors/credit';
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -29,6 +30,16 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   } catch (e) {
     const authResp = authErrorResponse(e);
     if (authResp) return authResp;
+    if (e instanceof SalesOrderCancelBlockedError) {
+      return NextResponse.json(
+        {
+          error: e.message,
+          code: e.code,
+          paymentNumbers: e.paymentNumbers,
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'internal' },
       { status: 400 },
