@@ -65,7 +65,42 @@ const optionalIntStr = z
   .union([z.literal(''), z.string().regex(/^\d+$/, 'Must be a whole number')])
   .optional();
 
-const formSchema = z.object({
+// Billing is required for create (one billing address per customer
+// captured inline). In edit mode the billing card is hidden — addresses
+// are managed via the Addresses tab — and the PATCH endpoint doesn't
+// accept billingAddress anyway, so we relax the validators to keep the
+// stale form state from blocking submit.
+const billingCommonShape = {
+  label: z.string().max(255).optional(),
+  attention: z.string().max(255).optional(),
+  line2: z.string().max(500).optional(),
+  country: z
+    .union([z.literal(''), z.string().length(2, 'ISO-3166 alpha-2')])
+    .optional(),
+  phone: z.string().max(64).optional(),
+};
+
+const createBillingSchema = z.object({
+  ...billingCommonShape,
+  line1: z.string().min(1, 'Required').max(500),
+  city: z.string().min(1, 'Required').max(255),
+  region: z.string().min(1, 'Required').max(255),
+  postalCode: z.string().min(1, 'Required').max(32),
+});
+
+// Edit mode: same value shape (string, not string | undefined) so the
+// resolver-union stays assignable to a single CustomerFormValues type,
+// but with no .min(1) — empty strings pass since the billing card is
+// hidden in edit and stripped from the PATCH payload.
+const editBillingSchema = z.object({
+  ...billingCommonShape,
+  line1: z.string().max(500),
+  city: z.string().max(255),
+  region: z.string().max(255),
+  postalCode: z.string().max(32),
+});
+
+const baseShape = {
   name: z.string().min(1, 'Required').max(255),
   type: customerTypeEnum,
   salesRepId: z.string().min(1, 'Required'),
@@ -77,22 +112,22 @@ const formSchema = z.object({
   taxExempt: z.boolean(),
   resaleCertNumber: z.string().max(128).optional(),
   internalNotes: z.string().max(10000).optional(),
-  billing: z.object({
-    label: z.string().max(255).optional(),
-    attention: z.string().max(255).optional(),
-    line1: z.string().min(1, 'Required').max(500),
-    line2: z.string().max(500).optional(),
-    city: z.string().min(1, 'Required').max(255),
-    region: z.string().min(1, 'Required').max(255),
-    postalCode: z.string().min(1, 'Required').max(32),
-    country: z
-      .union([z.literal(''), z.string().length(2, 'ISO-3166 alpha-2')])
-      .optional(),
-    phone: z.string().max(64).optional(),
-  }),
+};
+
+const createFormSchema = z.object({
+  ...baseShape,
+  billing: createBillingSchema,
 });
 
-export type CustomerFormValues = z.infer<typeof formSchema>;
+const editFormSchema = z.object({
+  ...baseShape,
+  billing: editBillingSchema,
+});
+
+// Form values type tracks the create schema (the broader-required
+// variant); edit defaults still satisfy it because the optional
+// billing fields accept the same string shape.
+export type CustomerFormValues = z.infer<typeof createFormSchema>;
 
 export type LookupOption = { id: string; label: string };
 
@@ -167,7 +202,9 @@ export function CustomerForm({
   const [pending, startTransition] = useTransition();
 
   const form = useForm<CustomerFormValues>({
-    resolver: zodResolver(formSchema),
+    resolver: zodResolver(
+      mode.kind === 'create' ? createFormSchema : editFormSchema,
+    ),
     defaultValues: { ...DEFAULT_VALUES, ...defaultValues },
   });
   const {
@@ -438,6 +475,7 @@ export function CustomerForm({
         </CardContent>
       </Card>
 
+      {mode.kind === 'create' && (
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Billing address</CardTitle>
@@ -527,6 +565,7 @@ export function CustomerForm({
           </FieldGroup>
         </CardContent>
       </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -551,7 +590,15 @@ export function CustomerForm({
           variant="outline"
           size="sm"
           disabled={pending}
-          render={<Link href="/customers" />}
+          render={
+            <Link
+              href={
+                mode.kind === 'create'
+                  ? '/customers'
+                  : `/customers/${mode.customerId}`
+              }
+            />
+          }
         >
           Cancel
         </Button>
