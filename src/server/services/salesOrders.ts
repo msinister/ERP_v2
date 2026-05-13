@@ -784,6 +784,79 @@ export async function listSalesOrders(
   });
 }
 
+export type SalesOrderListFilters = {
+  status?: SalesOrderStatus;
+  customerId?: string;
+  // Sales rep is on the customer record; we filter via the relation.
+  salesRepId?: string;
+  // Inclusive date range on orderDate. dateTo is bumped to end-of-day
+  // by the caller (page.tsx) so the comparison stays inclusive.
+  dateFrom?: Date;
+  dateTo?: Date;
+  // Substring match on SO number (case-insensitive). Numbers look like
+  // SO-2026-00001 so partial matches are useful.
+  q?: string;
+  skip?: number;
+  take?: number;
+};
+
+function salesOrderWhere(
+  filters: Omit<SalesOrderListFilters, 'skip' | 'take'>,
+): Prisma.SalesOrderWhereInput {
+  const { status, customerId, salesRepId, dateFrom, dateTo, q } = filters;
+  const dateClause: Prisma.DateTimeFilter | undefined =
+    dateFrom || dateTo
+      ? {
+          ...(dateFrom ? { gte: dateFrom } : {}),
+          ...(dateTo ? { lte: dateTo } : {}),
+        }
+      : undefined;
+  return {
+    deletedAt: null,
+    ...(status ? { status } : {}),
+    ...(customerId ? { customerId } : {}),
+    ...(salesRepId ? { customer: { salesRepId } } : {}),
+    ...(dateClause ? { orderDate: dateClause } : {}),
+    ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
+  };
+}
+
+// Paginated list with customer (id, code, name, salesRepId) eager-
+// loaded so the table can render the customer name and sales-rep
+// lookup in a single round-trip. Lines are also included so the page
+// can call computeSalesOrderTotal per row (pilot scale; same N+1
+// pattern as the customers list AR balance).
+export async function listSalesOrdersPaged(
+  db: PrismaClient,
+  filters: SalesOrderListFilters = {},
+): Promise<{
+  rows: Array<
+    SalesOrderWithLines & {
+      customer: { id: string; code: string; name: string; salesRepId: string };
+    }
+  >;
+  total: number;
+}> {
+  const { skip = 0, take = 100, ...rest } = filters;
+  const where = salesOrderWhere(rest);
+  const [rows, total] = await Promise.all([
+    db.salesOrder.findMany({
+      where,
+      include: {
+        lines: { where: { deletedAt: null } },
+        customer: {
+          select: { id: true, code: true, name: true, salesRepId: true },
+        },
+      },
+      orderBy: [{ orderDate: 'desc' }, { createdAt: 'desc' }],
+      skip,
+      take,
+    }),
+    db.salesOrder.count({ where }),
+  ]);
+  return { rows, total };
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
