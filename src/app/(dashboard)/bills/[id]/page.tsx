@@ -18,6 +18,10 @@ import {
   type PaymentRow,
 } from './_components/payments-card';
 import type { CashAccountOption } from './_components/record-payment-dialog';
+import {
+  AppliedCreditsCard,
+  type AppliedCreditRow,
+} from './_components/applied-credits-card';
 
 // Always live — bill status and payment denorms (amountPaid /
 // amountCredited / paymentStatus) flip as payments and credits are
@@ -78,6 +82,12 @@ export default async function BillDetailPage({
             cashAccount: { select: { code: true, name: true } },
           },
           orderBy: { paymentDate: 'desc' },
+        },
+        creditApplications: {
+          include: {
+            vendorCredit: { select: { id: true, number: true } },
+          },
+          orderBy: { appliedAt: 'desc' },
         },
       },
     }),
@@ -149,12 +159,25 @@ export default async function BillDetailPage({
     .minus(bill.amountCredited)
     .toString();
 
-  // Hide the payments card entirely for DRAFT bills (no AP entry yet);
-  // show it for CONFIRMED (with the Record Payment button) and for
-  // CANCELLED (read-only — historical reversed payments may still be
-  // worth seeing).
+  const appliedCreditRows: AppliedCreditRow[] = bill.creditApplications.map(
+    (a) => ({
+      id: a.id,
+      vendorCreditId: a.vendorCreditId,
+      vendorCreditNumber: a.vendorCredit.number,
+      amount: a.amount,
+      appliedAt: a.appliedAt,
+      reversedAt: a.reversedAt,
+      notes: a.notes,
+    }),
+  );
+
+  // Hide the payments + applied-credits cards entirely for DRAFT bills
+  // (no AP entry yet); show them for CONFIRMED (with the action button)
+  // and for CANCELLED (read-only) when historical rows exist.
   const showPaymentsCard =
     bill.status !== 'DRAFT' || paymentRows.length > 0;
+  const showAppliedCreditsCard =
+    bill.status !== 'DRAFT' || appliedCreditRows.length > 0;
 
   return (
     <div className="space-y-6">
@@ -186,6 +209,17 @@ export default async function BillDetailPage({
               remainingBalance={remainingBalance}
               cashAccounts={cashAccounts}
               payments={paymentRows}
+            />
+          ) : null}
+
+          {showAppliedCreditsCard ? (
+            <AppliedCreditsCard
+              billId={bill.id}
+              billNumber={bill.number}
+              billStatus={bill.status}
+              vendorId={bill.vendorId}
+              remainingBalance={remainingBalance}
+              applications={appliedCreditRows}
             />
           ) : null}
 
