@@ -1,6 +1,7 @@
 import Link from 'next/link';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Printer } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { formatStatusLabel } from '@/lib/format';
 import { LifecycleActions } from './lifecycle-actions';
 
@@ -52,11 +53,27 @@ export function PurchaseOrderHeader({ po }: PurchaseOrderHeaderProps) {
             cancelledAt={po.cancelledAt}
           />
         </div>
-        <LifecycleActions
-          purchaseOrderId={po.id}
-          purchaseOrderNumber={po.number}
-          status={po.status}
-        />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            render={
+              <Link
+                href={`/documents/purchase-order/${po.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              />
+            }
+          >
+            <Printer />
+            Print PO
+          </Button>
+          <LifecycleActions
+            purchaseOrderId={po.id}
+            purchaseOrderNumber={po.number}
+            status={po.status}
+          />
+        </div>
       </div>
     </div>
   );
