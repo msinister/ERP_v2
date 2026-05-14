@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -17,6 +17,16 @@ import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
+  Combobox,
+  ComboboxContent,
+  ComboboxInput,
+  ComboboxInputGroup,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxSeparator,
+  ComboboxTrigger,
+} from '@/components/ui/combobox';
+import {
   Field,
   FieldError,
   FieldGroup,
@@ -31,6 +41,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { QuickCreateProductDialog } from './quick-create-product-dialog';
 import { formatCurrency } from '@/lib/format';
 import {
   isNonNegativeDecimalInput,
@@ -203,6 +214,16 @@ export function BillForm({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // `variants` is server-rendered into props; the quick-create flow needs
+  // to append a newly-created variant without a navigation, so we
+  // shadow the prop in local state. The prop becomes the seed only.
+  const [variantsState, setVariantsState] =
+    useState<VariantOption[]>(variants);
+  const [quickCreate, setQuickCreate] = useState<{
+    open: boolean;
+    lineIndex: number;
+    query: string;
+  }>({ open: false, lineIndex: 0, query: '' });
 
   const form = useForm<BillFormValues>({
     resolver: zodResolver(formSchema),
@@ -429,10 +450,13 @@ export function BillForm({
                   form={form}
                   index={index}
                   source={source}
-                  variants={variants}
+                  variants={variantsState}
                   expenseAccounts={expenseAccounts}
                   canRemove={fields.length > 1}
                   onRemove={() => remove(index)}
+                  onRequestQuickCreate={(query) =>
+                    setQuickCreate({ open: true, lineIndex: index, query })
+                  }
                 />
               ))}
               <div className="flex items-center justify-between gap-3">
@@ -532,7 +556,42 @@ export function BillForm({
               : 'Save changes'}
         </Button>
       </div>
+
+      <QuickCreateProductDialog
+        open={quickCreate.open}
+        onOpenChange={(open) => setQuickCreate((s) => ({ ...s, open }))}
+        initialQuery={quickCreate.query}
+        onCreated={(variant) => {
+          // Append to the live options list, then select on the requesting
+          // line. Use setValue (not useFieldArray.update) so we only touch
+          // the variantId field — quantity / unit cost / notes stay as
+          // the operator left them.
+          setVariantsState((prev) => [...prev, variant]);
+          setValue(`lines.${quickCreate.lineIndex}.variantId`, variant.id, {
+            shouldDirty: true,
+            shouldValidate: true,
+          });
+        }}
+      />
     </form>
+  );
+}
+
+function variantLabel(v: VariantOption): string {
+  return `${v.sku} ${v.productName}${v.variantName ? ` — ${v.variantName}` : ''}`;
+}
+
+function filterVariants(
+  variants: VariantOption[],
+  query: string,
+): VariantOption[] {
+  const q = query.trim().toLowerCase();
+  if (q === '') return variants;
+  return variants.filter(
+    (v) =>
+      v.sku.toLowerCase().includes(q) ||
+      v.productName.toLowerCase().includes(q) ||
+      (v.variantName?.toLowerCase().includes(q) ?? false),
   );
 }
 
@@ -544,6 +603,7 @@ function LineRow({
   expenseAccounts,
   canRemove,
   onRemove,
+  onRequestQuickCreate,
 }: {
   form: UseFormReturn<BillFormValues>;
   index: number;
@@ -552,6 +612,7 @@ function LineRow({
   expenseAccounts: ExpenseAccountOption[];
   canRemove: boolean;
   onRemove: () => void;
+  onRequestQuickCreate: (query: string) => void;
 }) {
   const {
     register,
@@ -560,6 +621,41 @@ function LineRow({
   } = form;
 
   const lineErrors = errors.lines?.[index];
+
+  // Initial input fill in edit mode: if a variant is already selected,
+  // show its label. Otherwise blank. The Combobox is fully controlled
+  // (value + inputValue) so we own both the picker state and the
+  // display string the operator sees.
+  const initialVariantId = form.getValues(`lines.${index}.variantId`) ?? '';
+  const initialVariant = variants.find((v) => v.id === initialVariantId);
+  const [variantQuery, setVariantQuery] = useState<string>(
+    initialVariant ? variantLabel(initialVariant) : '',
+  );
+  const filteredVariants = useMemo(
+    () => filterVariants(variants, variantQuery),
+    [variants, variantQuery],
+  );
+
+  // When the variantId changes from outside the combobox (the quick-create
+  // dialog appends a new variant and setValues this line's variantId),
+  // sync the displayed input value to that variant's label. The user's
+  // own typing changes variantQuery first → watchedVariantId doesn't
+  // shift → this effect stays out of the way.
+  const watchedVariantId = form.watch(`lines.${index}.variantId`);
+  const prevVariantIdRef = useRef(watchedVariantId);
+  useEffect(() => {
+    if (prevVariantIdRef.current === watchedVariantId) return;
+    prevVariantIdRef.current = watchedVariantId;
+    if (!watchedVariantId) return;
+    const v = variants.find((x) => x.id === watchedVariantId);
+    if (v) setVariantQuery(variantLabel(v));
+  }, [watchedVariantId, variants]);
+  // "+ Create product" appears only when the typed query has no match —
+  // matches the brief. When the variants list is fully empty (no
+  // products in the system yet), also surface it as the only path.
+  const showCreateCta =
+    (filteredVariants.length === 0 && variantQuery.trim() !== '') ||
+    variants.length === 0;
 
   return (
     <div className="rounded-md border border-border p-3">
@@ -574,52 +670,69 @@ function LineRow({
                 control={control}
                 name={`lines.${index}.variantId`}
                 render={({ field }) => (
-                  <Select
-                    value={field.value || undefined}
-                    onValueChange={field.onChange}
+                  <Combobox<string>
+                    value={field.value || null}
+                    onValueChange={(v) => {
+                      field.onChange(v ?? '');
+                      // Keep the input in sync with the chosen item so
+                      // re-opening the dropdown later doesn't show a
+                      // stale typed query.
+                      const picked = variants.find((x) => x.id === v);
+                      setVariantQuery(picked ? variantLabel(picked) : '');
+                    }}
+                    inputValue={variantQuery}
+                    onInputValueChange={(v) => setVariantQuery(v)}
+                    itemToStringLabel={(id) => {
+                      const v = variants.find((x) => x.id === id);
+                      return v ? variantLabel(v) : '';
+                    }}
                   >
-                    <SelectTrigger
-                      id={`lines.${index}.discriminator`}
-                      className="w-full"
+                    <ComboboxInputGroup
                       aria-invalid={!!lineErrors?.variantId}
                     >
-                      <SelectValue placeholder="Pick a product…">
-                        {(v) => {
-                          if (!v) return null;
-                          const variant = variants.find((x) => x.id === v);
-                          if (!variant) return v;
-                          return (
-                            <>
-                              <span className="font-mono text-xs text-muted-foreground">
-                                {variant.sku}
-                              </span>{' '}
-                              {variant.productName}
-                              {variant.variantName
-                                ? ` — ${variant.variantName}`
-                                : ''}
-                            </>
-                          );
-                        }}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {variants.length === 0 ? (
-                        <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                          No active variants.
-                        </div>
-                      ) : (
-                        variants.map((v) => (
-                          <SelectItem key={v.id} value={v.id}>
+                      <ComboboxInput
+                        id={`lines.${index}.discriminator`}
+                        placeholder="Search SKU or name…"
+                      />
+                      <ComboboxTrigger />
+                    </ComboboxInputGroup>
+                    <ComboboxContent>
+                      <ComboboxList>
+                        {filteredVariants.map((v) => (
+                          <ComboboxItem key={v.id} value={v.id}>
                             <span className="font-mono text-xs text-muted-foreground">
                               {v.sku}
                             </span>{' '}
                             {v.productName}
                             {v.variantName ? ` — ${v.variantName}` : ''}
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                          </ComboboxItem>
+                        ))}
+                      </ComboboxList>
+                      {showCreateCta ? (
+                        <>
+                          {filteredVariants.length > 0 ? (
+                            <ComboboxSeparator />
+                          ) : null}
+                          <button
+                            type="button"
+                            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm text-primary outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                            onClick={() =>
+                              onRequestQuickCreate(variantQuery)
+                            }
+                          >
+                            <Plus className="size-3.5" />
+                            Create product
+                            {variantQuery.trim() !== '' ? (
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {' '}
+                                “{variantQuery.trim()}”
+                              </span>
+                            ) : null}
+                          </button>
+                        </>
+                      ) : null}
+                    </ComboboxContent>
+                  </Combobox>
                 )}
               />
             ) : (

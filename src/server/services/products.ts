@@ -1,5 +1,9 @@
 import { AuditAction, Prisma } from '@/generated/tenant';
-import type { PrismaClient, Product } from '@/generated/tenant';
+import type {
+  PrismaClient,
+  Product,
+  ProductVariant,
+} from '@/generated/tenant';
 import { audit, type AuditContext } from '@/lib/audit/audit';
 import {
   productCreateSchema,
@@ -10,14 +14,19 @@ import {
 
 // TODO: wire requirePermission() once lib/permissions exists
 
+export type CreateProductResult = Product & {
+  defaultVariant: ProductVariant | null;
+};
+
 export async function createProduct(
   db: PrismaClient,
   input: ProductCreateInput,
   ctx?: AuditContext,
-): Promise<Product> {
-  const data = productCreateSchema.parse(input);
+): Promise<CreateProductResult> {
+  const parsed = productCreateSchema.parse(input);
+  const { defaultVariant: seed, ...productData } = parsed;
   return db.$transaction(async (tx) => {
-    const product = await tx.product.create({ data });
+    const product = await tx.product.create({ data: productData });
     await audit(tx, {
       action: AuditAction.CREATE,
       entityType: 'Product',
@@ -25,7 +34,26 @@ export async function createProduct(
       after: product,
       ctx,
     });
-    return product;
+
+    let defaultVariant: ProductVariant | null = null;
+    if (seed) {
+      defaultVariant = await tx.productVariant.create({
+        data: {
+          productId: product.id,
+          sku: seed.sku,
+          name: seed.name,
+        },
+      });
+      await audit(tx, {
+        action: AuditAction.CREATE,
+        entityType: 'ProductVariant',
+        entityId: defaultVariant.id,
+        after: defaultVariant,
+        ctx,
+      });
+    }
+
+    return { ...product, defaultVariant };
   });
 }
 

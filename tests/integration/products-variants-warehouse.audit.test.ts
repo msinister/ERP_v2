@@ -85,6 +85,43 @@ suite('Products/Variants/Warehouse — audit emission', () => {
     expect(rows[0].userId).toBe(USER);
     expect(rows[0].beforeJson).toBeNull();
     expect(rows[0].afterJson).not.toBeNull();
+    expect(p.defaultVariant).toBeNull();
+  });
+
+  it('createProduct seeds default variant when defaultVariant is provided + audits both', async () => {
+    const sku = `${TAG}-P-SEED`;
+    const p = await createProduct(
+      db,
+      {
+        ...buildProductInput(sku, `${TAG} P seed`),
+        defaultVariant: { sku, name: 'Default' },
+      },
+      ctx,
+    );
+    expect(p.defaultVariant).not.toBeNull();
+    expect(p.defaultVariant!.sku).toBe(sku);
+    expect(p.defaultVariant!.productId).toBe(p.id);
+
+    // Variant row was actually written.
+    const variantRow = await db.productVariant.findUnique({
+      where: { sku },
+    });
+    expect(variantRow).not.toBeNull();
+    expect(variantRow!.id).toBe(p.defaultVariant!.id);
+
+    // Both Product and ProductVariant CREATE audit rows emitted in the
+    // same transaction.
+    const productAudits = await db.auditLog.findMany({
+      where: { entityType: 'Product', entityId: p.id },
+    });
+    const variantAudits = await db.auditLog.findMany({
+      where: { entityType: 'ProductVariant', entityId: p.defaultVariant!.id },
+    });
+    expect(productAudits).toHaveLength(1);
+    expect(productAudits[0].action).toBe(AuditAction.CREATE);
+    expect(variantAudits).toHaveLength(1);
+    expect(variantAudits[0].action).toBe(AuditAction.CREATE);
+    expect(variantAudits[0].userId).toBe(USER);
   });
 
   it('updateProduct emits UPDATE audit row with before+after populated', async () => {

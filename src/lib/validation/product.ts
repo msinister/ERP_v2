@@ -4,6 +4,15 @@ import { decimalString } from './common';
 export const weightUnitSchema = z.enum(['oz', 'lb', 'kg', 'g']);
 export const dimensionUnitSchema = z.enum(['in', 'mm', 'cm']);
 
+// Optional inline default variant — when present, createProduct seeds the
+// variant inside the same transaction. Used by the bill-line quick-create
+// flow so an operator can add a brand-new product + default variant in
+// one round-trip without leaving the form.
+export const defaultVariantSeedSchema = z.object({
+  sku: z.string().min(1).max(64),
+  name: z.string().max(255).optional(),
+});
+
 export const productCreateSchema = z.object({
   sku: z.string().min(1).max(64),
   name: z.string().min(1).max(255),
@@ -22,9 +31,14 @@ export const productCreateSchema = z.object({
   dimensionUnit: dimensionUnitSchema.optional(),
   shopifyProductId: z.string().optional(),
   active: z.boolean().default(true),
+  defaultVariant: defaultVariantSeedSchema.optional(),
 });
 
-export const productUpdateSchema = productCreateSchema.partial();
+// Update never seeds a variant; strip the create-only field so a malformed
+// PUT payload can't smuggle a `defaultVariant` key into Prisma's update args.
+export const productUpdateSchema = productCreateSchema
+  .omit({ defaultVariant: true })
+  .partial();
 
 export const variantCreateSchema = z.object({
   productId: z.string().min(1),
