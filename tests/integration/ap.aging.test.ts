@@ -363,17 +363,36 @@ suite('AP aging', () => {
         billDate: daysAgo(40),
       });
     }
+    // Other test files may have left bill data in the shared tenant DB,
+    // so we don't assume our PAG entries occupy any specific positions in
+    // the globally-sorted result. Verify pagination semantics by checking
+    // (a) the five PAG entries appear in the right relative order in the
+    // unlimited result, and (b) paginated calls return the same slices of
+    // that unlimited result.
+    const full = await apAgingSummary(db, ASOF, { limit: 500, offset: 0 });
+    const ourFull = full.filter((r) =>
+      r.vendorCode.startsWith(`${TAG}-VEN-PAG`),
+    );
+    expect(ourFull).toHaveLength(5);
+    expect(ourFull.map((r) => r.total.toString())).toEqual([
+      new Prisma.Decimal('500').toString(),
+      new Prisma.Decimal('400').toString(),
+      new Prisma.Decimal('300').toString(),
+      new Prisma.Decimal('200').toString(),
+      new Prisma.Decimal('100').toString(),
+    ]);
+
     const first2 = await apAgingSummary(db, ASOF, { limit: 2, offset: 0 });
-    const ours1 = first2.filter((r) => r.vendorCode.startsWith(`${TAG}-VEN-PAG`));
-    expect(ours1).toHaveLength(2);
-    expect(ours1[0].total.toString()).toBe(new Prisma.Decimal('500').toString());
-    expect(ours1[1].total.toString()).toBe(new Prisma.Decimal('400').toString());
+    expect(first2).toHaveLength(2);
+    expect(first2.map((r) => r.vendorId)).toEqual(
+      full.slice(0, 2).map((r) => r.vendorId),
+    );
 
     const next2 = await apAgingSummary(db, ASOF, { limit: 2, offset: 2 });
-    const ours2 = next2.filter((r) => r.vendorCode.startsWith(`${TAG}-VEN-PAG`));
-    // Other-vendor rows from earlier tests may interleave, but the
-    // PAG-prefixed ones should be PAG2 (300) at the head.
-    expect(ours2[0].total.toString()).toBe(new Prisma.Decimal('300').toString());
+    expect(next2).toHaveLength(2);
+    expect(next2.map((r) => r.vendorId)).toEqual(
+      full.slice(2, 4).map((r) => r.vendorId),
+    );
   });
 });
 
