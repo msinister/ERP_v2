@@ -1,0 +1,118 @@
+import Link from 'next/link';
+import { ChevronLeft } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { formatStatusLabel } from '@/lib/format';
+import { LifecycleActions } from './lifecycle-actions';
+
+export type PurchaseOrderHeaderProps = {
+  po: {
+    id: string;
+    number: string;
+    status: string;
+    vendor: { id: string; code: string; name: string };
+    orderDate: Date;
+    confirmedAt: Date | null;
+    closedAt: Date | null;
+    cancelledAt: Date | null;
+  };
+};
+
+export function PurchaseOrderHeader({ po }: PurchaseOrderHeaderProps) {
+  return (
+    <div className="space-y-3">
+      <Link
+        href="/purchase-orders"
+        className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+      >
+        <ChevronLeft className="size-3.5" />
+        Purchase Orders
+      </Link>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-mono text-2xl font-semibold tracking-tight">
+              {po.number}
+            </h1>
+            <StatusBadge status={po.status} />
+          </div>
+          <div className="text-sm text-muted-foreground">
+            <Link
+              href={`/vendors/${po.vendor.id}`}
+              className="font-medium text-foreground underline-offset-2 hover:underline"
+            >
+              {po.vendor.name}
+            </Link>
+            <span className="px-2 text-muted-foreground/60">·</span>
+            <span className="font-mono text-xs">{po.vendor.code}</span>
+          </div>
+          <DateLine
+            orderDate={po.orderDate}
+            confirmedAt={po.confirmedAt}
+            closedAt={po.closedAt}
+            cancelledAt={po.cancelledAt}
+          />
+        </div>
+        <LifecycleActions
+          purchaseOrderId={po.id}
+          purchaseOrderNumber={po.number}
+          status={po.status}
+        />
+      </div>
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const label = formatStatusLabel(status);
+  switch (status) {
+    case 'CLOSED':
+      return <Badge variant="secondary">{label}</Badge>;
+    case 'CANCELLED':
+      return (
+        <Badge variant="outline" className="text-muted-foreground">
+          {label}
+        </Badge>
+      );
+    case 'DRAFT':
+      return <Badge variant="outline">{label}</Badge>;
+    default:
+      return <Badge>{label}</Badge>;
+  }
+}
+
+function DateLine({
+  orderDate,
+  confirmedAt,
+  closedAt,
+  cancelledAt,
+}: {
+  orderDate: Date;
+  confirmedAt: Date | null;
+  closedAt: Date | null;
+  cancelledAt: Date | null;
+}) {
+  const parts: Array<{ label: string; date: Date }> = [
+    { label: 'Ordered', date: orderDate },
+  ];
+  if (confirmedAt) parts.push({ label: 'Confirmed', date: confirmedAt });
+  if (closedAt) parts.push({ label: 'Closed', date: closedAt });
+  if (cancelledAt) parts.push({ label: 'Cancelled', date: cancelledAt });
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+      {parts.map((p, idx) => (
+        <span key={idx}>
+          <span className="font-medium text-foreground/80">{p.label}</span>{' '}
+          {formatDate(p.date)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function formatDate(d: Date): string {
+  return d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}

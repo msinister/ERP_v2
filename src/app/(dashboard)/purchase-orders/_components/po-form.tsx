@@ -281,13 +281,7 @@ export function PoForm({
             ? `Created ${saved.number}`
             : `Saved ${saved.number}`,
         );
-        // 6E lands without a PO detail page; route to the list after
-        // create. Slice 6F swaps this back to the detail page.
-        if (mode.kind === 'create') {
-          router.push('/purchase-orders');
-        } else {
-          router.push(`/purchase-orders/${saved.id}`);
-        }
+        router.push(`/purchase-orders/${saved.id}`);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
