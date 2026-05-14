@@ -264,14 +264,7 @@ export function VendorForm({
             ? `Created ${saved.name}`
             : `Saved ${saved.name}`,
         );
-        // 6A lands without a detail page; route to the list after create
-        // so the operator can see the new row. Slice 6B swaps this back
-        // to /vendors/${saved.id} once the detail page exists.
-        if (mode.kind === 'create') {
-          router.push('/vendors');
-        } else {
-          router.push(`/vendors/${saved.id}`);
-        }
+        router.push(`/vendors/${saved.id}`);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
