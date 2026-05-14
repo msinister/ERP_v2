@@ -289,13 +289,7 @@ export function BillForm({
             ? `Created ${saved.number}`
             : `Saved ${saved.number}`,
         );
-        // 7A lands without a detail page; route to /bills after create.
-        // 7B will swap this back to /bills/[id].
-        if (mode.kind === 'create') {
-          router.push('/bills');
-        } else {
-          router.push(`/bills/${saved.id}`);
-        }
+        router.push(`/bills/${saved.id}`);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
