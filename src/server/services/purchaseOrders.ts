@@ -359,3 +359,71 @@ export async function listPurchaseOrders(
     take,
   });
 }
+
+export type PurchaseOrderListFilters = {
+  vendorId?: string;
+  status?: PurchaseOrderStatus;
+  // Inclusive date range on PO createdAt (order date). dateTo is bumped
+  // to end-of-day by the caller (page.tsx) so the range stays inclusive.
+  dateFrom?: Date;
+  dateTo?: Date;
+  // Substring match on PO number (case-insensitive). Numbers look like
+  // PO-2026-00001 so partial matches are useful.
+  q?: string;
+  skip?: number;
+  take?: number;
+};
+
+function purchaseOrderWhere(
+  filters: Omit<PurchaseOrderListFilters, 'skip' | 'take'>,
+): Prisma.PurchaseOrderWhereInput {
+  const { status, vendorId, dateFrom, dateTo, q } = filters;
+  const dateClause: Prisma.DateTimeFilter | undefined =
+    dateFrom || dateTo
+      ? {
+          ...(dateFrom ? { gte: dateFrom } : {}),
+          ...(dateTo ? { lte: dateTo } : {}),
+        }
+      : undefined;
+  return {
+    deletedAt: null,
+    ...(status ? { status } : {}),
+    ...(vendorId ? { vendorId } : {}),
+    ...(dateClause ? { createdAt: dateClause } : {}),
+    ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
+  };
+}
+
+// Paginated list with vendor (id, code, name) eager-loaded so the table
+// can render the vendor name without a second round-trip. Lines are
+// also included so the page can compute the PO total per row (Σ qty ×
+// unit cost). Same N+1-by-design pattern as the SO list.
+export async function listPurchaseOrdersPaged(
+  db: PrismaClient,
+  filters: PurchaseOrderListFilters = {},
+): Promise<{
+  rows: Array<
+    PurchaseOrder & {
+      lines: PurchaseOrderLine[];
+      vendor: { id: string; code: string; name: string };
+    }
+  >;
+  total: number;
+}> {
+  const { skip = 0, take = 100, ...rest } = filters;
+  const where = purchaseOrderWhere(rest);
+  const [rows, total] = await Promise.all([
+    db.purchaseOrder.findMany({
+      where,
+      include: {
+        lines: { where: { deletedAt: null } },
+        vendor: { select: { id: true, code: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take,
+    }),
+    db.purchaseOrder.count({ where }),
+  ]);
+  return { rows, total };
+}

@@ -4,11 +4,21 @@ import { PurchaseOrderStatus } from '@/generated/tenant';
 import { createPurchaseOrderInputSchema } from '@/lib/validation/purchasing';
 import {
   createPurchaseOrder,
-  listPurchaseOrders,
+  listPurchaseOrdersPaged,
 } from '@/server/services/purchaseOrders';
 import { requireAuth } from '@/lib/auth/requireAuth';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
+
+function parseDate(v: string | null, endOfDay: boolean): Date | undefined {
+  if (!v) return undefined;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (!m) return undefined;
+  const [, y, mo, d] = m;
+  const date = new Date(Number(y), Number(mo) - 1, Number(d));
+  if (endOfDay) date.setHours(23, 59, 59, 999);
+  return date;
+}
 
 export async function GET(req: Request) {
   try {
@@ -20,11 +30,25 @@ export async function GET(req: Request) {
       statusParam && statusParam in PurchaseOrderStatus
         ? (statusParam as PurchaseOrderStatus)
         : undefined;
+    const q = url.searchParams.get('q') ?? undefined;
+    const dateFrom = parseDate(url.searchParams.get('dateFrom'), false);
+    const dateTo = parseDate(url.searchParams.get('dateTo'), true);
     const skip = Number(url.searchParams.get('skip') ?? '0') || 0;
     const take = Math.min(Number(url.searchParams.get('take') ?? '100') || 100, 500);
 
-    const list = await listPurchaseOrders(db, { vendorId, status, skip, take });
-    return NextResponse.json(list);
+    // Paged shape: { rows, total }. No pre-6E consumer relied on the
+    // raw-array shape (only this route + the per-vendor service call
+    // used it), so widening to the paged variant is safe.
+    const page = await listPurchaseOrdersPaged(db, {
+      vendorId,
+      status,
+      q,
+      dateFrom,
+      dateTo,
+      skip,
+      take,
+    });
+    return NextResponse.json(page);
   } catch (e) {
     const authResp = authErrorResponse(e);
     if (authResp) return authResp;
