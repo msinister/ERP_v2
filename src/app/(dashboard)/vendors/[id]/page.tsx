@@ -12,6 +12,8 @@ import { VendorHeader } from './_components/header';
 import { OverviewTab } from './_tabs/overview';
 import { ContactsTab } from './_tabs/contacts';
 import { AddressesTab } from './_tabs/addresses';
+import { ProductsTab } from './_tabs/products';
+import { PaymentMethodsTab } from './_tabs/payment-methods';
 import { TabSkeleton } from './_tabs/tab-shell';
 
 // Always live (no caching) — vendor balances and contact lists drive
@@ -37,11 +39,13 @@ export default async function VendorDetailPage({
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="contacts">Contacts</TabsTrigger>
           <TabsTrigger value="addresses">Addresses</TabsTrigger>
+          <TabsTrigger value="products">Products</TabsTrigger>
+          <TabsTrigger value="payment-methods">Payment methods</TabsTrigger>
         </TabsList>
 
         {/* Each panel is its own Suspense boundary so slow tabs stream
             in after fast ones; mirrors the customer detail layout.
-            6C will add Products + Payment Methods; 6D adds POs + AP. */}
+            6D will add POs + AP tabs. */}
         <TabsContent value="overview">
           <Suspense fallback={<TabSkeleton rows={2} />}>
             <OverviewTab vendor={vendor} />
@@ -55,6 +59,16 @@ export default async function VendorDetailPage({
         <TabsContent value="addresses">
           <Suspense fallback={<TabSkeleton rows={2} />}>
             <AddressesTab vendorId={vendor.id} />
+          </Suspense>
+        </TabsContent>
+        <TabsContent value="products">
+          <Suspense fallback={<TabSkeleton rows={4} />}>
+            <ProductsTab vendor={vendor} />
+          </Suspense>
+        </TabsContent>
+        <TabsContent value="payment-methods">
+          <Suspense fallback={<TabSkeleton rows={3} />}>
+            <PaymentMethodsTab vendorId={vendor.id} />
           </Suspense>
         </TabsContent>
       </Tabs>
