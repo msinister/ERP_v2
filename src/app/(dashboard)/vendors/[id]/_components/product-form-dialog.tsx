@@ -214,7 +214,22 @@ export function ProductFormDialog({
                   className="w-full"
                   aria-invalid={!!errors.variantId}
                 >
-                  <SelectValue placeholder="Pick a variant…" />
+                  <SelectValue placeholder="Pick a variant…">
+                    {(value) => {
+                      if (!value) return null;
+                      const variant = variants.find((x) => x.id === value);
+                      if (!variant) return value;
+                      return (
+                        <>
+                          <span className="font-mono">{variant.sku}</span> —{' '}
+                          {variant.productName}
+                          {variant.variantName
+                            ? ` · ${variant.variantName}`
+                            : ''}
+                        </>
+                      );
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {availableVariants.length === 0 ? (

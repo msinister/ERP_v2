@@ -86,7 +86,15 @@ export function RestockingFeeForm({
         <FieldLabel htmlFor="rf-mode">Default fee</FieldLabel>
         <Select value={mode} onValueChange={(v) => setMode((v as Mode) ?? 'none')}>
           <SelectTrigger id="rf-mode" className="w-full">
-            <SelectValue />
+            <SelectValue>
+              {(v) =>
+                v === 'percent'
+                  ? 'Percent of line total'
+                  : v === 'flat'
+                    ? 'Flat fee per RMA'
+                    : 'No default'
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="none">No default</SelectItem>

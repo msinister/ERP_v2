@@ -101,7 +101,13 @@ export function UsersFilters() {
           onValueChange={(v) => apply({ role: v, skip: '0' })}
         >
           <SelectTrigger id="user-role" className="w-40">
-            <SelectValue placeholder="All" />
+            <SelectValue placeholder="All">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All roles'
+                  : (ROLE_OPTIONS.find((r) => r.value === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All roles</SelectItem>
@@ -123,7 +129,11 @@ export function UsersFilters() {
           }
         >
           <SelectTrigger id="user-enabled" className="w-32">
-            <SelectValue />
+            <SelectValue>
+              {(v) =>
+                ENABLED_OPTIONS.find((o) => o.value === v)?.label ?? v
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {ENABLED_OPTIONS.map((o) => (

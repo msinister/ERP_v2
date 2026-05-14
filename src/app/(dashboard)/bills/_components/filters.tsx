@@ -123,7 +123,13 @@ export function BillsFilters({
           onValueChange={(v) => apply({ status: v, skip: '0' })}
         >
           <SelectTrigger id="bill-status" className="w-36">
-            <SelectValue placeholder="All" />
+            <SelectValue placeholder="All">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All statuses'
+                  : (BILL_STATUSES.find((s) => s.value === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All statuses</SelectItem>
@@ -143,7 +149,13 @@ export function BillsFilters({
           onValueChange={(v) => apply({ paymentStatus: v, skip: '0' })}
         >
           <SelectTrigger id="bill-payment-status" className="w-44">
-            <SelectValue placeholder="All" />
+            <SelectValue placeholder="All">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All'
+                  : (PAYMENT_STATUSES.find((s) => s.value === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All</SelectItem>
@@ -163,7 +175,13 @@ export function BillsFilters({
           onValueChange={(v) => apply({ source: v, skip: '0' })}
         >
           <SelectTrigger id="bill-source" className="w-36">
-            <SelectValue placeholder="All" />
+            <SelectValue placeholder="All">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All sources'
+                  : (BILL_SOURCES.find((s) => s.value === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All sources</SelectItem>
@@ -183,7 +201,13 @@ export function BillsFilters({
           onValueChange={(v) => apply({ vendorId: v, skip: '0' })}
         >
           <SelectTrigger id="bill-vendor" className="w-56">
-            <SelectValue placeholder="All vendors" />
+            <SelectValue placeholder="All vendors">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All vendors'
+                  : (vendors.find((x) => x.id === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All vendors</SelectItem>

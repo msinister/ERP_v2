@@ -106,7 +106,13 @@ export function VendorsFilters() {
           onValueChange={(v) => apply({ type: v, skip: '0' })}
         >
           <SelectTrigger id="vendor-type" className="w-44">
-            <SelectValue placeholder="All types" />
+            <SelectValue placeholder="All types">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All types'
+                  : (VENDOR_TYPES.find((t) => t.value === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All types</SelectItem>
@@ -130,7 +136,11 @@ export function VendorsFilters() {
           }
         >
           <SelectTrigger id="vendor-active" className="w-32">
-            <SelectValue />
+            <SelectValue>
+              {(v) =>
+                ACTIVE_OPTIONS.find((o) => o.value === v)?.label ?? v
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {ACTIVE_OPTIONS.map((o) => (

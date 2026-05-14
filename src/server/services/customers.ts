@@ -97,8 +97,12 @@ export async function createCustomer(
 
     // Composite payload — write addresses + contacts inside the same tx
     // via the *Tx variants so the singleton invariants (one default per
-    // kind, one primary contact) are enforced atomically.
-    await addAddressTx(tx, customer.id, data.billingAddress, ctx);
+    // kind, one primary contact) are enforced atomically. Billing
+    // address is optional; operator can add one later from the detail
+    // page.
+    if (data.billingAddress) {
+      await addAddressTx(tx, customer.id, data.billingAddress, ctx);
+    }
     if (data.defaultShippingAddress) {
       await addAddressTx(
         tx,

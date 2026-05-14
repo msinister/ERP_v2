@@ -24,6 +24,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { formatCurrency } from '@/lib/format';
+import {
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 // Bill-side apply dialog. Operator picks one of the vendor's CONFIRMED
 // vendor credits with available > 0 and an amount up to the smaller of
@@ -31,8 +35,6 @@ import { formatCurrency } from '@/lib/format';
 //
 // Q4 from discovery: lazy-fetch the VC list on dialog open rather than
 // pre-loading every CONFIRMED VC across the whole org server-side.
-
-const POSITIVE_DECIMAL_RE = /^\d+(\.\d+)?$/;
 
 type ApiErrorBody = {
   error?: string;
@@ -164,9 +166,8 @@ export function ApplyCreditDialog({
   function submit() {
     const next: Partial<Record<string, string>> = {};
     if (!creditId) next.creditId = 'Pick a credit';
-    if (!POSITIVE_DECIMAL_RE.test(amount))
+    if (!isPositiveDecimalInput(amount))
       next.amount = 'Must be a positive number';
-    else if (Number(amount) <= 0) next.amount = 'Must be greater than 0';
     if (Object.keys(next).length > 0) {
       setErrors(next);
       return;
@@ -181,7 +182,7 @@ export function ApplyCreditDialog({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               billId,
-              amount,
+              amount: normalizeDecimalForSubmit(amount),
               notes: notes.trim() || undefined,
             }),
           },
@@ -238,7 +239,21 @@ export function ApplyCreditDialog({
                   className="w-full"
                   aria-invalid={!!errors.creditId}
                 >
-                  <SelectValue placeholder="Pick a vendor credit" />
+                  <SelectValue placeholder="Pick a vendor credit">
+                    {(v) => {
+                      if (!v) return null;
+                      const c = credits.find((x) => x.id === v);
+                      if (!c) return v;
+                      return (
+                        <>
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {c.number}
+                          </span>{' '}
+                          · available {formatCurrency(c.available.toFixed(2))}
+                        </>
+                      );
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {credits.map((c) => (

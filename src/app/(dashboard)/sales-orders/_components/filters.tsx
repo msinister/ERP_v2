@@ -110,7 +110,13 @@ export function SalesOrdersFilters({
           onValueChange={(v) => apply({ status: v, skip: '0' })}
         >
           <SelectTrigger id="so-status" className="w-40">
-            <SelectValue placeholder="All" />
+            <SelectValue placeholder="All">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All statuses'
+                  : (STATUSES.find((s) => s.value === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All statuses</SelectItem>
@@ -130,7 +136,13 @@ export function SalesOrdersFilters({
           onValueChange={(v) => apply({ salesRepId: v, skip: '0' })}
         >
           <SelectTrigger id="so-salesrep" className="w-48">
-            <SelectValue placeholder="All reps" />
+            <SelectValue placeholder="All reps">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All reps'
+                  : (salesReps.find((r) => r.id === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All reps</SelectItem>

@@ -101,7 +101,13 @@ export function VendorCreditsFilters({
           onValueChange={(v) => apply({ status: v, skip: '0' })}
         >
           <SelectTrigger id="vc-status" className="w-36">
-            <SelectValue placeholder="All" />
+            <SelectValue placeholder="All">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All statuses'
+                  : (VC_STATUSES.find((s) => s.value === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All statuses</SelectItem>
@@ -121,7 +127,13 @@ export function VendorCreditsFilters({
           onValueChange={(v) => apply({ vendorId: v, skip: '0' })}
         >
           <SelectTrigger id="vc-vendor" className="w-56">
-            <SelectValue placeholder="All vendors" />
+            <SelectValue placeholder="All vendors">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All vendors'
+                  : (vendors.find((x) => x.id === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All vendors</SelectItem>

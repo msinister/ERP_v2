@@ -171,7 +171,11 @@ export function AccountFormDialog({
                 disabled={isEdit}
               >
                 <SelectTrigger id="acct-type" className="w-full">
-                  <SelectValue />
+                  <SelectValue>
+                    {(v) =>
+                      TYPES.find((t) => t.value === v)?.label ?? v
+                    }
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {TYPES.map((t) => (

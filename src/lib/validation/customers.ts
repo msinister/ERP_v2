@@ -129,8 +129,11 @@ export const createCustomerInputSchema = z.object({
   costPlusPercent: percentDecimal.optional(),
   active: z.boolean().optional(),
   createdById: z.string().optional(),
-  // Composite payload.
-  billingAddress: billingAddressInputSchema, // required per spec
+  // Composite payload. Address is optional so the operator can stand
+  // up a vendor relationship without a billing address on hand (cash
+  // sales, walk-in customers, drop-ship-only relationships); they can
+  // add one later from the customer detail page.
+  billingAddress: billingAddressInputSchema.optional(),
   defaultShippingAddress: shippingAddressInputSchema.optional(),
   additionalShippingAddresses: z.array(shippingAddressInputSchema).optional(),
   contacts: z.array(createContactInputSchema).optional(),

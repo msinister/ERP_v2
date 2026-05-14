@@ -127,7 +127,13 @@ export function CustomersFilters({
           onValueChange={(v) => apply({ type: v, skip: '0' })}
         >
           <SelectTrigger id="customer-type" className="w-56">
-            <SelectValue placeholder="All types" />
+            <SelectValue placeholder="All types">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All types'
+                  : (CUSTOMER_TYPES.find((t) => t.value === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All types</SelectItem>
@@ -152,7 +158,11 @@ export function CustomersFilters({
           }
         >
           <SelectTrigger id="customer-active" className="w-32">
-            <SelectValue />
+            <SelectValue>
+              {(v) =>
+                ACTIVE_OPTIONS.find((o) => o.value === v)?.label ?? v
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {ACTIVE_OPTIONS.map((o) => (
@@ -171,7 +181,13 @@ export function CustomersFilters({
           onValueChange={(v) => apply({ salesRepId: v, skip: '0' })}
         >
           <SelectTrigger id="customer-salesrep" className="w-48">
-            <SelectValue placeholder="All reps" />
+            <SelectValue placeholder="All reps">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All reps'
+                  : (salesReps.find((r) => r.id === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All reps</SelectItem>

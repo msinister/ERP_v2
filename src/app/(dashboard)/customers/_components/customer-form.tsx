@@ -80,18 +80,19 @@ const billingCommonShape = {
   phone: z.string().max(64).optional(),
 };
 
+// All billing address fields are optional in both modes — operator can
+// stand up a customer without an address on hand and fill it in later
+// from the detail page. Submit handler conditionally includes the
+// address payload only when line1 is non-empty so a blank card doesn't
+// produce a half-built address row.
 const createBillingSchema = z.object({
   ...billingCommonShape,
-  line1: z.string().min(1, 'Required').max(500),
-  city: z.string().min(1, 'Required').max(255),
-  region: z.string().min(1, 'Required').max(255),
-  postalCode: z.string().min(1, 'Required').max(32),
+  line1: z.string().max(500),
+  city: z.string().max(255),
+  region: z.string().max(255),
+  postalCode: z.string().max(32),
 });
 
-// Edit mode: same value shape (string, not string | undefined) so the
-// resolver-union stays assignable to a single CustomerFormValues type,
-// but with no .min(1) — empty strings pass since the billing card is
-// hidden in edit and stripped from the PATCH payload.
 const editBillingSchema = z.object({
   ...billingCommonShape,
   line1: z.string().max(500),
@@ -216,6 +217,26 @@ export function CustomerForm({
 
   function submit(values: CustomerFormValues) {
     startTransition(async () => {
+      // Only build the billingAddress payload when the operator
+      // actually entered street info. line1 is the entry-point field —
+      // the backend address schema would reject any of city/region/
+      // postalCode if line1 were set with the others blank.
+      const billingLine1 = values.billing.line1.trim();
+      const billingAddress =
+        billingLine1 !== ''
+          ? {
+              kind: 'BILLING' as const,
+              label: nullEmpty(values.billing.label),
+              attention: nullEmpty(values.billing.attention),
+              line1: billingLine1,
+              line2: nullEmpty(values.billing.line2),
+              city: values.billing.city.trim(),
+              region: values.billing.region.trim(),
+              postalCode: values.billing.postalCode.trim(),
+              country: nullEmpty(values.billing.country),
+              phone: nullEmpty(values.billing.phone),
+            }
+          : undefined;
       const payload: CustomerCreateApiPayload = {
         name: values.name.trim(),
         type: values.type,
@@ -231,18 +252,7 @@ export function CustomerForm({
         taxExempt: values.taxExempt,
         resaleCertNumber: nullEmpty(values.resaleCertNumber),
         internalNotes: nullEmpty(values.internalNotes),
-        billingAddress: {
-          kind: 'BILLING',
-          label: nullEmpty(values.billing.label),
-          attention: nullEmpty(values.billing.attention),
-          line1: values.billing.line1.trim(),
-          line2: nullEmpty(values.billing.line2),
-          city: values.billing.city.trim(),
-          region: values.billing.region.trim(),
-          postalCode: values.billing.postalCode.trim(),
-          country: nullEmpty(values.billing.country),
-          phone: nullEmpty(values.billing.phone),
-        },
+        billingAddress,
       };
       try {
         const endpoint =
@@ -313,7 +323,11 @@ export function CustomerForm({
                       onValueChange={field.onChange}
                     >
                       <SelectTrigger id="type" className="w-full">
-                        <SelectValue />
+                        <SelectValue>
+                          {(v) =>
+                            CUSTOMER_TYPES.find((t) => t.value === v)?.label ?? v
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {CUSTOMER_TYPES.map((t) => (
@@ -343,7 +357,11 @@ export function CustomerForm({
                         className="w-full"
                         aria-invalid={!!errors.salesRepId}
                       >
-                        <SelectValue placeholder="Select a sales rep" />
+                        <SelectValue placeholder="Select a sales rep">
+                          {(v) =>
+                            salesReps.find((r) => r.id === v)?.label ?? v
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {salesReps.map((r) => (
@@ -373,7 +391,11 @@ export function CustomerForm({
                         className="w-full"
                         aria-invalid={!!errors.paymentTermId}
                       >
-                        <SelectValue placeholder="Select a payment term" />
+                        <SelectValue placeholder="Select a payment term">
+                          {(v) =>
+                            paymentTerms.find((t) => t.id === v)?.label ?? v
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {paymentTerms.map((t) => (
@@ -622,7 +644,7 @@ export type CustomerCreateApiPayload = {
   taxExempt: boolean;
   resaleCertNumber?: string;
   internalNotes?: string;
-  billingAddress: {
+  billingAddress?: {
     kind: 'BILLING';
     label?: string;
     attention?: string;

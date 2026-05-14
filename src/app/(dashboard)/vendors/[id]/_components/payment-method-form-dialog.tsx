@@ -273,7 +273,19 @@ export function PaymentMethodFormDialog({
               <FieldLabel htmlFor="pm-kind">Kind</FieldLabel>
               <Select value={kind} onValueChange={(v) => setKind(v as Kind)}>
                 <SelectTrigger id="pm-kind" className="w-full">
-                  <SelectValue />
+                  <SelectValue>
+                    {(v) =>
+                      v === 'ACH'
+                        ? 'ACH'
+                        : v === 'WIRE'
+                          ? 'Wire'
+                          : v === 'CHECK'
+                            ? 'Check'
+                            : v === 'CREDIT_CARD'
+                              ? 'Credit card'
+                              : v
+                    }
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ACH">ACH</SelectItem>

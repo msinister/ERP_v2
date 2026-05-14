@@ -110,7 +110,11 @@ export function ProductsFilters({
           }
         >
           <SelectTrigger id="product-status" className="w-44">
-            <SelectValue />
+            <SelectValue>
+              {(v) =>
+                STATUS_OPTIONS.find((s) => s.value === v)?.label ?? v
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {STATUS_OPTIONS.map((s) => (
@@ -129,7 +133,9 @@ export function ProductsFilters({
           onValueChange={(v) => apply({ brand: v, skip: '0' })}
         >
           <SelectTrigger id="product-brand" className="w-48">
-            <SelectValue placeholder="All brands" />
+            <SelectValue placeholder="All brands">
+              {(v) => (v === ALL_VALUE ? 'All brands' : v)}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All brands</SelectItem>
@@ -149,7 +155,9 @@ export function ProductsFilters({
           onValueChange={(v) => apply({ category: v, skip: '0' })}
         >
           <SelectTrigger id="product-category" className="w-48">
-            <SelectValue placeholder="All categories" />
+            <SelectValue placeholder="All categories">
+              {(v) => (v === ALL_VALUE ? 'All categories' : v)}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All categories</SelectItem>

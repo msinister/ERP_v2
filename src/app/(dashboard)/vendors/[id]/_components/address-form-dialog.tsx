@@ -205,7 +205,17 @@ export function AddressFormDialog({
               disabled={isEdit}
             >
               <SelectTrigger id="addr-kind" className="w-full">
-                <SelectValue />
+                <SelectValue>
+                  {(v) =>
+                    v === 'REMIT_TO'
+                      ? 'Remit-to'
+                      : v === 'SHIPPING'
+                        ? 'Shipping'
+                        : v === 'BILLING'
+                          ? 'Billing'
+                          : v
+                  }
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="REMIT_TO">Remit-to</SelectItem>

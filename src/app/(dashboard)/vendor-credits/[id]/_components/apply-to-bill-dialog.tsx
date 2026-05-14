@@ -24,12 +24,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { formatCurrency } from '@/lib/format';
+import {
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 // VC-side apply dialog. Operator picks one of the vendor's CONFIRMED
 // bills with remaining > 0 and an amount up to the smaller of
 // (vc.available, bill.remaining).
-
-const POSITIVE_DECIMAL_RE = /^\d+(\.\d+)?$/;
 
 type ApiErrorBody = {
   error?: string;
@@ -165,9 +167,8 @@ export function ApplyToBillDialog({
   function submit() {
     const next: Partial<Record<string, string>> = {};
     if (!billId) next.billId = 'Pick a bill';
-    if (!POSITIVE_DECIMAL_RE.test(amount))
+    if (!isPositiveDecimalInput(amount))
       next.amount = 'Must be a positive number';
-    else if (Number(amount) <= 0) next.amount = 'Must be greater than 0';
     if (Object.keys(next).length > 0) {
       setErrors(next);
       return;
@@ -182,7 +183,7 @@ export function ApplyToBillDialog({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               billId,
-              amount,
+              amount: normalizeDecimalForSubmit(amount),
               notes: notes.trim() || undefined,
             }),
           },
@@ -234,7 +235,21 @@ export function ApplyToBillDialog({
                   className="w-full"
                   aria-invalid={!!errors.billId}
                 >
-                  <SelectValue placeholder="Pick a bill" />
+                  <SelectValue placeholder="Pick a bill">
+                    {(v) => {
+                      if (!v) return null;
+                      const b = bills.find((x) => x.id === v);
+                      if (!b) return v;
+                      return (
+                        <>
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {b.number}
+                          </span>{' '}
+                          · remaining {formatCurrency(b.remaining.toFixed(2))}
+                        </>
+                      );
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {bills.map((b) => (

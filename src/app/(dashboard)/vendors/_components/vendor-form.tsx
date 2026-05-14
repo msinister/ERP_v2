@@ -75,12 +75,17 @@ const remitCommonShape = {
   phone: z.string().max(64).optional(),
 };
 
+// All remit-to fields optional in both modes — operator can stand up
+// a vendor without an address on hand and add one later from the
+// detail page. Submit conditionally includes the address payload only
+// when line1 is non-empty (backend already accepts remitToAddress as
+// optional).
 const createRemitSchema = z.object({
   ...remitCommonShape,
-  line1: z.string().min(1, 'Required').max(500),
-  city: z.string().min(1, 'Required').max(255),
-  region: z.string().min(1, 'Required').max(255),
-  postalCode: z.string().min(1, 'Required').max(32),
+  line1: z.string().max(500),
+  city: z.string().max(255),
+  region: z.string().max(255),
+  postalCode: z.string().max(32),
 });
 
 const editRemitSchema = z.object({
@@ -198,6 +203,29 @@ export function VendorForm({
 
   function submit(values: VendorFormValues) {
     startTransition(async () => {
+      // Only build the remitToAddress payload when the operator
+      // actually entered street info. line1 is the entry-point field;
+      // the backend address schema would reject any of city/region/
+      // postalCode if line1 were set with the others blank.
+      const remitLine1 = values.remit.line1.trim();
+      const remitToAddress =
+        remitLine1 !== ''
+          ? {
+              kind: 'REMIT_TO' as const,
+              label: nullEmpty(values.remit.label),
+              attention: nullEmpty(values.remit.attention),
+              line1: remitLine1,
+              line2: nullEmpty(values.remit.line2),
+              city: values.remit.city.trim(),
+              region: values.remit.region.trim(),
+              postalCode: values.remit.postalCode.trim(),
+              country: nullEmpty(values.remit.country)?.toUpperCase(),
+              phone: nullEmpty(values.remit.phone),
+              // First remit-to becomes the default automatically.
+              // Pilot doesn't expose a checkbox here.
+              isDefault: true,
+            }
+          : undefined;
       const payload: VendorCreateApiPayload = {
         name: values.name.trim(),
         type: values.type,
@@ -207,21 +235,7 @@ export function VendorForm({
         costChangeAlertPct: nullEmpty(values.costChangeAlertPct),
         notes: nullEmpty(values.notes),
         active: values.active,
-        remitToAddress: {
-          kind: 'REMIT_TO',
-          label: nullEmpty(values.remit.label),
-          attention: nullEmpty(values.remit.attention),
-          line1: values.remit.line1.trim(),
-          line2: nullEmpty(values.remit.line2),
-          city: values.remit.city.trim(),
-          region: values.remit.region.trim(),
-          postalCode: values.remit.postalCode.trim(),
-          country: nullEmpty(values.remit.country)?.toUpperCase(),
-          phone: nullEmpty(values.remit.phone),
-          // First remit-to becomes the default automatically. Pilot
-          // doesn't expose a checkbox here.
-          isDefault: true,
-        },
+        remitToAddress,
       };
       try {
         const endpoint =
@@ -301,7 +315,11 @@ export function VendorForm({
                       onValueChange={field.onChange}
                     >
                       <SelectTrigger id="type" className="w-full">
-                        <SelectValue />
+                        <SelectValue>
+                          {(v) =>
+                            VENDOR_TYPES.find((t) => t.value === v)?.label ?? v
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {VENDOR_TYPES.map((t) => (
@@ -331,7 +349,11 @@ export function VendorForm({
                         className="w-full"
                         aria-invalid={!!errors.paymentTermId}
                       >
-                        <SelectValue placeholder="Select a payment term" />
+                        <SelectValue placeholder="Select a payment term">
+                          {(v) =>
+                            paymentTerms.find((t) => t.id === v)?.label ?? v
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {paymentTerms.map((t) => (

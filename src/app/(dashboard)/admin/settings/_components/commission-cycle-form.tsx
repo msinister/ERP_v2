@@ -85,7 +85,15 @@ export function CommissionCycleForm({
           <FieldLabel htmlFor="cycle-kind">Cycle</FieldLabel>
           <Select value={kind} onValueChange={(v) => setKind((v as Kind) ?? 'MONTHLY')}>
             <SelectTrigger id="cycle-kind" className="w-full">
-              <SelectValue />
+              <SelectValue>
+                {(v) =>
+                  v === 'WEEKLY'
+                    ? 'Weekly'
+                    : v === 'BI_WEEKLY'
+                      ? 'Bi-weekly'
+                      : 'Monthly'
+                }
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="WEEKLY">Weekly</SelectItem>

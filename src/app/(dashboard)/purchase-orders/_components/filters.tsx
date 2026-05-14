@@ -111,7 +111,13 @@ export function PurchaseOrdersFilters({
           onValueChange={(v) => apply({ status: v, skip: '0' })}
         >
           <SelectTrigger id="po-status" className="w-48">
-            <SelectValue placeholder="All statuses" />
+            <SelectValue placeholder="All statuses">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All statuses'
+                  : (PO_STATUSES.find((s) => s.value === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All statuses</SelectItem>
@@ -131,7 +137,13 @@ export function PurchaseOrdersFilters({
           onValueChange={(v) => apply({ vendorId: v, skip: '0' })}
         >
           <SelectTrigger id="po-vendor" className="w-56">
-            <SelectValue placeholder="All vendors" />
+            <SelectValue placeholder="All vendors">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All vendors'
+                  : (vendors.find((x) => x.id === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All vendors</SelectItem>

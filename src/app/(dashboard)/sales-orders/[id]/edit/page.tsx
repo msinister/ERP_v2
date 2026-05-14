@@ -45,7 +45,7 @@ export default async function EditSalesOrderPage({
 
   const existingVariantIds = so.lines.map((l) => l.variantId);
 
-  const [customers, warehouses, variants] = await Promise.all([
+  const [customers, warehouses, variants, inventoryRows] = await Promise.all([
     listCustomers(db, { active: true, take: 1000 }),
     listWarehouses(db),
     // Active variants + any inactive variants the existing lines
@@ -69,7 +69,34 @@ export default async function EditSalesOrderPage({
       orderBy: { sku: 'asc' },
       take: 1000,
     }),
+    // Stock context for the SKU dropdown (QOH + reserved at the SO's
+    // warehouse). Pull across all warehouses; the form looks up by
+    // (variantId, warehouseId) at render time.
+    db.inventoryItem.findMany({
+      select: {
+        variantId: true,
+        warehouseId: true,
+        onHand: true,
+        reserved: true,
+      },
+    }),
   ]);
+
+  const stockByVariant = new Map<
+    string,
+    Record<string, { onHand: string; reserved: string }>
+  >();
+  for (const row of inventoryRows) {
+    let perWarehouse = stockByVariant.get(row.variantId);
+    if (!perWarehouse) {
+      perWarehouse = {};
+      stockByVariant.set(row.variantId, perWarehouse);
+    }
+    perWarehouse[row.warehouseId] = {
+      onHand: row.onHand.toString(),
+      reserved: row.reserved.toString(),
+    };
+  }
 
   const defaults: Partial<OrderFormValues> = {
     customerId: so.customerId,
@@ -137,6 +164,7 @@ export default async function EditSalesOrderPage({
           variantName: v.name,
           productName: v.product.name,
           basePrice: v.product.basePrice?.toString() ?? null,
+          inventoryByWarehouse: stockByVariant.get(v.id) ?? {},
         }))}
         defaultValues={defaults}
       />

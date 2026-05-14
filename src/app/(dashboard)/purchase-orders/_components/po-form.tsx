@@ -33,6 +33,11 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency } from '@/lib/format';
+import {
+  isNonNegativeDecimalInput,
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 // ===========================================================================
 // Lookup option shapes — narrow so server fetches stay shallow.
@@ -66,16 +71,18 @@ export type CatalogHint = {
 // "no value" (RHF + native inputs produce strings).
 // ===========================================================================
 
+// Looser refines so operators can type ".25" without a leading zero;
+// the submit handler normalizes before posting (server validator
+// remains strict on ^-?\d+(\.\d+)?$).
 const qtyStr = z
   .string()
   .min(1, 'Required')
-  .regex(/^\d+(\.\d+)?$/, 'Must be a non-negative decimal')
-  .refine((v) => Number(v) > 0, 'Must be greater than 0');
+  .refine(isPositiveDecimalInput, 'Must be a positive decimal');
 
 const unitCostStr = z
   .string()
   .min(1, 'Required')
-  .regex(/^\d+(\.\d+)?$/, 'Must be a non-negative decimal');
+  .refine(isNonNegativeDecimalInput, 'Must be a non-negative decimal');
 
 const lineSchema = z.object({
   variantId: z.string().min(1, 'Required'),
@@ -242,8 +249,8 @@ export function PoForm({
           // warehouse-per-line lands in a later slice — schema already
           // supports it.
           warehouseId: values.warehouseId,
-          qtyOrdered: l.qtyOrdered,
-          unitCost: l.unitCost,
+          qtyOrdered: normalizeDecimalForSubmit(l.qtyOrdered),
+          unitCost: normalizeDecimalForSubmit(l.unitCost),
           vendorSku: nullEmpty(l.vendorSku),
           manufacturerPartNumber: nullEmpty(l.manufacturerPartNumber),
           notes: nullEmpty(l.notes),
@@ -315,7 +322,21 @@ export function PoForm({
                       className="w-full"
                       aria-invalid={!!errors.vendorId}
                     >
-                      <SelectValue placeholder="Select a vendor" />
+                      <SelectValue placeholder="Select a vendor">
+                        {(v) => {
+                          if (!v) return null;
+                          const vendor = vendors.find((x) => x.id === v);
+                          if (!vendor) return v;
+                          return (
+                            <>
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {vendor.code}
+                              </span>{' '}
+                              {vendor.name}
+                            </>
+                          );
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {vendors.length === 0 ? (
@@ -359,7 +380,21 @@ export function PoForm({
                       className="w-full"
                       aria-invalid={!!errors.warehouseId}
                     >
-                      <SelectValue placeholder="Select a warehouse" />
+                      <SelectValue placeholder="Select a warehouse">
+                        {(v) => {
+                          if (!v) return null;
+                          const w = warehouses.find((x) => x.id === v);
+                          if (!w) return v;
+                          return (
+                            <>
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {w.code}
+                              </span>{' '}
+                              {w.name}
+                            </>
+                          );
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {warehouses.map((w) => (
@@ -595,7 +630,24 @@ function LineRow({
                     className="w-full"
                     aria-invalid={!!lineErrors?.variantId}
                   >
-                    <SelectValue placeholder="Pick a product…" />
+                    <SelectValue placeholder="Pick a product…">
+                      {(value) => {
+                        if (!value) return null;
+                        const variant = variants.find((x) => x.id === value);
+                        if (!variant) return value;
+                        return (
+                          <>
+                            <span className="font-mono text-xs text-muted-foreground">
+                              {variant.sku}
+                            </span>{' '}
+                            {variant.productName}
+                            {variant.variantName
+                              ? ` — ${variant.variantName}`
+                              : ''}
+                          </>
+                        );
+                      }}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {sortedVariants.length === 0 ? (

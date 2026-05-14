@@ -32,6 +32,10 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { formatCurrency } from '@/lib/format';
+import {
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 // ===========================================================================
 // Lookup option shape
@@ -52,11 +56,12 @@ export type VendorOption = {
 // catches typos before submit.
 // ===========================================================================
 
+// Looser refine so operators can type ".25" without a leading zero;
+// the submit handler normalizes before posting.
 const positiveAmount = z
   .string()
   .min(1, 'Required')
-  .regex(/^\d+(\.\d+)?$/, 'Must be a positive number')
-  .refine((v) => Number(v) > 0, 'Must be greater than 0');
+  .refine(isPositiveDecimalInput, 'Must be a positive number');
 
 const lineSchema = z.object({
   description: z.string().min(1, 'Required').max(500),
@@ -187,14 +192,14 @@ export function VcForm({
     startTransition(async () => {
       const payload = {
         vendorId: values.vendorId,
-        amount: values.amount,
+        amount: normalizeDecimalForSubmit(values.amount),
         creditDate: nullEmpty(values.creditDate),
         currency: nullEmpty(values.currency)?.toUpperCase(),
         reason: nullEmpty(values.reason),
         notes: nullEmpty(values.notes),
         lines: values.lines.map((l) => ({
           description: l.description.trim(),
-          amount: l.amount,
+          amount: normalizeDecimalForSubmit(l.amount),
           notes: nullEmpty(l.notes),
         })),
       };
@@ -265,7 +270,21 @@ export function VcForm({
                         className="w-full"
                         aria-invalid={!!errors.vendorId}
                       >
-                        <SelectValue placeholder="Select a vendor" />
+                        <SelectValue placeholder="Select a vendor">
+                          {(v) => {
+                            if (!v) return null;
+                            const vendor = vendors.find((x) => x.id === v);
+                            if (!vendor) return v;
+                            return (
+                              <>
+                                <span className="font-mono text-xs text-muted-foreground">
+                                  {vendor.code}
+                                </span>{' '}
+                                {vendor.name}
+                              </>
+                            );
+                          }}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {vendors.length === 0 ? (

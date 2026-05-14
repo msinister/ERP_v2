@@ -24,6 +24,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { formatCurrency } from '@/lib/format';
+import {
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 export type CashAccountOption = {
   id: string;
@@ -43,8 +47,6 @@ const METHODS: Array<{ value: string; label: string }> = [
   { value: 'CASH', label: 'Cash' },
   { value: 'MONEY_ORDER', label: 'Money order' },
 ];
-
-const POSITIVE_DECIMAL_RE = /^\d+(\.\d+)?$/;
 
 type ApiErrorBody = {
   error?: string;
@@ -108,9 +110,8 @@ export function RecordPaymentDialog({
 
   function submit() {
     const next: Partial<Record<string, string>> = {};
-    if (!POSITIVE_DECIMAL_RE.test(amount))
+    if (!isPositiveDecimalInput(amount))
       next.amount = 'Must be a positive number';
-    else if (Number(amount) <= 0) next.amount = 'Must be greater than 0';
     if (!cashAccountId) next.cashAccountId = 'Pick a cash account';
     if (Object.keys(next).length > 0) {
       setErrors(next);
@@ -118,7 +119,7 @@ export function RecordPaymentDialog({
     }
     setErrors({});
     const payload = {
-      amount,
+      amount: normalizeDecimalForSubmit(amount),
       method,
       cashAccountId,
       paymentDate: paymentDate || undefined,
@@ -172,8 +173,8 @@ export function RecordPaymentDialog({
   // Inline overpayment warning so the operator sees it before submit.
   // Service still does the auto-VC handling regardless.
   const overpaying =
-    POSITIVE_DECIMAL_RE.test(amount) &&
-    POSITIVE_DECIMAL_RE.test(remainingBalance) &&
+    isPositiveDecimalInput(amount) &&
+    Number.isFinite(Number(remainingBalance)) &&
     Number(amount) > Number(remainingBalance);
 
   return (
@@ -217,7 +218,11 @@ export function RecordPaymentDialog({
               <FieldLabel htmlFor="pay-method">Method</FieldLabel>
               <Select value={method} onValueChange={(v) => setMethod(v ?? 'CHECK')}>
                 <SelectTrigger id="pay-method" className="w-full">
-                  <SelectValue />
+                  <SelectValue>
+                    {(v) =>
+                      METHODS.find((m) => m.value === v)?.label ?? v
+                    }
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {METHODS.map((m) => (
@@ -250,7 +255,21 @@ export function RecordPaymentDialog({
                 className="w-full"
                 aria-invalid={!!errors.cashAccountId}
               >
-                <SelectValue placeholder="Pick a bank / cash account" />
+                <SelectValue placeholder="Pick a bank / cash account">
+                  {(v) => {
+                    if (!v) return null;
+                    const a = cashAccounts.find((x) => x.id === v);
+                    if (!a) return v;
+                    return (
+                      <>
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {a.code}
+                        </span>{' '}
+                        {a.name}
+                      </>
+                    );
+                  }}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 {cashAccounts.length === 0 ? (

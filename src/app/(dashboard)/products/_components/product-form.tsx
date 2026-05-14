@@ -242,7 +242,12 @@ export function ProductForm({
                   render={({ field }) => (
                     <Select value={field.value} onValueChange={field.onChange}>
                       <SelectTrigger id="type" className="w-full">
-                        <SelectValue />
+                        <SelectValue>
+                          {(v) =>
+                            PRODUCT_TYPES.find((t) => t.value === v)?.label ??
+                            v
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {PRODUCT_TYPES.map((t) => (

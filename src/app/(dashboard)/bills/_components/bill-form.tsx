@@ -32,6 +32,11 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { formatCurrency } from '@/lib/format';
+import {
+  isNonNegativeDecimalInput,
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 // ===========================================================================
 // Lookup option shapes
@@ -63,16 +68,17 @@ export type ExpenseAccountOption = {
 //   EXPENSE → expenseAccountId required, variantId forbidden
 // ===========================================================================
 
+// Looser refines so operators can type ".25" without a leading zero;
+// the submit handler normalizes before posting.
 const qtyStr = z
   .string()
   .min(1, 'Required')
-  .regex(/^\d+(\.\d+)?$/, 'Must be a non-negative decimal')
-  .refine((v) => Number(v) > 0, 'Must be greater than 0');
+  .refine(isPositiveDecimalInput, 'Must be a positive decimal');
 
 const unitCostStr = z
   .string()
   .min(1, 'Required')
-  .regex(/^\d+(\.\d+)?$/, 'Must be a non-negative decimal');
+  .refine(isNonNegativeDecimalInput, 'Must be a non-negative decimal');
 
 const lineSchema = z.object({
   // Either variantId OR expenseAccountId is required, depending on
@@ -252,8 +258,8 @@ export function BillForm({
           expenseAccountId:
             values.source === 'EXPENSE' ? l.expenseAccountId : undefined,
           description: l.description.trim(),
-          qty: l.qty,
-          unitCost: l.unitCost,
+          qty: normalizeDecimalForSubmit(l.qty),
+          unitCost: normalizeDecimalForSubmit(l.unitCost),
           notes: nullEmpty(l.notes),
         })),
       };
@@ -323,7 +329,21 @@ export function BillForm({
                       className="w-full"
                       aria-invalid={!!errors.vendorId}
                     >
-                      <SelectValue placeholder="Select a vendor" />
+                      <SelectValue placeholder="Select a vendor">
+                        {(v) => {
+                          if (!v) return null;
+                          const vendor = vendors.find((x) => x.id === v);
+                          if (!vendor) return v;
+                          return (
+                            <>
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {vendor.code}
+                              </span>{' '}
+                              {vendor.name}
+                            </>
+                          );
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {vendors.length === 0 ? (
@@ -361,7 +381,15 @@ export function BillForm({
                     disabled={mode.kind === 'edit'}
                   >
                     <SelectTrigger id="source" className="w-full">
-                      <SelectValue />
+                      <SelectValue>
+                        {(v) =>
+                          v === 'PRODUCT'
+                            ? 'Product — variant lines'
+                            : v === 'EXPENSE'
+                              ? 'Expense — GL account lines'
+                              : v
+                        }
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="PRODUCT">
@@ -536,7 +564,7 @@ function LineRow({
   return (
     <div className="rounded-md border border-border p-3">
       <div className="grid grid-cols-12 gap-3">
-        <div className="col-span-12 md:col-span-5">
+        <div className="col-span-12 md:col-span-4">
           <Field>
             <FieldLabel htmlFor={`lines.${index}.discriminator`}>
               {source === 'PRODUCT' ? 'Variant' : 'Expense account'}
@@ -555,7 +583,24 @@ function LineRow({
                       className="w-full"
                       aria-invalid={!!lineErrors?.variantId}
                     >
-                      <SelectValue placeholder="Pick a product…" />
+                      <SelectValue placeholder="Pick a product…">
+                        {(v) => {
+                          if (!v) return null;
+                          const variant = variants.find((x) => x.id === v);
+                          if (!variant) return v;
+                          return (
+                            <>
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {variant.sku}
+                              </span>{' '}
+                              {variant.productName}
+                              {variant.variantName
+                                ? ` — ${variant.variantName}`
+                                : ''}
+                            </>
+                          );
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {variants.length === 0 ? (
@@ -591,7 +636,21 @@ function LineRow({
                       className="w-full"
                       aria-invalid={!!lineErrors?.expenseAccountId}
                     >
-                      <SelectValue placeholder="Pick an expense account…" />
+                      <SelectValue placeholder="Pick an expense account…">
+                        {(v) => {
+                          if (!v) return null;
+                          const a = expenseAccounts.find((x) => x.id === v);
+                          if (!a) return v;
+                          return (
+                            <>
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {a.code}
+                              </span>{' '}
+                              {a.name}
+                            </>
+                          );
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {expenseAccounts.length === 0 ? (
@@ -623,7 +682,7 @@ function LineRow({
           </Field>
         </div>
 
-        <div className="col-span-12 md:col-span-3">
+        <div className="col-span-12 md:col-span-2">
           <Field>
             <FieldLabel htmlFor={`lines.${index}.description`}>
               Description
@@ -633,8 +692,8 @@ function LineRow({
               aria-invalid={!!lineErrors?.description}
               placeholder={
                 source === 'PRODUCT'
-                  ? 'e.g. Bulk caps, 100ct'
-                  : 'e.g. Q2 freight surcharge'
+                  ? 'e.g. Bulk caps'
+                  : 'e.g. Freight'
               }
               {...register(`lines.${index}.description`)}
             />
@@ -671,6 +730,19 @@ function LineRow({
           </Field>
         </div>
 
+        {/* Notes inline on the same row instead of a full-width sub-row.
+            Optional → no error state to worry about. */}
+        <div className="col-span-12 md:col-span-2">
+          <Field>
+            <FieldLabel htmlFor={`lines.${index}.notes`}>Notes</FieldLabel>
+            <Input
+              id={`lines.${index}.notes`}
+              placeholder="Optional"
+              {...register(`lines.${index}.notes`)}
+            />
+          </Field>
+        </div>
+
         <div className="col-span-12 flex items-end justify-end md:col-span-1">
           <Button
             type="button"
@@ -683,17 +755,6 @@ function LineRow({
             <Trash2 />
           </Button>
         </div>
-      </div>
-
-      <div className="mt-2">
-        <Field>
-          <FieldLabel htmlFor={`lines.${index}.notes`}>Line notes</FieldLabel>
-          <Input
-            id={`lines.${index}.notes`}
-            placeholder="Optional internal note."
-            {...register(`lines.${index}.notes`)}
-          />
-        </Field>
       </div>
     </div>
   );

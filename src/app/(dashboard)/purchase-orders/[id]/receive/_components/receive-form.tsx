@@ -20,6 +20,11 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { formatCurrency } from '@/lib/format';
+import {
+  isNonNegativeDecimalInput,
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 export type WarehouseOption = { id: string; code: string; name: string };
 
@@ -48,8 +53,6 @@ type LineState = {
   // retry.
   errors: Partial<Record<'qtyReceived' | 'unitCost', string>>;
 };
-
-const POSITIVE_DECIMAL_RE = /^\d+(\.\d+)?$/;
 
 type ApiErrorBody = {
   error?: string;
@@ -181,11 +184,9 @@ export function ReceiveForm({
       const s = nextStates[l.purchaseOrderLineId];
       if (!s.receive) continue;
       const errs: LineState['errors'] = {};
-      if (!POSITIVE_DECIMAL_RE.test(s.qtyReceived))
+      if (!isPositiveDecimalInput(s.qtyReceived))
         errs.qtyReceived = 'Must be a positive number';
-      else if (Number(s.qtyReceived) <= 0)
-        errs.qtyReceived = 'Must be greater than 0';
-      if (!POSITIVE_DECIMAL_RE.test(s.unitCost))
+      if (!isNonNegativeDecimalInput(s.unitCost))
         errs.unitCost = 'Must be a non-negative number';
       if (Object.keys(errs).length > 0) {
         nextStates[l.purchaseOrderLineId] = { ...s, errors: errs };
@@ -196,8 +197,8 @@ export function ReceiveForm({
         purchaseOrderLineId: l.purchaseOrderLineId,
         variantId: l.variantId,
         warehouseId: l.warehouseId,
-        qtyReceived: s.qtyReceived,
-        unitCost: s.unitCost,
+        qtyReceived: normalizeDecimalForSubmit(s.qtyReceived),
+        unitCost: normalizeDecimalForSubmit(s.unitCost),
         notes: s.notes.trim() || undefined,
       });
     }
@@ -299,7 +300,21 @@ export function ReceiveForm({
                 disabled={warehouses.length === 1}
               >
                 <SelectTrigger id="receive-warehouse" className="w-full">
-                  <SelectValue placeholder="Pick a warehouse" />
+                  <SelectValue placeholder="Pick a warehouse">
+                    {(v) => {
+                      if (!v) return null;
+                      const w = warehouses.find((x) => x.id === v);
+                      if (!w) return v;
+                      return (
+                        <>
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {w.code}
+                          </span>{' '}
+                          {w.name}
+                        </>
+                      );
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {warehouses.map((w) => (
@@ -433,7 +448,7 @@ function LineRow({
   // Visual cue when about to over-receive: qtyReceived > qtyRemaining.
   const overReceiving =
     state.receive &&
-    POSITIVE_DECIMAL_RE.test(state.qtyReceived) &&
+    isPositiveDecimalInput(state.qtyReceived) &&
     Number(state.qtyReceived) > Number(line.qtyRemaining);
 
   return (

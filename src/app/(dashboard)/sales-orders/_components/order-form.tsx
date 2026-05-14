@@ -1,5 +1,6 @@
 'use client';
 
+import type React from 'react';
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -32,6 +33,11 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { formatCurrency } from '@/lib/format';
+import {
+  isNonNegativeDecimalInput,
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 // ===========================================================================
 // Lookup option shapes (kept narrow so the server fetches stay shallow)
@@ -39,12 +45,20 @@ import { formatCurrency } from '@/lib/format';
 
 export type CustomerOption = { id: string; code: string; name: string };
 export type WarehouseOption = { id: string; code: string; name: string };
+// inventoryByWarehouse keys onHand/reserved by warehouseId so the
+// LineRow can show QOH + available for the current SO warehouse in
+// the SKU dropdown. Variants without inventory rows for the warehouse
+// fall back to 0 on hand / 0 reserved.
 export type VariantOption = {
   id: string;
   sku: string;
   variantName: string | null;
   productName: string;
   basePrice: string | null;
+  inventoryByWarehouse: Record<
+    string,
+    { onHand: string; reserved: string }
+  >;
 };
 
 // ===========================================================================
@@ -53,25 +67,28 @@ export type VariantOption = {
 // RHF + native inputs always produce strings.
 // ===========================================================================
 
+// Looser refines so operators can type ".25" without a leading zero;
+// the submit handler normalizes before posting.
 const decimalStr = z
   .union([
     z.literal(''),
-    z.string().regex(/^\d+(\.\d+)?$/, 'Must be a non-negative decimal'),
+    z
+      .string()
+      .refine(isNonNegativeDecimalInput, 'Must be a non-negative decimal'),
   ])
   .optional();
 
 const percentStr = z
   .union([
     z.literal(''),
-    z.string().regex(/^\d+(\.\d+)?$/, 'Must be a number'),
+    z.string().refine(isNonNegativeDecimalInput, 'Must be a number'),
   ])
   .optional();
 
 const qtyStr = z
   .string()
   .min(1, 'Required')
-  .regex(/^\d+(\.\d+)?$/, 'Must be a non-negative decimal')
-  .refine((v) => Number(v) > 0, 'Must be greater than 0');
+  .refine(isPositiveDecimalInput, 'Must be a positive decimal');
 
 const lineSchema = z
   .object({
@@ -162,6 +179,14 @@ function nullEmpty(v: string | undefined): string | undefined {
   return trimmed === '' ? undefined : trimmed;
 }
 
+// Optional decimal: empty stays undefined, anything else gets
+// normalized for the strict server validator (".25" → "0.25").
+function nullEmptyDecimal(v: string | undefined): string | undefined {
+  const n = nullEmpty(v);
+  if (n == null) return undefined;
+  return normalizeDecimalForSubmit(n);
+}
+
 type ApiErrorBody = {
   error?: string;
   issues?: Array<{ path?: Array<string | number>; message?: string }>;
@@ -226,6 +251,7 @@ export function OrderForm({
   });
 
   const customerId = watch('customerId');
+  const warehouseId = watch('warehouseId');
 
   function submit(values: OrderFormValues) {
     startTransition(async () => {
@@ -237,20 +263,20 @@ export function OrderForm({
         shippingAddress: nullEmpty(values.shippingAddress),
         customerNotes: nullEmpty(values.customerNotes),
         internalNotes: nullEmpty(values.internalNotes),
-        orderDiscountPercent: nullEmpty(values.orderDiscountPercent),
-        orderDiscountAmount: nullEmpty(values.orderDiscountAmount),
-        shippingAmount: nullEmpty(values.shippingAmount),
-        handlingAmount: nullEmpty(values.handlingAmount),
+        orderDiscountPercent: nullEmptyDecimal(values.orderDiscountPercent),
+        orderDiscountAmount: nullEmptyDecimal(values.orderDiscountAmount),
+        shippingAmount: nullEmptyDecimal(values.shippingAmount),
+        handlingAmount: nullEmptyDecimal(values.handlingAmount),
         lines: values.lines.map((l) => ({
           variantId: l.variantId,
           // Every line carries the SO-level warehouse for pilot. Multi-
           // warehouse per-line lands in a later slice; the schema
           // already supports it.
           warehouseId: values.warehouseId,
-          qtyOrdered: l.qtyOrdered,
-          manualUnitPrice: nullEmpty(l.manualUnitPrice),
-          discountPercent: nullEmpty(l.discountPercent),
-          discountAmount: nullEmpty(l.discountAmount),
+          qtyOrdered: normalizeDecimalForSubmit(l.qtyOrdered),
+          manualUnitPrice: nullEmptyDecimal(l.manualUnitPrice),
+          discountPercent: nullEmptyDecimal(l.discountPercent),
+          discountAmount: nullEmptyDecimal(l.discountAmount),
           customerNote: nullEmpty(l.customerNote),
         })),
       };
@@ -320,7 +346,21 @@ export function OrderForm({
                       className="w-full"
                       aria-invalid={!!errors.customerId}
                     >
-                      <SelectValue placeholder="Select a customer" />
+                      <SelectValue placeholder="Select a customer">
+                        {(v) => {
+                          if (!v) return null;
+                          const c = customers.find((x) => x.id === v);
+                          if (!c) return v;
+                          return (
+                            <>
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {c.code}
+                              </span>{' '}
+                              {c.name}
+                            </>
+                          );
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {customers.length === 0 ? (
@@ -360,7 +400,21 @@ export function OrderForm({
                       className="w-full"
                       aria-invalid={!!errors.warehouseId}
                     >
-                      <SelectValue placeholder="Select a warehouse" />
+                      <SelectValue placeholder="Select a warehouse">
+                        {(v) => {
+                          if (!v) return null;
+                          const w = warehouses.find((x) => x.id === v);
+                          if (!w) return v;
+                          return (
+                            <>
+                              <span className="font-mono text-xs text-muted-foreground">
+                                {w.code}
+                              </span>{' '}
+                              {w.name}
+                            </>
+                          );
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {warehouses.map((w) => (
@@ -398,6 +452,7 @@ export function OrderForm({
                   form={form}
                   index={index}
                   customerId={customerId}
+                  warehouseId={warehouseId}
                   variants={variants}
                   canRemove={fields.length > 1}
                   onRemove={() => remove(index)}
@@ -581,6 +636,7 @@ function LineRow({
   form,
   index,
   customerId,
+  warehouseId,
   variants,
   canRemove,
   onRemove,
@@ -588,6 +644,7 @@ function LineRow({
   form: UseFormReturn<OrderFormValues>;
   index: number;
   customerId: string;
+  warehouseId: string;
   variants: VariantOption[];
   canRemove: boolean;
   onRemove: () => void;
@@ -602,6 +659,8 @@ function LineRow({
   const variantId = watch(`lines.${index}.variantId`);
   const qty = watch(`lines.${index}.qtyOrdered`);
   const manualUnitPrice = watch(`lines.${index}.manualUnitPrice`);
+  const discountPercent = watch(`lines.${index}.discountPercent`);
+  const discountAmount = watch(`lines.${index}.discountAmount`);
 
   const [resolved, setResolved] = useState<LinePriceResolve | null>(null);
   const [resolving, setResolving] = useState(false);
@@ -642,10 +701,31 @@ function LineRow({
     [variants, variantId],
   );
 
+  // Live line total (qty × unit price − discount). Uses the resolved
+  // unit price when no manual override is typed; falls back to 0 when
+  // the resolver hasn't run yet (no customer / variant picked).
+  const effectiveUnitPriceStr =
+    (manualUnitPrice && manualUnitPrice.trim() !== ''
+      ? manualUnitPrice
+      : resolved?.unitPrice) ?? null;
+  const lineTotal = (() => {
+    const q = Number(qty);
+    const u = Number(effectiveUnitPriceStr);
+    if (!Number.isFinite(q) || !Number.isFinite(u) || effectiveUnitPriceStr == null)
+      return null;
+    let total = q * u;
+    if (discountAmount && /^\d*\.?\d+$/.test(discountAmount)) {
+      total -= Number(discountAmount);
+    } else if (discountPercent && /^\d*\.?\d+$/.test(discountPercent)) {
+      total -= total * (Number(discountPercent) / 100);
+    }
+    return total < 0 ? 0 : total;
+  })();
+
   return (
     <div className="rounded-md border border-border p-3">
       <div className="grid grid-cols-12 gap-3">
-        <div className="col-span-12 md:col-span-5">
+        <div className="col-span-12 md:col-span-4">
           <Field>
             <FieldLabel htmlFor={`lines.${index}.variantId`}>SKU</FieldLabel>
             <Controller
@@ -661,7 +741,13 @@ function LineRow({
                     className="w-full"
                     aria-invalid={!!lineErrors?.variantId}
                   >
-                    <SelectValue placeholder="Pick a product…" />
+                    <SelectValue placeholder="Pick a product…">
+                      {(v) =>
+                        v
+                          ? selectedVariantLabel(variants, v)
+                          : null
+                      }
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {variants.length === 0 ? (
@@ -669,15 +755,25 @@ function LineRow({
                         No active variants.
                       </div>
                     ) : (
-                      variants.map((v) => (
-                        <SelectItem key={v.id} value={v.id}>
-                          <span className="font-mono text-xs text-muted-foreground">
-                            {v.sku}
-                          </span>{' '}
-                          {v.productName}
-                          {v.variantName ? ` — ${v.variantName}` : ''}
-                        </SelectItem>
-                      ))
+                      variants.map((v) => {
+                        const stock = v.inventoryByWarehouse[warehouseId];
+                        const onHand = Number(stock?.onHand ?? '0');
+                        const reserved = Number(stock?.reserved ?? '0');
+                        const available = onHand - reserved;
+                        return (
+                          <SelectItem key={v.id} value={v.id}>
+                            <span className="font-mono text-xs text-muted-foreground">
+                              {v.sku}
+                            </span>{' '}
+                            {v.productName}
+                            {v.variantName ? ` — ${v.variantName}` : ''}
+                            <span className="ml-1 text-xs text-muted-foreground">
+                              · QOH {formatStockQty(onHand)} / avail{' '}
+                              {formatStockQty(available)}
+                            </span>
+                          </SelectItem>
+                        );
+                      })
                     )}
                   </SelectContent>
                 </Select>
@@ -700,7 +796,7 @@ function LineRow({
           </Field>
         </div>
 
-        <div className="col-span-8 md:col-span-3">
+        <div className="col-span-8 md:col-span-2">
           <Field>
             <FieldLabel htmlFor={`lines.${index}.manualUnitPrice`}>
               Unit price
@@ -755,6 +851,21 @@ function LineRow({
           </Field>
         </div>
 
+        {/* Line note inline (not a full-width sub-row). Optional → no
+            validation. */}
+        <div className="col-span-12 md:col-span-2">
+          <Field>
+            <FieldLabel htmlFor={`lines.${index}.customerNote`}>
+              Note
+            </FieldLabel>
+            <Input
+              id={`lines.${index}.customerNote`}
+              placeholder="Optional (printed)"
+              {...register(`lines.${index}.customerNote`)}
+            />
+          </Field>
+        </div>
+
         <div className="col-span-12 flex items-end justify-end md:col-span-1">
           <Button
             type="button"
@@ -769,26 +880,46 @@ function LineRow({
         </div>
       </div>
 
-      <div className="mt-2">
-        <Field>
-          <FieldLabel htmlFor={`lines.${index}.customerNote`}>
-            Line note (printed)
-          </FieldLabel>
-          <Input
-            id={`lines.${index}.customerNote`}
-            placeholder="Optional note printed on documents for this line."
-            {...register(`lines.${index}.customerNote`)}
-          />
-        </Field>
+      {/* Line total preview — computed from current qty/price/discount
+          inputs. Renders as a thin right-aligned strip below the grid
+          so we don't have to claim a 12-col slot for it. */}
+      <div className="mt-2 flex items-center justify-end gap-3 text-xs">
+        {selectedVariant?.basePrice ? (
+          <span className="text-muted-foreground">
+            List {formatCurrency(selectedVariant.basePrice)}
+          </span>
+        ) : null}
+        <span className="text-muted-foreground">Line total</span>
+        <span className="tabular-nums font-medium text-foreground">
+          {lineTotal != null ? formatCurrency(lineTotal.toFixed(2)) : '—'}
+        </span>
       </div>
-
-      {selectedVariant?.basePrice ? (
-        <p className="mt-1 text-[10px] text-muted-foreground">
-          List price {formatCurrency(selectedVariant.basePrice)}
-        </p>
-      ) : null}
     </div>
   );
+}
+
+// Helpers used inside LineRow's Select renderers.
+function selectedVariantLabel(
+  variants: VariantOption[],
+  variantId: string,
+): React.ReactNode {
+  const v = variants.find((x) => x.id === variantId);
+  if (!v) return variantId;
+  return (
+    <>
+      <span className="font-mono text-xs text-muted-foreground">{v.sku}</span>{' '}
+      {v.productName}
+      {v.variantName ? ` — ${v.variantName}` : ''}
+    </>
+  );
+}
+
+function formatStockQty(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  // Strip trailing zeros after the decimal — 12.00 → 12; 12.50 → 12.5.
+  return n
+    .toFixed(5)
+    .replace(/\.?0+$/, '');
 }
 
 function PriceHint({

@@ -150,7 +150,13 @@ export function AuditLogFilters({ users }: { users: UserOption[] }) {
           onValueChange={(v) => apply({ action: v, skip: '0' })}
         >
           <SelectTrigger id="al-action" className="w-48">
-            <SelectValue placeholder="All actions" />
+            <SelectValue placeholder="All actions">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All actions'
+                  : (ACTIONS.find((a) => a.value === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All actions</SelectItem>
@@ -170,7 +176,13 @@ export function AuditLogFilters({ users }: { users: UserOption[] }) {
           onValueChange={(v) => apply({ userId: v, skip: '0' })}
         >
           <SelectTrigger id="al-user" className="w-56">
-            <SelectValue placeholder="All users" />
+            <SelectValue placeholder="All users">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All users'
+                  : (users.find((u) => u.id === v)?.label ?? v)
+              }
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All users</SelectItem>
