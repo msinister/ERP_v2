@@ -4,7 +4,7 @@ import { VendorCreditStatus } from '@/generated/tenant';
 import { createVendorCreditInputSchema } from '@/lib/validation/ap';
 import {
   createVendorCreditDraft,
-  listVendorCredits,
+  listVendorCreditsPaged,
 } from '@/server/services/vendorCredits';
 import { requireAuth } from '@/lib/auth/requireAuth';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
@@ -22,9 +22,20 @@ export async function GET(req: Request) {
         : undefined;
     const q = url.searchParams.get('q') ?? undefined;
     const skip = Number(url.searchParams.get('skip') ?? '0') || 0;
-    const take = Math.min(Number(url.searchParams.get('take') ?? '100') || 100, 500);
-    const list = await listVendorCredits(db, { vendorId, status, q, skip, take });
-    return NextResponse.json(list);
+    const take = Math.min(
+      Number(url.searchParams.get('take') ?? '100') || 100,
+      500,
+    );
+    // Paged shape `{ rows, total }`. The old raw-array shape had no
+    // GUI consumer outside this route, so widening is safe.
+    const page = await listVendorCreditsPaged(db, {
+      vendorId,
+      status,
+      q,
+      skip,
+      take,
+    });
+    return NextResponse.json(page);
   } catch (e) {
     const authResp = authErrorResponse(e);
     if (authResp) return authResp;

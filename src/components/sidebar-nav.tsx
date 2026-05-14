@@ -10,6 +10,7 @@ import {
   Building2,
   Truck,
   FileText,
+  CreditCard,
   BarChart3,
   Settings,
   type LucideIcon,
@@ -30,7 +31,8 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Products', href: '/products', icon: Package },
   { label: 'Vendors', href: '/vendors', icon: Building2 },
   { label: 'Purchase Orders', href: '/purchase-orders', icon: Truck },
-  { label: 'Bills & AP', href: '/bills', icon: FileText },
+  { label: 'Bills', href: '/bills', icon: FileText },
+  { label: 'Vendor Credits', href: '/vendor-credits', icon: CreditCard },
   { label: 'Reports', href: '/reports', icon: BarChart3 },
   { label: 'Admin', href: '/admin', icon: Settings, superAdminOnly: true },
 ];

@@ -590,20 +590,27 @@ export type VendorCreditListFilters = {
   take?: number;
 };
 
+function vendorCreditWhere(
+  filters: Omit<VendorCreditListFilters, 'skip' | 'take'>,
+): Prisma.VendorCreditWhereInput {
+  const { vendorId, status, q } = filters;
+  return {
+    deletedAt: null,
+    ...(vendorId ? { vendorId } : {}),
+    ...(status
+      ? { status: Array.isArray(status) ? { in: status } : status }
+      : {}),
+    ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
+  };
+}
+
 export async function listVendorCredits(
   db: PrismaClient,
   filters: VendorCreditListFilters = {},
 ): Promise<VendorCreditWithLines[]> {
-  const { vendorId, status, q, skip = 0, take = 100 } = filters;
+  const { skip = 0, take = 100, ...rest } = filters;
   return db.vendorCredit.findMany({
-    where: {
-      deletedAt: null,
-      ...(vendorId ? { vendorId } : {}),
-      ...(status
-        ? { status: Array.isArray(status) ? { in: status } : status }
-        : {}),
-      ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
-    },
+    where: vendorCreditWhere(rest),
     include: {
       lines: { where: { deletedAt: null }, orderBy: { lineNumber: 'asc' } },
     },
@@ -611,6 +618,42 @@ export async function listVendorCredits(
     skip,
     take: Math.min(take, 500),
   });
+}
+
+/**
+ * Paginated variant. Returns `{ rows, total }` with the VC's vendor
+ * (id, code, name) eager-loaded so the list table can render the vendor
+ * column without a second round-trip. Same filter semantics as
+ * listVendorCredits.
+ */
+export async function listVendorCreditsPaged(
+  db: PrismaClient,
+  filters: VendorCreditListFilters = {},
+): Promise<{
+  rows: Array<
+    VendorCredit & {
+      lines: VendorCreditLine[];
+      vendor: { id: string; code: string; name: string };
+    }
+  >;
+  total: number;
+}> {
+  const { skip = 0, take = 100, ...rest } = filters;
+  const where = vendorCreditWhere(rest);
+  const [rows, total] = await Promise.all([
+    db.vendorCredit.findMany({
+      where,
+      include: {
+        lines: { where: { deletedAt: null }, orderBy: { lineNumber: 'asc' } },
+        vendor: { select: { id: true, code: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: Math.min(take, 500),
+    }),
+    db.vendorCredit.count({ where }),
+  ]);
+  return { rows, total };
 }
 
 // ---------------------------------------------------------------------------
