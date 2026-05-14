@@ -1,5 +1,7 @@
 import { notFound } from 'next/navigation';
+import { AccountType } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { listAccounts } from '@/server/services/glAccounts';
 import { BillHeader } from './_components/header';
 import {
   BillLinesTable,
@@ -11,6 +13,11 @@ import {
   type LinkedPurchaseOrder,
   type LinkedReceipt,
 } from './_components/info-card';
+import {
+  PaymentsCard,
+  type PaymentRow,
+} from './_components/payments-card';
+import type { CashAccountOption } from './_components/record-payment-dialog';
 
 // Always live — bill status and payment denorms (amountPaid /
 // amountCredited / paymentStatus) flip as payments and credits are
@@ -28,41 +35,54 @@ export default async function BillDetailPage({
   // expense account, plus the optional source receipt line + receipt
   // number) + the M:N join rows enriched with parent number for the
   // linked-POs and linked-receipts panels.
-  const bill = await db.bill.findFirst({
-    where: { id, deletedAt: null },
-    include: {
-      vendor: { select: { id: true, code: true, name: true } },
-      lines: {
-        where: { deletedAt: null },
-        include: {
-          variant: {
-            select: {
-              id: true,
-              sku: true,
-              name: true,
-              product: { select: { name: true } },
+  // Three parallel reads: the bill (with vendor + lines + M:N joins +
+  // payments + cashAccount on each payment), and the active GL account
+  // list filtered to ASSET so the record-payment dialog has a picker.
+  const [bill, allAccounts] = await Promise.all([
+    db.bill.findFirst({
+      where: { id, deletedAt: null },
+      include: {
+        vendor: { select: { id: true, code: true, name: true } },
+        lines: {
+          where: { deletedAt: null },
+          include: {
+            variant: {
+              select: {
+                id: true,
+                sku: true,
+                name: true,
+                product: { select: { name: true } },
+              },
             },
-          },
-          receiptLine: {
-            select: {
-              id: true,
-              receipt: { select: { id: true, number: true } },
+            receiptLine: {
+              select: {
+                id: true,
+                receipt: { select: { id: true, number: true } },
+              },
             },
+            expenseAccount: { select: { id: true, code: true, name: true } },
           },
-          expenseAccount: { select: { id: true, code: true, name: true } },
+          orderBy: { lineNumber: 'asc' },
         },
-        orderBy: { lineNumber: 'asc' },
-      },
-      receipts: {
-        include: { receipt: { select: { id: true, number: true } } },
-      },
-      purchaseOrders: {
-        include: {
-          purchaseOrder: { select: { id: true, number: true } },
+        receipts: {
+          include: { receipt: { select: { id: true, number: true } } },
+        },
+        purchaseOrders: {
+          include: {
+            purchaseOrder: { select: { id: true, number: true } },
+          },
+        },
+        payments: {
+          where: { deletedAt: null },
+          include: {
+            cashAccount: { select: { code: true, name: true } },
+          },
+          orderBy: { paymentDate: 'desc' },
         },
       },
-    },
-  });
+    }),
+    listAccounts(db, { active: true, take: 500 }),
+  ]);
   if (!bill) notFound();
 
   const lineRows: BillLineRow[] = bill.lines.map((l) => ({
@@ -106,6 +126,36 @@ export default async function BillDetailPage({
   const hasAppliedMoney =
     bill.amountPaid.greaterThan(0) || bill.amountCredited.greaterThan(0);
 
+  const paymentRows: PaymentRow[] = bill.payments.map((p) => ({
+    id: p.id,
+    number: p.number,
+    paymentDate: p.paymentDate,
+    amount: p.amount,
+    method: p.method,
+    status: p.status,
+    reference: p.reference,
+    cashAccountCode: p.cashAccount?.code ?? null,
+    cashAccountName: p.cashAccount?.name ?? null,
+    reversedAt: p.reversedAt,
+    reversedReason: p.reversedReason,
+  }));
+
+  const cashAccounts: CashAccountOption[] = allAccounts
+    .filter((a) => a.type === AccountType.ASSET)
+    .map((a) => ({ id: a.id, code: a.code, name: a.name }));
+
+  const remainingBalance = bill.total
+    .minus(bill.amountPaid)
+    .minus(bill.amountCredited)
+    .toString();
+
+  // Hide the payments card entirely for DRAFT bills (no AP entry yet);
+  // show it for CONFIRMED (with the Record Payment button) and for
+  // CANCELLED (read-only — historical reversed payments may still be
+  // worth seeing).
+  const showPaymentsCard =
+    bill.status !== 'DRAFT' || paymentRows.length > 0;
+
   return (
     <div className="space-y-6">
       <BillHeader
@@ -127,6 +177,17 @@ export default async function BillDetailPage({
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <BillLinesTable lines={lineRows} source={bill.source} />
+
+          {showPaymentsCard ? (
+            <PaymentsCard
+              billId={bill.id}
+              billNumber={bill.number}
+              billStatus={bill.status}
+              remainingBalance={remainingBalance}
+              cashAccounts={cashAccounts}
+              payments={paymentRows}
+            />
+          ) : null}
 
           <BillInfoCard
             bill={{
