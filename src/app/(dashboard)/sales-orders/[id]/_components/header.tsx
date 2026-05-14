@@ -3,6 +3,7 @@ import { ChevronLeft } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { formatStatusLabel } from '@/lib/format';
 import { LifecycleActions } from './lifecycle-actions';
+import { DocumentsMenu } from './documents-menu';
 
 export type SalesOrderHeaderProps = {
   so: {
@@ -67,13 +68,20 @@ export function SalesOrderHeader({ so }: SalesOrderHeaderProps) {
             </div>
           ) : null}
         </div>
-        <LifecycleActions
-          salesOrderId={so.id}
-          salesOrderNumber={so.number}
-          status={so.status}
-          shippingAmount={so.shippingAmount}
-          handlingAmount={so.handlingAmount}
-        />
+        <div className="flex items-center gap-2">
+          <DocumentsMenu
+            salesOrderId={so.id}
+            status={so.status}
+            invoice={so.invoice}
+          />
+          <LifecycleActions
+            salesOrderId={so.id}
+            salesOrderNumber={so.number}
+            status={so.status}
+            shippingAmount={so.shippingAmount}
+            handlingAmount={so.handlingAmount}
+          />
+        </div>
       </div>
     </div>
   );

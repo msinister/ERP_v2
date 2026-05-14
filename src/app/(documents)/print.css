@@ -1,0 +1,41 @@
+/* =============================================================================
+   Print-only rules for the (documents) route group. On screen, the
+   document renders on a muted background so it's clear you're looking
+   at a "page." When printing, the page styles take over: white
+   background, half-inch margins, chrome (.no-print) hidden, row
+   page-break protection.
+   ============================================================================= */
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .document-root {
+    background: white !important;
+  }
+  /* Repeat thead on each page when a table breaks across pages. */
+  thead {
+    display: table-header-group;
+  }
+  /* Don't split rows across pages — easier to read picked totals etc. */
+  tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  /* Disable any sticky positioning that bleeds into print output. */
+  .document-paper {
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+  }
+  /* Let body collapse to the print page. */
+  body {
+    background: white !important;
+  }
+  @page {
+    size: letter;
+    margin: 0.5in;
+  }
+}
