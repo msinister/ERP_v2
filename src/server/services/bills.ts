@@ -1,6 +1,7 @@
 import {
   AccountType,
   AuditAction,
+  BillPaymentStatus,
   BillSource,
   BillStatus,
   Prisma,
@@ -766,6 +767,7 @@ export async function getBill(
 export type BillListFilters = {
   vendorId?: string;
   status?: BillStatus | BillStatus[];
+  paymentStatus?: BillPaymentStatus | BillPaymentStatus[];
   source?: BillSource;
   billDateFrom?: Date;
   billDateTo?: Date;
@@ -774,41 +776,47 @@ export type BillListFilters = {
   take?: number;
 };
 
+function billWhere(
+  filters: Omit<BillListFilters, 'skip' | 'take'>,
+): Prisma.BillWhereInput {
+  const { vendorId, status, paymentStatus, source, billDateFrom, billDateTo, q } =
+    filters;
+  const dateFilter: { gte?: Date; lte?: Date } = {};
+  if (billDateFrom) dateFilter.gte = billDateFrom;
+  if (billDateTo) dateFilter.lte = billDateTo;
+  return {
+    deletedAt: null,
+    ...(vendorId ? { vendorId } : {}),
+    ...(status
+      ? { status: Array.isArray(status) ? { in: status } : status }
+      : {}),
+    ...(paymentStatus
+      ? {
+          paymentStatus: Array.isArray(paymentStatus)
+            ? { in: paymentStatus }
+            : paymentStatus,
+        }
+      : {}),
+    ...(source ? { source } : {}),
+    ...(billDateFrom || billDateTo ? { billDate: dateFilter } : {}),
+    ...(q
+      ? {
+          OR: [
+            { number: { contains: q, mode: 'insensitive' as const } },
+            { vendorReference: { contains: q, mode: 'insensitive' as const } },
+          ],
+        }
+      : {}),
+  };
+}
+
 export async function listBills(
   db: PrismaClient,
   filters: BillListFilters = {},
 ): Promise<BillWithLines[]> {
-  const {
-    vendorId,
-    status,
-    source,
-    billDateFrom,
-    billDateTo,
-    q,
-    skip = 0,
-    take = 100,
-  } = filters;
-  const dateFilter: { gte?: Date; lte?: Date } = {};
-  if (billDateFrom) dateFilter.gte = billDateFrom;
-  if (billDateTo) dateFilter.lte = billDateTo;
+  const { skip = 0, take = 100, ...rest } = filters;
   return db.bill.findMany({
-    where: {
-      deletedAt: null,
-      ...(vendorId ? { vendorId } : {}),
-      ...(status
-        ? { status: Array.isArray(status) ? { in: status } : status }
-        : {}),
-      ...(source ? { source } : {}),
-      ...(billDateFrom || billDateTo ? { billDate: dateFilter } : {}),
-      ...(q
-        ? {
-            OR: [
-              { number: { contains: q, mode: 'insensitive' as const } },
-              { vendorReference: { contains: q, mode: 'insensitive' as const } },
-            ],
-          }
-        : {}),
-    },
+    where: billWhere(rest),
     include: {
       lines: { where: { deletedAt: null }, orderBy: { lineNumber: 'asc' } },
       receipts: true,
@@ -818,6 +826,41 @@ export async function listBills(
     skip,
     take: Math.min(take, 500),
   });
+}
+
+/**
+ * Paginated variant. Returns `{ rows, total }` with the bill's vendor
+ * (id, code, name) eager-loaded so the list table can render the vendor
+ * column in a single round-trip. Same filter semantics as listBills.
+ */
+export async function listBillsPaged(
+  db: PrismaClient,
+  filters: BillListFilters = {},
+): Promise<{
+  rows: Array<
+    Bill & {
+      lines: BillLine[];
+      vendor: { id: string; code: string; name: string };
+    }
+  >;
+  total: number;
+}> {
+  const { skip = 0, take = 100, ...rest } = filters;
+  const where = billWhere(rest);
+  const [rows, total] = await Promise.all([
+    db.bill.findMany({
+      where,
+      include: {
+        lines: { where: { deletedAt: null }, orderBy: { lineNumber: 'asc' } },
+        vendor: { select: { id: true, code: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: Math.min(take, 500),
+    }),
+    db.bill.count({ where }),
+  ]);
+  return { rows, total };
 }
 
 // ---------------------------------------------------------------------------
