@@ -215,20 +215,59 @@ export type VendorListFilters = {
   take?: number;
 };
 
+function vendorWhere(
+  filters: Omit<VendorListFilters, 'skip' | 'take'>,
+): Prisma.VendorWhereInput {
+  const { active, type, q } = filters;
+  return {
+    deletedAt: null,
+    ...(active !== undefined ? { active } : {}),
+    ...(type ? { type } : {}),
+    // q matches against either the display name or the auto-issued code
+    // (e.g. "VEND-2026-00012") so operators can paste either into search.
+    ...(q
+      ? {
+          OR: [
+            { name: { contains: q, mode: 'insensitive' as const } },
+            { code: { contains: q, mode: 'insensitive' as const } },
+          ],
+        }
+      : {}),
+  };
+}
+
 export async function listVendors(
   db: PrismaClient,
   filters: VendorListFilters = {},
 ): Promise<Vendor[]> {
-  const { skip = 0, take = 100, active, type, q } = filters;
+  const { skip = 0, take = 100, ...rest } = filters;
   return db.vendor.findMany({
-    where: {
-      deletedAt: null,
-      ...(active !== undefined ? { active } : {}),
-      ...(type ? { type } : {}),
-      ...(q ? { name: { contains: q, mode: 'insensitive' as const } } : {}),
-    },
+    where: vendorWhere(rest),
     orderBy: { createdAt: 'desc' },
     skip,
     take,
   });
+}
+
+/**
+ * Paginated variant. Returns the page of rows plus the unfiltered-by-
+ * pagination total so callers can render "X of Y" + page links without
+ * a second round-trip. Same filter semantics as listVendors.
+ */
+export async function listVendorsPaged(
+  db: PrismaClient,
+  filters: VendorListFilters = {},
+): Promise<{ rows: Vendor[]; total: number }> {
+  const { skip = 0, take = 100, ...rest } = filters;
+  const where = vendorWhere(rest);
+  const [rows, total] = await Promise.all([
+    db.vendor.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take,
+    }),
+    db.vendor.count({ where }),
+  ]);
+  return { rows, total };
 }
