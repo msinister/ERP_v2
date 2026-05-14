@@ -97,7 +97,10 @@ const lineSchema = z.object({
   // refine below catches mismatches.
   variantId: z.string().optional(),
   expenseAccountId: z.string().optional(),
-  description: z.string().min(1, 'Required').max(500),
+  // Optional on PRODUCT lines (variant name is the primary identifier);
+  // required on EXPENSE lines (account code alone is too coarse). The
+  // parent refine enforces the EXPENSE rule.
+  description: z.string().max(500).optional(),
   qty: qtyStr,
   unitCost: unitCostStr,
   notes: z.string().max(2000).optional(),
@@ -137,6 +140,13 @@ const formSchema = z
             code: z.ZodIssueCode.custom,
             path: ['lines', i, 'expenseAccountId'],
             message: 'Pick an expense account',
+          });
+        }
+        if (!line.description || line.description.trim() === '') {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['lines', i, 'description'],
+            message: 'Required',
           });
         }
       }
@@ -278,7 +288,7 @@ export function BillForm({
             values.source === 'PRODUCT' ? l.variantId : undefined,
           expenseAccountId:
             values.source === 'EXPENSE' ? l.expenseAccountId : undefined,
-          description: l.description.trim(),
+          description: nullEmpty(l.description),
           qty: normalizeDecimalForSubmit(l.qty),
           unitCost: normalizeDecimalForSubmit(l.unitCost),
           notes: nullEmpty(l.notes),

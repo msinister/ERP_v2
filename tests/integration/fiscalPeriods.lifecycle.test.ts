@@ -328,7 +328,7 @@ suite('FiscalPeriod lifecycle (slice A)', () => {
         ],
       }),
     );
-    expect(je.number).toMatch(/^JE-\d{4}-\d{5}$/);
+    expect(je.number).toMatch(/^JE-\d{4}-\d{5,}$/);
 
     const overrideAudit = await db.auditLog.findFirst({
       where: {

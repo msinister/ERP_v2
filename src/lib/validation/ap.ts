@@ -28,7 +28,11 @@ const billLineInputSchema = z
     variantId: z.string().min(1).optional(),
     receiptLineId: z.string().min(1).optional(),
     expenseAccountId: z.string().min(1).optional(),
-    description: z.string().min(1).max(500),
+    // Optional at the line level. Required for EXPENSE lines via the
+    // parent superRefine on createBillInputSchema (where the bill's
+    // source is known). On PRODUCT lines the variant is the primary
+    // identifier; description is optional context.
+    description: z.string().max(500).optional(),
     qty: positiveDecimal,
     unitCost: nonNegativeDecimal,
     notes: z.string().max(2000).optional(),
@@ -90,6 +94,19 @@ export const createBillInputSchema = z
           code: z.ZodIssueCode.custom,
           path: ['lines', i, 'variantId'],
           message: 'PRODUCT lines not allowed on an EXPENSE bill',
+        });
+      }
+      // EXPENSE lines must carry a description (expense account alone
+      // isn't enough context). PRODUCT lines may omit it — variant
+      // name already identifies the item.
+      if (
+        source === BillSource.EXPENSE &&
+        (line.description == null || line.description.trim() === '')
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['lines', i, 'description'],
+          message: 'description is required on EXPENSE lines',
         });
       }
     }

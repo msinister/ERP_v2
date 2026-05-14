@@ -38,7 +38,10 @@ suite('lib/gl/post helper', () => {
         ],
       }),
     );
-    expect(je.number).toMatch(/^JE-\d{4}-\d{5}$/);
+    // Pad is 5 digits, but overflow past 99999 is not truncated — accept
+    // 5+ digits so the test survives once a year's sequence rolls past
+    // 100000 (already reached in dev DBs with heavy test history).
+    expect(je.number).toMatch(/^JE-\d{4}-\d{5,}$/);
     expect(je.lines).toHaveLength(2);
     const debitTotal = je.lines.reduce(
       (acc, l) => acc.plus(l.debit),
@@ -202,8 +205,8 @@ suite('lib/gl/post helper', () => {
         ],
       }),
     );
-    const [, yearA, seqA] = a.number.match(/^JE-(\d{4})-(\d{5})$/)!;
-    const [, yearB, seqB] = b.number.match(/^JE-(\d{4})-(\d{5})$/)!;
+    const [, yearA, seqA] = a.number.match(/^JE-(\d{4})-(\d{5,})$/)!;
+    const [, yearB, seqB] = b.number.match(/^JE-(\d{4})-(\d{5,})$/)!;
     expect(yearA).toBe(yearB);
     expect(parseInt(seqB, 10)).toBeGreaterThan(parseInt(seqA, 10));
   });
