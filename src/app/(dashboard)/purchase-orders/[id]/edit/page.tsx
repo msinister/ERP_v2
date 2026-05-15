@@ -49,12 +49,18 @@ export default async function EditPurchaseOrderPage({
   ]);
   if (!po) notFound();
 
-  // Edit is only allowed in DRAFT (service-side wholesale-replace
-  // semantics). Surface that as a redirect rather than letting the
-  // form load and then fail on submit.
-  if (po.status !== 'DRAFT') {
+  // Edit reachable on DRAFT + CONFIRMED + PARTIALLY_RECEIVED. CLOSED
+  // and CANCELLED redirect back to detail. PARTIALLY_RECEIVED locks
+  // the lines section read-only (see linesLocked below) — header
+  // fields (notes, expected receive, currency) stay editable.
+  if (
+    po.status !== 'DRAFT' &&
+    po.status !== 'CONFIRMED' &&
+    po.status !== 'PARTIALLY_RECEIVED'
+  ) {
     redirect(`/purchase-orders/${po.id}`);
   }
+  const linesLocked = po.status === 'PARTIALLY_RECEIVED';
 
   const vendorOptions: VendorOption[] = vendors.map((v) => ({
     id: v.id,
@@ -134,8 +140,9 @@ export default async function EditPurchaseOrderPage({
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Edit PO</h1>
           <p className="text-sm text-muted-foreground">
-            Only DRAFT POs can be edited. Lines are wholesale-replaced on
-            save.
+            {linesLocked
+              ? 'This PO has received shipments. Header fields are editable; lines are locked. To change lines, reverse the receipts first or cancel-and-recreate the PO.'
+              : 'Lines are wholesale-replaced on save.'}
           </p>
         </div>
       </div>
@@ -147,6 +154,7 @@ export default async function EditPurchaseOrderPage({
         variants={variantOptions}
         catalogHints={catalogHints}
         defaultValues={defaults}
+        linesLocked={linesLocked}
       />
     </div>
   );

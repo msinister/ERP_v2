@@ -203,7 +203,18 @@ export async function updatePurchaseOrder(
   return db.$transaction(async (tx) => {
     const before = await tx.purchaseOrder.findUnique({ where: { id }, include: { lines: true } });
     if (!before) throw new Error(`PurchaseOrder not found: ${id}`);
-    if (before.status !== PurchaseOrderStatus.DRAFT) {
+    // Edits allowed on DRAFT, CONFIRMED, PARTIALLY_RECEIVED. CONFIRMED
+    // is safe for the wholesale lines-replace because by definition no
+    // receipts have posted (computePoStatus auto-flips to PARTIALLY_
+    // RECEIVED on the first posted receipt). PARTIALLY_RECEIVED can
+    // only edit header fields — replacing lines would FK-violate
+    // against ReceiptLine.purchaseOrderLineId. CLOSED + CANCELLED
+    // remain hard-rejected.
+    if (
+      before.status !== PurchaseOrderStatus.DRAFT &&
+      before.status !== PurchaseOrderStatus.CONFIRMED &&
+      before.status !== PurchaseOrderStatus.PARTIALLY_RECEIVED
+    ) {
       throw new Error(`Cannot edit PurchaseOrder in status ${before.status}`);
     }
 
@@ -213,7 +224,19 @@ export async function updatePurchaseOrder(
     if ('notes' in data) updateData.notes = data.notes ?? null;
 
     if (data.lines) {
-      // Wholesale replace lines (DRAFT only). Soft-delete existing, create new.
+      if (before.status === PurchaseOrderStatus.PARTIALLY_RECEIVED) {
+        // PR POs always have at least one line with receipts attached.
+        // Wholesale delete would either FK-violate (ON DELETE RESTRICT)
+        // or orphan ReceiptLine.purchaseOrderLineId. Per-line
+        // edit-by-id is a separate slice; until then, header fields
+        // are the editable surface and lines need cancel-and-recreate
+        // or receipt reversal to change.
+        throw new Error(
+          'Cannot replace lines on a PartiallyReceived PurchaseOrder — edit header fields only. To change lines, reverse the receipts first or cancel-and-recreate the PO.',
+        );
+      }
+      // Wholesale replace lines (DRAFT + CONFIRMED, where no receipts
+      // exist). Soft-delete existing, create new.
       await tx.purchaseOrderLine.deleteMany({ where: { purchaseOrderId: id } });
       for (const l of data.lines) {
         await tx.purchaseOrderLine.create({

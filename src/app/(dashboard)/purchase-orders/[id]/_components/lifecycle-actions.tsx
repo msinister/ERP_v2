@@ -57,7 +57,14 @@ export function LifecycleActions(props: Props) {
   const { status } = props;
 
   const canConfirm = status === 'DRAFT';
-  const canEdit = status === 'DRAFT';
+  // Edit reachable on DRAFT (full edit) + CONFIRMED (full edit, no
+  // receipts can exist yet) + PARTIALLY_RECEIVED (header fields only;
+  // the form locks the lines section read-only — see po-form's
+  // linesLocked branch).
+  const canEdit =
+    status === 'DRAFT' ||
+    status === 'CONFIRMED' ||
+    status === 'PARTIALLY_RECEIVED';
   const canReceive =
     status === 'CONFIRMED' || status === 'PARTIALLY_RECEIVED';
   // Manual close: same status window as receive. After close, ordered

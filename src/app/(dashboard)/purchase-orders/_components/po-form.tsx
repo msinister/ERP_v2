@@ -174,6 +174,7 @@ export function PoForm({
   variants,
   catalogHints,
   defaultValues,
+  linesLocked = false,
 }: {
   mode: PoFormMode;
   vendors: VendorOption[];
@@ -181,6 +182,12 @@ export function PoForm({
   variants: VariantOption[];
   catalogHints: CatalogHint[];
   defaultValues?: Partial<PoFormValues>;
+  // When true the lines section renders read-only and `lines` is
+  // dropped from the PATCH payload. Set by the edit page when the
+  // PO is in PARTIALLY_RECEIVED — wholesale lines-replace would
+  // FK-violate against ReceiptLine.purchaseOrderLineId, so header-
+  // only edits are the safe surface until per-line edit-by-id ships.
+  linesLocked?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -243,18 +250,26 @@ export function PoForm({
         expectedReceiveDate: nullEmpty(values.expectedReceiveDate),
         currency: nullEmpty(values.currency)?.toUpperCase(),
         notes: nullEmpty(values.notes),
-        lines: values.lines.map((l) => ({
-          variantId: l.variantId,
-          // Header warehouse drives every line for pilot. Multi-
-          // warehouse-per-line lands in a later slice — schema already
-          // supports it.
-          warehouseId: values.warehouseId,
-          qtyOrdered: normalizeDecimalForSubmit(l.qtyOrdered),
-          unitCost: normalizeDecimalForSubmit(l.unitCost),
-          vendorSku: nullEmpty(l.vendorSku),
-          manufacturerPartNumber: nullEmpty(l.manufacturerPartNumber),
-          notes: nullEmpty(l.notes),
-        })),
+        // Omit `lines` from the payload when the form is in
+        // linesLocked mode — wholesale replace on a PARTIALLY_RECEIVED
+        // PO would FK-violate against ReceiptLine.purchaseOrderLineId.
+        // Header fields stay editable.
+        ...(linesLocked
+          ? {}
+          : {
+              lines: values.lines.map((l) => ({
+                variantId: l.variantId,
+                // Header warehouse drives every line for pilot. Multi-
+                // warehouse-per-line lands in a later slice — schema
+                // already supports it.
+                warehouseId: values.warehouseId,
+                qtyOrdered: normalizeDecimalForSubmit(l.qtyOrdered),
+                unitCost: normalizeDecimalForSubmit(l.unitCost),
+                vendorSku: nullEmpty(l.vendorSku),
+                manufacturerPartNumber: nullEmpty(l.manufacturerPartNumber),
+                notes: nullEmpty(l.notes),
+              })),
+            }),
       };
       try {
         const endpoint =
@@ -430,33 +445,52 @@ export function PoForm({
             </div>
           ) : (
             <div className="space-y-3">
-              {fields.map((field, index) => (
-                <LineRow
-                  key={field.id}
+              {linesLocked ? (
+                // Read-only line summary on PARTIALLY_RECEIVED POs.
+                // The inputs would be confusing if rendered but
+                // disabled — render a plain table instead so the
+                // operator can see what they're not editing without
+                // wrestling with grayed-out fields.
+                <LockedLinesSummary
+                  lines={fields.map((_, i) => i)}
                   form={form}
-                  index={index}
-                  vendorId={vendorId}
                   variants={variants}
-                  catalogByKey={catalogByKey}
-                  canRemove={fields.length > 1}
-                  onRemove={() => remove(index)}
                 />
-              ))}
+              ) : (
+                fields.map((field, index) => (
+                  <LineRow
+                    key={field.id}
+                    form={form}
+                    index={index}
+                    vendorId={vendorId}
+                    variants={variants}
+                    catalogByKey={catalogByKey}
+                    canRemove={fields.length > 1}
+                    onRemove={() => remove(index)}
+                  />
+                ))
+              )}
               <div className="flex items-center justify-between gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  // Bulk-add: typical POs here run 20+ lines; one row
-                  // per click is too slow. useFieldArray.append accepts
-                  // an array, so ten blanks land in one shot.
-                  onClick={() =>
-                    append(Array.from({ length: 10 }, emptyLine))
-                  }
-                >
-                  <Plus />
-                  Add 10 lines
-                </Button>
+                {linesLocked ? (
+                  <p className="text-xs text-muted-foreground">
+                    Lines are locked because this PO has received shipments.
+                  </p>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    // Bulk-add: typical POs here run 20+ lines; one row
+                    // per click is too slow. useFieldArray.append accepts
+                    // an array, so ten blanks land in one shot.
+                    onClick={() =>
+                      append(Array.from({ length: 10 }, emptyLine))
+                    }
+                  >
+                    <Plus />
+                    Add 10 lines
+                  </Button>
+                )}
                 {linesError ? (
                   <span className="text-xs text-destructive">{linesError}</span>
                 ) : null}
@@ -775,6 +809,64 @@ function LineRow({
           />
         </Field>
       </div>
+    </div>
+  );
+}
+
+// Read-only line summary used when the form is in linesLocked mode
+// (PARTIALLY_RECEIVED PO edits). Shows the same column shape as the
+// editable rows but as a static table so operators can see what
+// they're not editing. The `form` prop is just used to watch the
+// lines array; we never mutate.
+function LockedLinesSummary({
+  lines,
+  form,
+  variants,
+}: {
+  lines: number[];
+  form: UseFormReturn<PoFormValues>;
+  variants: VariantOption[];
+}) {
+  const watched = form.watch('lines');
+  return (
+    <div className="overflow-hidden rounded-md border border-border">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/30 text-xs text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2 text-left font-medium">SKU</th>
+            <th className="px-3 py-2 text-left font-medium">Description</th>
+            <th className="px-3 py-2 text-right font-medium">Qty ordered</th>
+            <th className="px-3 py-2 text-right font-medium">Unit cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((i) => {
+            const l = watched[i];
+            const v = variants.find((x) => x.id === l?.variantId);
+            return (
+              <tr key={i} className="border-t border-border first:border-t-0">
+                <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
+                  {v?.sku ?? '—'}
+                </td>
+                <td className="px-3 py-2">
+                  <div className="font-medium">{v?.productName ?? '—'}</div>
+                  {v?.variantName ? (
+                    <div className="text-xs text-muted-foreground">
+                      {v.variantName}
+                    </div>
+                  ) : null}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {l?.qtyOrdered ?? '—'}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {l?.unitCost ? formatCurrency(l.unitCost) : '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -101,12 +101,121 @@ suite('PurchaseOrder service', () => {
     await expect(confirmPurchaseOrder(db, po.id)).rejects.toThrow(/Cannot confirm/);
   });
 
-  it('updatePurchaseOrder rejected once status is past DRAFT', async () => {
+  it('updatePurchaseOrder: allowed on CONFIRMED (no receipts can exist yet)', async () => {
     const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
     await confirmPurchaseOrder(db, po.id);
+    // Header field edit works on CONFIRMED.
+    const after = await updatePurchaseOrder(db, po.id, {
+      notes: 'edited after confirm',
+    });
+    expect(after.notes).toBe('edited after confirm');
+    // Wholesale lines-replace also works on CONFIRMED — by definition
+    // no receipts have posted yet (computePoStatus auto-flips to
+    // PARTIALLY_RECEIVED on the first posted receipt).
+    const after2 = await updatePurchaseOrder(db, po.id, {
+      lines: [lineInput('99', '2.5'), lineInput('1', '1')],
+    });
+    expect(after2.lines).toHaveLength(2);
+    expect(after2.lines[0].qtyOrdered.toString()).toBe(
+      new Prisma.Decimal('99').toString(),
+    );
+  });
+
+  it('updatePurchaseOrder: header edits allowed on PARTIALLY_RECEIVED', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput('10', '1')] });
+    await confirmPurchaseOrder(db, po.id);
+    // Synthesize PARTIALLY_RECEIVED via direct tables (same approach
+    // the reopen + applyComputedPoStatus tests use).
+    const poLine = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po.id },
+    });
+    const receipt = await db.receipt.create({
+      data: {
+        number: `TEST-RCPT-UPDPR-${Date.now()}`,
+        vendorId,
+        warehouseId,
+        status: ReceiptStatus.POSTED,
+        receivedAt: new Date(),
+      },
+    });
+    await db.receiptLine.create({
+      data: {
+        receiptId: receipt.id,
+        purchaseOrderLineId: poLine.id,
+        variantId,
+        warehouseId,
+        qtyReceived: new Prisma.Decimal('3'),
+        unitCost: new Prisma.Decimal('1'),
+      },
+    });
+    await db.purchaseOrderLine.update({
+      where: { id: poLine.id },
+      data: { qtyReceived: new Prisma.Decimal('3') },
+    });
+    await db.purchaseOrder.update({
+      where: { id: po.id },
+      data: { status: PurchaseOrderStatus.PARTIALLY_RECEIVED },
+    });
+
+    // Notes-only update works.
+    const after = await updatePurchaseOrder(db, po.id, {
+      notes: 'vendor will send remaining 7 next week',
+    });
+    expect(after.notes).toBe('vendor will send remaining 7 next week');
+  });
+
+  it('updatePurchaseOrder: lines-replace rejected on PARTIALLY_RECEIVED', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput('10', '1')] });
+    await confirmPurchaseOrder(db, po.id);
+    const poLine = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po.id },
+    });
+    const receipt = await db.receipt.create({
+      data: {
+        number: `TEST-RCPT-UPDPR2-${Date.now()}`,
+        vendorId,
+        warehouseId,
+        status: ReceiptStatus.POSTED,
+        receivedAt: new Date(),
+      },
+    });
+    await db.receiptLine.create({
+      data: {
+        receiptId: receipt.id,
+        purchaseOrderLineId: poLine.id,
+        variantId,
+        warehouseId,
+        qtyReceived: new Prisma.Decimal('3'),
+        unitCost: new Prisma.Decimal('1'),
+      },
+    });
+    await db.purchaseOrderLine.update({
+      where: { id: poLine.id },
+      data: { qtyReceived: new Prisma.Decimal('3') },
+    });
+    await db.purchaseOrder.update({
+      where: { id: po.id },
+      data: { status: PurchaseOrderStatus.PARTIALLY_RECEIVED },
+    });
+
     await expect(
-      updatePurchaseOrder(db, po.id, { notes: 'should fail' }),
-    ).rejects.toThrow(/Cannot edit/);
+      updatePurchaseOrder(db, po.id, { lines: [lineInput('5', '1')] }),
+    ).rejects.toThrow(/Cannot replace lines on a PartiallyReceived/);
+  });
+
+  it('updatePurchaseOrder: still rejected on CLOSED and CANCELLED', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await confirmPurchaseOrder(db, po.id);
+    await closePurchaseOrder(db, po.id, { reason: 'short ship' });
+    await expect(
+      updatePurchaseOrder(db, po.id, { notes: 'after close' }),
+    ).rejects.toThrow(/Cannot edit PurchaseOrder in status CLOSED/);
+
+    const po2 = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await cancelPurchaseOrder(db, po2.id, { reason: 'oops' });
+    await expect(
+      updatePurchaseOrder(db, po2.id, { notes: 'after cancel' }),
+    ).rejects.toThrow(/Cannot edit PurchaseOrder in status CANCELLED/);
   });
 
   it('cancel rejected on CLOSED, allowed on DRAFT/CONFIRMED/PARTIALLY_RECEIVED with no active receipt lines', async () => {
