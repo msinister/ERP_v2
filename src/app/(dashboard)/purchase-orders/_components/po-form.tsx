@@ -447,10 +447,15 @@ export function PoForm({
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => append(emptyLine())}
+                  // Bulk-add: typical POs here run 20+ lines; one row
+                  // per click is too slow. useFieldArray.append accepts
+                  // an array, so ten blanks land in one shot.
+                  onClick={() =>
+                    append(Array.from({ length: 10 }, emptyLine))
+                  }
                 >
                   <Plus />
-                  Add line
+                  Add 10 lines
                 </Button>
                 {linesError ? (
                   <span className="text-xs text-destructive">{linesError}</span>

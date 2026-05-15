@@ -125,8 +125,14 @@ export function AddLinesForm({
   function patch(key: string, patch: Partial<DraftLine>) {
     setDrafts((ds) => ds.map((d) => (d.key === key ? { ...d, ...patch } : d)));
   }
+  // Bulk-add: typical orders here run 20+ lines; adding one row per
+  // click is too slow. Ten blanks per click means most orders fit in
+  // a click or two and the operator can still ignore the extras.
   function add() {
-    setDrafts((ds) => [...ds, emptyDraft()]);
+    setDrafts((ds) => [
+      ...ds,
+      ...Array.from({ length: 10 }, emptyDraft),
+    ]);
   }
   function remove(key: string) {
     setDrafts((ds) => ds.filter((d) => d.key !== key));
@@ -297,7 +303,7 @@ export function AddLinesForm({
               onClick={add}
             >
               <Plus />
-              Add another
+              Add 10 more
             </Button>
           </div>
         </CardContent>
