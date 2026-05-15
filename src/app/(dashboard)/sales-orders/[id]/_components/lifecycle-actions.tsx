@@ -69,6 +69,19 @@ export function LifecycleActions(props: Props) {
 
   const hasMenu = canCancel || canDelete || canUndispatch || canReopen;
 
+  // Dialog-open state is lifted up here, NOT inside the DropdownMenuItem
+  // components. Reason: base-ui's DropdownMenu uses a portal; rendering
+  // an AlertDialog inside a DropdownMenuItem means the dialog mounts
+  // inside the menu's portal. When the menu auto-dismisses (the
+  // operator's click on the dialog action lands outside the menu's
+  // popup boundary), the menu portal unmounts and takes the dialog
+  // state with it — the dialog disappears mid-flight, no toast, no
+  // visible error. By keeping the dialogs OUTSIDE the menu in the
+  // React tree we sidestep that portal lifetime coupling entirely.
+  const [openDialog, setOpenDialog] = useState<
+    'undispatch' | 'reopen' | null
+  >(null);
+
   return (
     <div className="flex items-center gap-2">
       {canConfirm ? <ConfirmAction {...props} /> : null}
@@ -98,13 +111,46 @@ export function LifecycleActions(props: Props) {
             <MoreVertical />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {canUndispatch ? <UndispatchMenuItem {...props} /> : null}
-            {canReopen ? <ReopenMenuItem {...props} /> : null}
+            {canUndispatch ? (
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.preventDefault();
+                  setOpenDialog('undispatch');
+                }}
+              >
+                <Undo2 className="size-4" />
+                Un-dispatch
+              </DropdownMenuItem>
+            ) : null}
+            {canReopen ? (
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.preventDefault();
+                  setOpenDialog('reopen');
+                }}
+              >
+                <RotateCcw className="size-4" />
+                Reopen order
+              </DropdownMenuItem>
+            ) : null}
             {canCancel ? <CancelMenuItem {...props} /> : null}
             {canDelete ? <DeleteMenuItem {...props} /> : null}
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
+
+      {/* Dialogs are mounted here as siblings of the DropdownMenu so
+          they outlive the menu's portal lifecycle. */}
+      <UndispatchDialog
+        {...props}
+        open={openDialog === 'undispatch'}
+        onClose={() => setOpenDialog(null)}
+      />
+      <ReopenDialog
+        {...props}
+        open={openDialog === 'reopen'}
+        onClose={() => setOpenDialog(null)}
+      />
     </div>
   );
 }
@@ -460,9 +506,13 @@ function CloseAction({
 // Un-dispatch — DISPATCHED → CONFIRMED, no inventory effects.
 // =============================================================================
 
-function UndispatchMenuItem({ salesOrderId, salesOrderNumber }: Props) {
+function UndispatchDialog({
+  salesOrderId,
+  salesOrderNumber,
+  open,
+  onClose,
+}: Props & { open: boolean; onClose: () => void }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -478,17 +528,17 @@ function UndispatchMenuItem({ salesOrderId, salesOrderNumber }: Props) {
           const body = (await res.json().catch(() => ({}))) as { error?: string };
           const message =
             body.error ?? `Un-dispatch failed (${res.status})`;
-          // Surface both — inline keeps the operator anchored in the
-          // dialog (they may want to read it carefully or retry);
-          // toast guarantees visibility if the dialog dismisses for
-          // any reason (e.g. a base-ui portal quirk in the dropdown
-          // → dialog hand-off).
+          // Stay in the dialog with an inline error. Toast for
+          // belt-and-braces in case the dialog ever dismisses
+          // unexpectedly. router.refresh is NOT called on the error
+          // path — refresh would cause the parent SO detail page to
+          // re-render and could unmount the dialog mid-read.
           setError(message);
           toast.error(message);
           return;
         }
         toast.success(`Un-dispatched ${salesOrderNumber}`);
-        setOpen(false);
+        onClose();
         router.refresh();
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Network error';
@@ -502,19 +552,15 @@ function UndispatchMenuItem({ salesOrderId, salesOrderNumber }: Props) {
     <AlertDialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) setError(null);
+        // Only allow base-ui to close us via Escape / outside-press
+        // when no request is in-flight. The error case keeps the
+        // dialog open until the operator clicks Cancel.
+        if (!o && !pending) {
+          setError(null);
+          onClose();
+        }
       }}
     >
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-      >
-        <Undo2 className="size-4" />
-        Un-dispatch
-      </DropdownMenuItem>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>Un-dispatch this order?</AlertDialogTitle>
@@ -565,9 +611,13 @@ type ReopenBlockedBody = {
   }>;
 };
 
-function ReopenMenuItem({ salesOrderId, salesOrderNumber }: Props) {
+function ReopenDialog({
+  salesOrderId,
+  salesOrderNumber,
+  open,
+  onClose,
+}: Props & { open: boolean; onClose: () => void }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [target, setTarget] = useState<ReopenTarget>('CONFIRMED');
   const [paymentBlock, setPaymentBlock] = useState<ReopenBlockedBody | null>(
@@ -615,8 +665,6 @@ function ReopenMenuItem({ salesOrderId, salesOrderNumber }: Props) {
         if (!res.ok) {
           const body = (await res.json().catch(() => ({}))) as { error?: string };
           const message = body.error ?? `Reopen failed (${res.status})`;
-          // Show inline + toast so the operator keeps the context of
-          // which target they picked while reading the error.
           setError(message);
           toast.error(message);
           return;
@@ -630,8 +678,8 @@ function ReopenMenuItem({ salesOrderId, salesOrderNumber }: Props) {
           `${salesOrderNumber} reopened to ${labels[target]}` +
             (decision === 'unapply' ? ' — payments unapplied' : ''),
         );
-        setOpen(false);
         reset();
+        onClose();
         router.refresh();
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Network error';
@@ -645,19 +693,12 @@ function ReopenMenuItem({ salesOrderId, salesOrderNumber }: Props) {
     <AlertDialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) reset();
+        if (!o && !pending) {
+          reset();
+          onClose();
+        }
       }}
     >
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-      >
-        <RotateCcw className="size-4" />
-        Reopen order
-      </DropdownMenuItem>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>
