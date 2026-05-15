@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { AccountType } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listAccounts } from '@/server/services/glAccounts';
+import { resolveLineImageUrl } from '@/lib/products/lineItemImage';
 import { BillHeader } from './_components/header';
 import {
   BillLinesTable,
@@ -55,7 +56,18 @@ export default async function BillDetailPage({
                 id: true,
                 sku: true,
                 name: true,
-                product: { select: { name: true } },
+                imageUrl: true,
+                product: {
+                  select: {
+                    name: true,
+                    images: {
+                      where: { isPrimary: true, deletedAt: null },
+                      select: { url: true },
+                      orderBy: { sortOrder: 'asc' },
+                      take: 1,
+                    },
+                  },
+                },
               },
             },
             receiptLine: {
@@ -117,6 +129,9 @@ export default async function BillDetailPage({
         }
       : null,
     expenseAccount: l.expenseAccount,
+    // EXPENSE lines have no variant → null thumbnail; the column still
+    // renders for layout consistency (Package placeholder).
+    imageUrl: resolveLineImageUrl(l.variant),
   }));
 
   const linkedReceipts: LinkedReceipt[] = bill.receipts.map((br) => ({

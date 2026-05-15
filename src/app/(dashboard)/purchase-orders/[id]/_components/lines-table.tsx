@@ -9,6 +9,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatCurrency } from '@/lib/format';
+import { ProductThumbnail } from '@/components/shared/product-thumbnail';
+import { ProductImageToggle } from '@/components/shared/product-image-toggle';
 
 export type PurchaseOrderLineRow = {
   id: string;
@@ -22,6 +24,7 @@ export type PurchaseOrderLineRow = {
   vendorSku: string | null;
   manufacturerPartNumber: string | null;
   notes: string | null;
+  imageUrl: string | null;
 };
 
 export function PurchaseOrderLinesTable({
@@ -38,7 +41,11 @@ export function PurchaseOrderLinesTable({
   }
 
   return (
-    <>
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <ProductImageToggle />
+      </div>
+
       {/* Mobile card stack — visible below md. Drops the horizontal
           scroll the table would otherwise force. */}
       <div className="space-y-3 md:hidden">
@@ -47,26 +54,34 @@ export function PurchaseOrderLinesTable({
             key={l.id}
             className="space-y-3 rounded-lg border border-border bg-card p-3"
           >
-            <div>
-              <div className="font-mono text-xs text-muted-foreground">
-                {l.sku}
-                {l.vendorSku ? (
-                  <span className="ml-2 text-[10px] uppercase tracking-wide">
-                    vendor: {l.vendorSku}
-                  </span>
-                ) : null}
-                {l.manufacturerPartNumber ? (
-                  <span className="ml-2 text-[10px] uppercase tracking-wide">
-                    mpn: {l.manufacturerPartNumber}
-                  </span>
+            <div className="flex items-start gap-3">
+              <div className="[.hide-product-images_&]:hidden">
+                <ProductThumbnail
+                  src={l.imageUrl}
+                  productName={l.productName}
+                />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-mono text-xs text-muted-foreground">
+                  {l.sku}
+                  {l.vendorSku ? (
+                    <span className="ml-2 text-[10px] uppercase tracking-wide">
+                      vendor: {l.vendorSku}
+                    </span>
+                  ) : null}
+                  {l.manufacturerPartNumber ? (
+                    <span className="ml-2 text-[10px] uppercase tracking-wide">
+                      mpn: {l.manufacturerPartNumber}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="font-medium">{l.productName}</div>
+                {l.variantName ? (
+                  <div className="text-xs text-muted-foreground">
+                    {l.variantName}
+                  </div>
                 ) : null}
               </div>
-              <div className="font-medium">{l.productName}</div>
-              {l.variantName ? (
-                <div className="text-xs text-muted-foreground">
-                  {l.variantName}
-                </div>
-              ) : null}
             </div>
             <div className="grid grid-cols-3 gap-3 text-sm">
               <Stat label="Qty">
@@ -109,6 +124,9 @@ export function PurchaseOrderLinesTable({
         <Table containerClassName="max-h-[60vh] overflow-y-auto">
           <TableHeader className="sticky top-0 z-10 bg-background">
             <TableRow className="bg-muted/30 hover:bg-muted/30">
+              <TableHead className="w-[60px] [.hide-product-images_&]:hidden">
+                <span className="sr-only">Image</span>
+              </TableHead>
               <TableHead>SKU</TableHead>
               <TableHead>Description</TableHead>
               <TableHead>Warehouse</TableHead>
@@ -120,6 +138,12 @@ export function PurchaseOrderLinesTable({
           <TableBody>
             {lines.map((l) => (
               <TableRow key={l.id}>
+                <TableCell className="[.hide-product-images_&]:hidden">
+                  <ProductThumbnail
+                    src={l.imageUrl}
+                    productName={l.productName}
+                  />
+                </TableCell>
                 <TableCell className="font-mono text-xs text-muted-foreground">
                   {l.sku}
                   {l.vendorSku ? (
@@ -167,7 +191,7 @@ export function PurchaseOrderLinesTable({
           </TableBody>
         </Table>
       </div>
-    </>
+    </div>
   );
 }
 

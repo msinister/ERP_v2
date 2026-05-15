@@ -2,6 +2,10 @@ import { notFound } from 'next/navigation';
 import { Prisma, SalesOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { computeSalesOrderTotal } from '@/lib/ar/openSos';
+import {
+  lineItemImageVariantSelect,
+  resolveLineImageUrl,
+} from '@/lib/products/lineItemImage';
 import { SalesOrderHeader } from './_components/header';
 import { SalesOrderLinesTable } from './_components/lines-table';
 import { SalesOrderTotalsCard } from './_components/totals-card';
@@ -28,7 +32,18 @@ export default async function SalesOrderDetailPage({
               id: true,
               sku: true,
               name: true,
-              product: { select: { name: true } },
+              product: {
+                select: {
+                  name: true,
+                  images: {
+                    where: { isPrimary: true, deletedAt: null },
+                    select: { url: true },
+                    orderBy: { sortOrder: 'asc' },
+                    take: 1,
+                  },
+                },
+              },
+              imageUrl: true,
             },
           },
           warehouse: { select: { code: true, name: true } },
@@ -104,6 +119,7 @@ export default async function SalesOrderDetailPage({
               discountAmount: l.discountAmount,
               customerNote: l.customerNote,
               internalNote: l.internalNote,
+              imageUrl: resolveLineImageUrl(l.variant),
             }))}
           />
 

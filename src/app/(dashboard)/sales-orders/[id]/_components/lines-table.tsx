@@ -10,6 +10,8 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency } from '@/lib/format';
+import { ProductThumbnail } from '@/components/shared/product-thumbnail';
+import { ProductImageToggle } from '@/components/shared/product-image-toggle';
 import { QtyShippedInput } from './qty-shipped-input';
 
 export type SalesOrderLineRow = {
@@ -27,6 +29,7 @@ export type SalesOrderLineRow = {
   discountAmount: Prisma.Decimal | null;
   customerNote: string | null;
   internalNote: string | null;
+  imageUrl: string | null;
 };
 
 export function SalesOrderLinesTable({
@@ -54,10 +57,17 @@ export function SalesOrderLinesTable({
   const isEditable = status === 'CONFIRMED' || status === 'DISPATCHED';
 
   return (
-    <>
+    <div className="space-y-3">
+      {/* Toggle sits above both views — toggles the global
+          .hide-product-images class via the hook, which the image
+          cells below respond to. One toggle for both desktop +
+          mobile (same global state). */}
+      <div className="flex justify-end">
+        <ProductImageToggle />
+      </div>
+
       {/* Mobile: one card per line, stacked. Hidden on md+ where the
-          full table takes over. The card view drops horizontal
-          scrolling entirely — every column wraps into the card. */}
+          full table takes over. */}
       <div className="space-y-3 md:hidden">
         {lines.map((l) => (
           <SalesOrderLineCard
@@ -70,17 +80,18 @@ export function SalesOrderLinesTable({
         ))}
       </div>
 
-      {/* Desktop: existing sticky-header scrollable table.
-          overflow-hidden so the inner scroll container respects the
-          outer rounded corners; max-h on Table's container creates
-          the scroll context that the sticky thead resolves to.
-          bg-background on the header keeps it opaque against
-          scrolling rows underneath — the existing bg-muted/30 tint
-          on the row layers on top. */}
+      {/* Desktop: sticky-header scrollable table. */}
       <div className="hidden overflow-hidden rounded-lg border border-border md:block">
         <Table containerClassName="max-h-[60vh] overflow-y-auto">
           <TableHeader className="sticky top-0 z-10 bg-background">
             <TableRow className="bg-muted/30 hover:bg-muted/30">
+              {/* Image column hides when the global toggle is off. The
+                  arbitrary variant matches when any ancestor element
+                  carries the .hide-product-images class (set on <html>
+                  by the toggle hook + the no-flicker layout script). */}
+              <TableHead className="w-[60px] [.hide-product-images_&]:hidden">
+                <span className="sr-only">Image</span>
+              </TableHead>
               <TableHead>SKU</TableHead>
               <TableHead>Description</TableHead>
               <TableHead className="text-right">Ordered</TableHead>
@@ -93,6 +104,12 @@ export function SalesOrderLinesTable({
           <TableBody>
             {lines.map((l) => (
               <TableRow key={l.id}>
+                <TableCell className="[.hide-product-images_&]:hidden">
+                  <ProductThumbnail
+                    src={l.imageUrl}
+                    productName={l.productName}
+                  />
+                </TableCell>
                 <TableCell className="font-mono text-xs text-muted-foreground">
                   {l.sku}
                 </TableCell>
@@ -143,7 +160,7 @@ export function SalesOrderLinesTable({
           </TableBody>
         </Table>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -167,12 +184,18 @@ function SalesOrderLineCard({
   const hasDiscount = l.discountPercent != null || l.discountAmount != null;
   return (
     <div className="space-y-3 rounded-lg border border-border bg-card p-3">
-      <div>
-        <div className="font-mono text-xs text-muted-foreground">{l.sku}</div>
-        <div className="font-medium">{l.productName}</div>
-        {l.variantName ? (
-          <div className="text-xs text-muted-foreground">{l.variantName}</div>
-        ) : null}
+      <div className="flex items-start gap-3">
+        {/* Thumbnail at top-left, hides with the global toggle. */}
+        <div className="[.hide-product-images_&]:hidden">
+          <ProductThumbnail src={l.imageUrl} productName={l.productName} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-xs text-muted-foreground">{l.sku}</div>
+          <div className="font-medium">{l.productName}</div>
+          {l.variantName ? (
+            <div className="text-xs text-muted-foreground">{l.variantName}</div>
+          ) : null}
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-3 text-sm">
         <Stat label="Ordered">

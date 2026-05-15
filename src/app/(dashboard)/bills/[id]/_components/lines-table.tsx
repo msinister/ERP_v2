@@ -10,6 +10,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatCurrency } from '@/lib/format';
+import { ProductThumbnail } from '@/components/shared/product-thumbnail';
+import { ProductImageToggle } from '@/components/shared/product-image-toggle';
 
 export type BillLineRow = {
   id: string;
@@ -35,6 +37,10 @@ export type BillLineRow = {
     code: string;
     name: string;
   } | null;
+  // Resolved variant.imageUrl ?? product primary image URL; null on
+  // EXPENSE lines (no variant). The thumbnail column still renders
+  // for those — Package placeholder.
+  imageUrl: string | null;
 };
 
 export function BillLinesTable({
@@ -55,7 +61,11 @@ export function BillLinesTable({
   const isProduct = source === 'PRODUCT';
 
   return (
-    <>
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <ProductImageToggle />
+      </div>
+
       {/* Mobile card stack. The SKU/Account discriminator is folded
           into the card header; "From receipt" rides as an inline
           chip when present (PRODUCT only). */}
@@ -65,28 +75,36 @@ export function BillLinesTable({
             key={l.id}
             className="space-y-3 rounded-lg border border-border bg-card p-3"
           >
-            <div>
-              <div className="font-mono text-xs text-muted-foreground">
-                {isProduct ? (
-                  (l.variant?.sku ?? '—')
-                ) : (
-                  <>
-                    {l.expenseAccount?.code ?? '—'}
-                    {l.expenseAccount?.name ? (
-                      <span className="ml-2 font-sans text-[10px] uppercase tracking-wide">
-                        {l.expenseAccount.name}
-                      </span>
-                    ) : null}
-                  </>
-                )}
+            <div className="flex items-start gap-3">
+              <div className="[.hide-product-images_&]:hidden">
+                <ProductThumbnail
+                  src={l.imageUrl}
+                  productName={l.variant?.productName ?? l.description}
+                />
               </div>
-              <div className="font-medium">{l.description}</div>
-              {isProduct && l.variant?.productName ? (
-                <div className="text-xs text-muted-foreground">
-                  {l.variant.productName}
-                  {l.variant.name ? ` · ${l.variant.name}` : ''}
+              <div className="min-w-0 flex-1">
+                <div className="font-mono text-xs text-muted-foreground">
+                  {isProduct ? (
+                    (l.variant?.sku ?? '—')
+                  ) : (
+                    <>
+                      {l.expenseAccount?.code ?? '—'}
+                      {l.expenseAccount?.name ? (
+                        <span className="ml-2 font-sans text-[10px] uppercase tracking-wide">
+                          {l.expenseAccount.name}
+                        </span>
+                      ) : null}
+                    </>
+                  )}
                 </div>
-              ) : null}
+                <div className="font-medium">{l.description}</div>
+                {isProduct && l.variant?.productName ? (
+                  <div className="text-xs text-muted-foreground">
+                    {l.variant.productName}
+                    {l.variant.name ? ` · ${l.variant.name}` : ''}
+                  </div>
+                ) : null}
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-3 text-sm">
               <Stat label="Qty">
@@ -130,6 +148,9 @@ export function BillLinesTable({
         <Table containerClassName="max-h-[60vh] overflow-y-auto">
         <TableHeader className="sticky top-0 z-10 bg-background">
           <TableRow className="bg-muted/30 hover:bg-muted/30">
+            <TableHead className="w-[60px] [.hide-product-images_&]:hidden">
+              <span className="sr-only">Image</span>
+            </TableHead>
             <TableHead>{isProduct ? 'SKU' : 'Account'}</TableHead>
             <TableHead>Description</TableHead>
             {isProduct ? <TableHead>From receipt</TableHead> : null}
@@ -141,6 +162,12 @@ export function BillLinesTable({
         <TableBody>
           {lines.map((l) => (
             <TableRow key={l.id}>
+              <TableCell className="[.hide-product-images_&]:hidden">
+                <ProductThumbnail
+                  src={l.imageUrl}
+                  productName={l.variant?.productName ?? l.description}
+                />
+              </TableCell>
               <TableCell className="font-mono text-xs">
                 {isProduct
                   ? (l.variant?.sku ?? <span className="text-muted-foreground">—</span>)
@@ -197,7 +224,7 @@ export function BillLinesTable({
         </TableBody>
       </Table>
       </div>
-    </>
+    </div>
   );
 }
 

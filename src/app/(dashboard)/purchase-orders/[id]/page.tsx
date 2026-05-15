@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import { db } from '@/lib/db';
+import { resolveLineImageUrl } from '@/lib/products/lineItemImage';
 import { PurchaseOrderHeader } from './_components/header';
 import { PurchaseOrderLinesTable } from './_components/lines-table';
 import { PurchaseOrderTotalsCard } from './_components/totals-card';
@@ -36,7 +37,18 @@ export default async function PurchaseOrderDetailPage({
               id: true,
               sku: true,
               name: true,
-              product: { select: { name: true } },
+              imageUrl: true,
+              product: {
+                select: {
+                  name: true,
+                  images: {
+                    where: { isPrimary: true, deletedAt: null },
+                    select: { url: true },
+                    orderBy: { sortOrder: 'asc' },
+                    take: 1,
+                  },
+                },
+              },
             },
           },
           warehouse: { select: { code: true, name: true } },
@@ -127,6 +139,7 @@ export default async function PurchaseOrderDetailPage({
               vendorSku: l.vendorSku,
               manufacturerPartNumber: l.manufacturerPartNumber,
               notes: l.notes,
+              imageUrl: resolveLineImageUrl(l.variant),
             }))}
           />
 

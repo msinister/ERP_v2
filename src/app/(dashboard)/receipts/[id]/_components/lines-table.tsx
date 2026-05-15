@@ -10,6 +10,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatCurrency } from '@/lib/format';
+import { ProductThumbnail } from '@/components/shared/product-thumbnail';
+import { ProductImageToggle } from '@/components/shared/product-image-toggle';
 
 export type ReceiptLineRow = {
   id: string;
@@ -24,6 +26,7 @@ export type ReceiptLineRow = {
     number: string;
   } | null;
   notes: string | null;
+  imageUrl: string | null;
 };
 
 export function ReceiptLinesTable({ lines }: { lines: ReceiptLineRow[] }) {
@@ -36,7 +39,11 @@ export function ReceiptLinesTable({ lines }: { lines: ReceiptLineRow[] }) {
   }
 
   return (
-    <>
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <ProductImageToggle />
+      </div>
+
       {/* Mobile card stack. */}
       <div className="space-y-3 md:hidden">
         {lines.map((l) => (
@@ -44,16 +51,24 @@ export function ReceiptLinesTable({ lines }: { lines: ReceiptLineRow[] }) {
             key={l.id}
             className="space-y-3 rounded-lg border border-border bg-card p-3"
           >
-            <div>
-              <div className="font-mono text-xs text-muted-foreground">
-                {l.sku}
+            <div className="flex items-start gap-3">
+              <div className="[.hide-product-images_&]:hidden">
+                <ProductThumbnail
+                  src={l.imageUrl}
+                  productName={l.productName}
+                />
               </div>
-              <div className="font-medium">{l.productName}</div>
-              {l.variantName ? (
-                <div className="text-xs text-muted-foreground">
-                  {l.variantName}
+              <div className="min-w-0 flex-1">
+                <div className="font-mono text-xs text-muted-foreground">
+                  {l.sku}
                 </div>
-              ) : null}
+                <div className="font-medium">{l.productName}</div>
+                {l.variantName ? (
+                  <div className="text-xs text-muted-foreground">
+                    {l.variantName}
+                  </div>
+                ) : null}
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-3 text-sm">
               <Stat label="Qty">
@@ -109,6 +124,9 @@ export function ReceiptLinesTable({ lines }: { lines: ReceiptLineRow[] }) {
         <Table containerClassName="max-h-[60vh] overflow-y-auto">
           <TableHeader className="sticky top-0 z-10 bg-background">
             <TableRow className="bg-muted/30 hover:bg-muted/30">
+              <TableHead className="w-[60px] [.hide-product-images_&]:hidden">
+                <span className="sr-only">Image</span>
+              </TableHead>
               <TableHead>SKU</TableHead>
               <TableHead>Description</TableHead>
               <TableHead>From PO</TableHead>
@@ -121,6 +139,12 @@ export function ReceiptLinesTable({ lines }: { lines: ReceiptLineRow[] }) {
           <TableBody>
             {lines.map((l) => (
               <TableRow key={l.id}>
+                <TableCell className="[.hide-product-images_&]:hidden">
+                  <ProductThumbnail
+                    src={l.imageUrl}
+                    productName={l.productName}
+                  />
+                </TableCell>
                 <TableCell className="font-mono text-xs text-muted-foreground">
                   {l.sku}
                 </TableCell>
@@ -166,7 +190,7 @@ export function ReceiptLinesTable({ lines }: { lines: ReceiptLineRow[] }) {
           </TableBody>
         </Table>
       </div>
-    </>
+    </div>
   );
 }
 

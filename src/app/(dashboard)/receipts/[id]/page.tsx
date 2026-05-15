@@ -8,6 +8,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { formatCurrency } from '@/lib/format';
+import { resolveLineImageUrl } from '@/lib/products/lineItemImage';
 import { ReceiptHeader } from './_components/header';
 import {
   ReceiptLinesTable,
@@ -45,7 +46,18 @@ export default async function ReceiptDetailPage({
               id: true,
               sku: true,
               name: true,
-              product: { select: { name: true } },
+              imageUrl: true,
+              product: {
+                select: {
+                  name: true,
+                  images: {
+                    where: { isPrimary: true, deletedAt: null },
+                    select: { url: true },
+                    orderBy: { sortOrder: 'asc' },
+                    take: 1,
+                  },
+                },
+              },
             },
           },
           warehouse: { select: { code: true } },
@@ -94,6 +106,7 @@ export default async function ReceiptDetailPage({
           }
         : null,
     notes: l.notes,
+    imageUrl: resolveLineImageUrl(l.variant),
   }));
 
   const total = receipt.lines.reduce(

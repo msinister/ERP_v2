@@ -8,6 +8,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatCurrency } from '@/lib/format';
+import { ProductThumbnail } from '@/components/shared/product-thumbnail';
+import { ProductImageToggle } from '@/components/shared/product-image-toggle';
 
 export type VcLineRow = {
   id: string;
@@ -26,18 +28,29 @@ export function VendorCreditLinesTable({ lines }: { lines: VcLineRow[] }) {
   }
 
   return (
-    <>
-      {/* Mobile card stack. */}
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <ProductImageToggle />
+      </div>
+
+      {/* Mobile card stack. VC lines don't link to a variant — every
+          row renders the Package placeholder for layout consistency
+          with the other detail-page line tables. */}
       <div className="space-y-3 md:hidden">
         {lines.map((l) => (
           <div
             key={l.id}
             className="rounded-lg border border-border bg-card p-3"
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="font-medium">{l.description}</div>
-              <div className="shrink-0 tabular-nums font-medium">
-                {formatCurrency(l.amount)}
+            <div className="flex items-start gap-3">
+              <div className="[.hide-product-images_&]:hidden">
+                <ProductThumbnail src={null} productName={l.description} />
+              </div>
+              <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
+                <div className="font-medium">{l.description}</div>
+                <div className="shrink-0 tabular-nums font-medium">
+                  {formatCurrency(l.amount)}
+                </div>
               </div>
             </div>
             {l.notes ? (
@@ -54,6 +67,9 @@ export function VendorCreditLinesTable({ lines }: { lines: VcLineRow[] }) {
         <Table containerClassName="max-h-[60vh] overflow-y-auto">
           <TableHeader className="sticky top-0 z-10 bg-background">
             <TableRow className="bg-muted/30 hover:bg-muted/30">
+              <TableHead className="w-[60px] [.hide-product-images_&]:hidden">
+                <span className="sr-only">Image</span>
+              </TableHead>
               <TableHead>Description</TableHead>
               <TableHead className="text-right">Amount</TableHead>
             </TableRow>
@@ -61,6 +77,9 @@ export function VendorCreditLinesTable({ lines }: { lines: VcLineRow[] }) {
           <TableBody>
             {lines.map((l) => (
               <TableRow key={l.id}>
+                <TableCell className="[.hide-product-images_&]:hidden">
+                  <ProductThumbnail src={null} productName={l.description} />
+                </TableCell>
                 <TableCell>
                   <div className="font-medium">{l.description}</div>
                   {l.notes ? (
@@ -77,6 +96,6 @@ export function VendorCreditLinesTable({ lines }: { lines: VcLineRow[] }) {
           </TableBody>
         </Table>
       </div>
-    </>
+    </div>
   );
 }
