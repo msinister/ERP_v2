@@ -295,10 +295,41 @@ model Product {
   updatedAt        DateTime    @updatedAt
 
   variants ProductVariant[]
+  images   ProductImage[]
 
   @@index([category])
   @@index([brand])
   @@index([shopifyProductId])
+}
+
+// Product-level image gallery. Multiple images per product with one
+// `isPrimary` marker that thumbnail surfaces resolve to. Storage
+// destinations (currently a local-disk stub; Spaces later) write
+// the URL into `url` — the schema doesn't care which provider
+// produced it. Soft-delete (deletedAt) preserves history; live
+// queries filter deletedAt: null.
+//
+// One-primary-per-product is enforced at the service layer (set
+// primary atomically demotes any other primary). A partial unique
+// index could enforce it at the DB but would complicate the
+// "swap primary" flow — service-layer enforcement is the spec
+// precedent here (customer payment methods, etc.).
+model ProductImage {
+  id        String    @id @default(cuid())
+  productId String
+  url       String
+  isPrimary Boolean   @default(false)
+  sortOrder Int       @default(0)
+  altText   String?
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([productId, sortOrder])
+  @@index([productId, isPrimary])
+  @@index([deletedAt])
 }
 
 model ProductVariant {
@@ -310,6 +341,13 @@ model ProductVariant {
   color        String?
   flavor       String?
   size         String?
+  // Optional variant-specific image. When set, ProductThumbnail
+  // prefers this over the parent product's primary image — lets
+  // operators swap thumbnails per variant (different color jars,
+  // different flavor labels) without giving variants their own
+  // gallery. Stored as a single URL; multi-image variants are
+  // deferred (spec).
+  imageUrl     String?
   active       Boolean   @default(true)
   deletedAt    DateTime?
   createdAt    DateTime  @default(now())

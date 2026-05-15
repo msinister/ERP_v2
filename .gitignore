@@ -24,3 +24,9 @@ Thumbs.db
 .idea/
 
 .claude/
+
+# Local-disk uploader stub writes here. Files are dev-only artifacts;
+# production swaps the uploader to Spaces. Keep the directory tree in
+# Git via .gitkeep files, ignore the actual uploads.
+public/uploads/*
+!public/uploads/.gitkeep

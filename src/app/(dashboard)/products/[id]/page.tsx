@@ -19,6 +19,11 @@ import {
   MovementsTab,
   type MovementRow,
 } from './_components/movements-tab';
+import {
+  ImagesTab,
+  type ProductImageRow,
+  type VariantImageRow,
+} from './_components/images-tab';
 
 // Always live — inventory + movements change with every PO receive,
 // SO close, and manual adjustment. revalidate=0 matches the other
@@ -31,7 +36,19 @@ export default async function ProductDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const product = await db.product.findUnique({ where: { id } });
+  const product = await db.product.findUnique({
+    where: { id },
+    include: {
+      images: {
+        where: { deletedAt: null },
+        orderBy: [
+          { isPrimary: 'desc' },
+          { sortOrder: 'asc' },
+          { createdAt: 'asc' },
+        ],
+      },
+    },
+  });
   // We allow archived products to render so operators can audit them
   // — the header surfaces the Archived badge and hides Edit/Archive.
   if (!product) notFound();
@@ -59,6 +76,23 @@ export default async function ProductDetailPage({
       flavor: v.flavor,
       size: v.size,
       active: v.active,
+    }));
+
+  const productImageRows: ProductImageRow[] = product.images.map((img) => ({
+    id: img.id,
+    url: img.url,
+    altText: img.altText,
+    isPrimary: img.isPrimary,
+    sortOrder: img.sortOrder,
+  }));
+
+  const variantImageRows: VariantImageRow[] = variants
+    .filter((v) => v.deletedAt == null)
+    .map((v) => ({
+      id: v.id,
+      sku: v.sku,
+      name: v.name,
+      imageUrl: v.imageUrl,
     }));
 
   // Flatten (variant, warehouse) pairs that have InventoryItem rows.
@@ -158,6 +192,14 @@ export default async function ProductDetailPage({
       <Tabs defaultValue="overview">
         <TabsList variant="line" className="overflow-x-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="images">
+            Images
+            {productImageRows.length > 0 ? (
+              <span className="ml-1 text-xs text-muted-foreground">
+                ({productImageRows.length})
+              </span>
+            ) : null}
+          </TabsTrigger>
           <TabsTrigger value="variants">
             Variants
             {variantRows.length > 0 ? (
@@ -179,6 +221,13 @@ export default async function ProductDetailPage({
 
         <TabsContent value="overview">
           <OverviewTab product={product} />
+        </TabsContent>
+        <TabsContent value="images">
+          <ImagesTab
+            productId={product.id}
+            productImages={productImageRows}
+            variants={variantImageRows}
+          />
         </TabsContent>
         <TabsContent value="variants">
           <VariantsTab
