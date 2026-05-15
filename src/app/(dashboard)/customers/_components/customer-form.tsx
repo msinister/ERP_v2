@@ -349,7 +349,7 @@ export function CustomerForm({
                   name="salesRepId"
                   render={({ field }) => (
                     <Select
-                      value={field.value === '' ? undefined : field.value}
+                      value={field.value}
                       onValueChange={field.onChange}
                     >
                       <SelectTrigger
@@ -383,7 +383,7 @@ export function CustomerForm({
                   name="paymentTermId"
                   render={({ field }) => (
                     <Select
-                      value={field.value === '' ? undefined : field.value}
+                      value={field.value}
                       onValueChange={field.onChange}
                     >
                       <SelectTrigger

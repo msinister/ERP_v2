@@ -353,11 +353,10 @@ function DraftRow({
             <FieldLabel htmlFor={`variant-${draft.key}`}>Variant</FieldLabel>
             <Select
               // Keep the Select consistently controlled — pass the
-              // string id whenever one is picked, or `undefined` for
-              // "nothing yet." `draft.variantId || undefined` looked
-              // equivalent but base-ui flags the '' → undefined swap
-              // as a controlled/uncontrolled mode change.
-              value={draft.variantId === '' ? undefined : draft.variantId}
+              // string directly. draft.variantId is always a string
+              // ('' initially, an id after picking). '' doesn't match
+              // any SelectItem, so the placeholder shows.
+              value={draft.variantId}
               onValueChange={(v) => onChange({ variantId: v ?? '' })}
             >
               <SelectTrigger

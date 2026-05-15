@@ -351,13 +351,13 @@ export function BillForm({
                 name="vendorId"
                 render={({ field }) => (
                   <Select
-                    // Keep the Select consistently controlled — `''`
-                    // collapses to `undefined` only at the prop edge,
-                    // never on subsequent renders. `|| undefined`
-                    // looked equivalent but base-ui flags the
-                    // string→undefined swap as a controlled/
-                    // uncontrolled mode change on first interaction.
-                    value={field.value === '' ? undefined : field.value}
+                    // Pass `field.value` straight through — RHF
+                    // initializes it to '' from DEFAULT_VALUES and
+                    // never produces undefined, so the Select stays
+                    // consistently controlled across renders. The
+                    // empty string doesn't match any SelectItem, so
+                    // the placeholder shows until the operator picks.
+                    value={field.value}
                     onValueChange={field.onChange}
                     disabled={mode.kind === 'edit'}
                   >
@@ -757,10 +757,9 @@ function LineRow({
                 name={`lines.${index}.expenseAccountId`}
                 render={({ field }) => (
                   <Select
-                    // Same controlled-mode guard as the vendor Select
-                    // above — initial `''` from emptyLine() must
-                    // collapse to undefined at the prop edge only.
-                    value={field.value === '' ? undefined : field.value}
+                    // Same controlled-mode handling as the vendor
+                    // Select above.
+                    value={field.value}
                     onValueChange={field.onChange}
                   >
                     <SelectTrigger

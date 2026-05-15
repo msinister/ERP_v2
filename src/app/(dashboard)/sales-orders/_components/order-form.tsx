@@ -337,7 +337,7 @@ export function OrderForm({
                 name="customerId"
                 render={({ field }) => (
                   <Select
-                    value={field.value === '' ? undefined : field.value}
+                    value={field.value}
                     onValueChange={field.onChange}
                     disabled={mode.kind === 'edit'}
                   >
@@ -391,7 +391,7 @@ export function OrderForm({
                 name="warehouseId"
                 render={({ field }) => (
                   <Select
-                    value={field.value === '' ? undefined : field.value}
+                    value={field.value}
                     onValueChange={field.onChange}
                     disabled={mode.kind === 'edit'}
                   >
@@ -733,7 +733,7 @@ function LineRow({
               name={`lines.${index}.variantId`}
               render={({ field }) => (
                 <Select
-                  value={field.value === '' ? undefined : field.value}
+                  value={field.value}
                   onValueChange={field.onChange}
                 >
                   <SelectTrigger
