@@ -15,6 +15,7 @@ import {
   dispatchSalesOrder,
   reopenSalesOrder,
   undispatchSalesOrder,
+  updateSalesOrderLineFields,
   updateSalesOrderLineQtyShipped,
 } from '@/server/services/salesOrders';
 import { recordPayment } from '@/server/services/payments';
@@ -428,6 +429,159 @@ suite('SalesOrder lifecycle', () => {
     const after = rows[0].afterJson as { qtyShipped: string };
     expect(before.qtyShipped).toBe('0');
     expect(after.qtyShipped).toBe('7');
+  });
+
+  // ===========================================================================
+  // Inline per-field line edits (qty / unit price / discount / notes)
+  // ===========================================================================
+
+  it('updateSalesOrderLineFields: DRAFT qty change updates line + emits audit', async () => {
+    const so = await createSalesOrder(db, createInput('5'));
+    const lineId = so.lines[0].id;
+    await updateSalesOrderLineFields(db, so.id, lineId, {
+      qtyOrdered: '8',
+    });
+    const after = await db.salesOrderLine.findUniqueOrThrow({
+      where: { id: lineId },
+    });
+    expect(after.qtyOrdered.toString()).toBe(new Prisma.Decimal('8').toString());
+    // DRAFT — qtyReserved stays at 0.
+    expect(after.qtyReserved.toString()).toBe('0');
+    const rows = await db.auditLog.findMany({
+      where: {
+        entityType: 'SalesOrderLine',
+        entityId: lineId,
+        action: AuditAction.UPDATE,
+      },
+    });
+    expect(rows).toHaveLength(1);
+  });
+
+  it('updateSalesOrderLineFields: CONFIRMED qty change syncs qtyReserved + bin counter', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('5'));
+    await confirmSalesOrder(db, so.id);
+    const lineId = so.lines[0].id;
+
+    await updateSalesOrderLineFields(db, so.id, lineId, {
+      qtyOrdered: '8',
+    });
+    const after = await db.salesOrderLine.findUniqueOrThrow({
+      where: { id: lineId },
+    });
+    expect(after.qtyOrdered.toString()).toBe(new Prisma.Decimal('8').toString());
+    expect(after.qtyReserved.toString()).toBe(new Prisma.Decimal('8').toString());
+    const inv = await db.inventoryItem.findUnique({
+      where: { variantId_warehouseId: { variantId, warehouseId } },
+    });
+    expect(inv!.reserved.toString()).toBe(new Prisma.Decimal('8').toString());
+  });
+
+  it('updateSalesOrderLineFields: unitPrice edit flips priceRule to MANUAL_OVERRIDE', async () => {
+    const so = await createSalesOrder(db, createInput('1'));
+    const lineId = so.lines[0].id;
+    await updateSalesOrderLineFields(db, so.id, lineId, {
+      unitPrice: '12.50',
+    });
+    const after = await db.salesOrderLine.findUniqueOrThrow({
+      where: { id: lineId },
+    });
+    expect(after.unitPrice.toString()).toBe(
+      new Prisma.Decimal('12.50').toString(),
+    );
+    expect(after.priceRule).toBe(PriceResolutionRule.MANUAL_OVERRIDE);
+  });
+
+  it('updateSalesOrderLineFields: setting discountPercent nulls discountAmount (mutual exclusion)', async () => {
+    const so = await createSalesOrder(db, createInput('1'));
+    const lineId = so.lines[0].id;
+    // First put a discountAmount on the line so we can see the swap.
+    await updateSalesOrderLineFields(db, so.id, lineId, {
+      discountAmount: '5',
+    });
+    let after = await db.salesOrderLine.findUniqueOrThrow({ where: { id: lineId } });
+    expect(after.discountAmount?.toString()).toBe(
+      new Prisma.Decimal('5').toString(),
+    );
+    expect(after.discountPercent).toBeNull();
+
+    // Now flip to percent — service should null the amount.
+    await updateSalesOrderLineFields(db, so.id, lineId, {
+      discountPercent: '10',
+    });
+    after = await db.salesOrderLine.findUniqueOrThrow({ where: { id: lineId } });
+    expect(after.discountPercent?.toString()).toBe(
+      new Prisma.Decimal('10').toString(),
+    );
+    expect(after.discountAmount).toBeNull();
+  });
+
+  it('updateSalesOrderLineFields: null clears discountPercent', async () => {
+    const so = await createSalesOrder(db, createInput('1'));
+    const lineId = so.lines[0].id;
+    await updateSalesOrderLineFields(db, so.id, lineId, {
+      discountPercent: '15',
+    });
+    await updateSalesOrderLineFields(db, so.id, lineId, {
+      discountPercent: null,
+    });
+    const after = await db.salesOrderLine.findUniqueOrThrow({
+      where: { id: lineId },
+    });
+    expect(after.discountPercent).toBeNull();
+    expect(after.discountAmount).toBeNull();
+  });
+
+  it('updateSalesOrderLineFields: notes round-trip (set + clear)', async () => {
+    const so = await createSalesOrder(db, createInput('1'));
+    const lineId = so.lines[0].id;
+    await updateSalesOrderLineFields(db, so.id, lineId, {
+      customerNote: 'Gift wrap requested',
+      internalNote: 'Verified address',
+    });
+    let after = await db.salesOrderLine.findUniqueOrThrow({ where: { id: lineId } });
+    expect(after.customerNote).toBe('Gift wrap requested');
+    expect(after.internalNote).toBe('Verified address');
+
+    await updateSalesOrderLineFields(db, so.id, lineId, {
+      customerNote: null,
+    });
+    after = await db.salesOrderLine.findUniqueOrThrow({ where: { id: lineId } });
+    expect(after.customerNote).toBeNull();
+    // internalNote untouched.
+    expect(after.internalNote).toBe('Verified address');
+  });
+
+  it('updateSalesOrderLineFields: rejects edits on DISPATCHED', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('1'));
+    await confirmSalesOrder(db, so.id);
+    await dispatchSalesOrder(db, so.id);
+    const lineId = so.lines[0].id;
+    await expect(
+      updateSalesOrderLineFields(db, so.id, lineId, { unitPrice: '99' }),
+    ).rejects.toThrow(/Cannot edit line fields while SalesOrder is in status DISPATCHED/);
+  });
+
+  it('updateSalesOrderLineFields: rejects line id from a different SO', async () => {
+    const soA = await createSalesOrder(db, createInput('1'));
+    const soB = await createSalesOrder(db, createInput('1'));
+    await expect(
+      updateSalesOrderLineFields(db, soA.id, soB.lines[0].id, {
+        qtyOrdered: '2',
+      }),
+    ).rejects.toThrow(/does not belong to SalesOrder/);
+  });
+
+  it('updateSalesOrderLineFields: validator rejects both discountPercent and discountAmount in one call', async () => {
+    const so = await createSalesOrder(db, createInput('1'));
+    const lineId = so.lines[0].id;
+    await expect(
+      updateSalesOrderLineFields(db, so.id, lineId, {
+        discountPercent: '10',
+        discountAmount: '5',
+      }),
+    ).rejects.toThrow(/discountPercent OR discountAmount/);
   });
 
   // ===========================================================================

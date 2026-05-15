@@ -13,6 +13,12 @@ import { formatCurrency } from '@/lib/format';
 import { ProductThumbnail } from '@/components/shared/product-thumbnail';
 import { ProductImageToggle } from '@/components/shared/product-image-toggle';
 import { QtyShippedInput } from './qty-shipped-input';
+import {
+  EditableDiscountCell,
+  EditableNotesBlock,
+  EditableQtyCell,
+  EditableUnitPriceCell,
+} from './editable-line-cells';
 
 export type SalesOrderLineRow = {
   id: string;
@@ -55,6 +61,12 @@ export function SalesOrderLinesTable({
   // DISPATCHED. See updateSalesOrderLineQtyShipped for the matching
   // server-side gate.
   const isEditable = status === 'CONFIRMED' || status === 'DISPATCHED';
+  // DRAFT + CONFIRMED are the editable window for the inline field
+  // edits (qty / price / discount / notes). After dispatch the line
+  // is locked at the field level — only qtyShipped stays editable
+  // until close. See updateSalesOrderLineFields for the matching
+  // server-side gate.
+  const fieldsEditable = status === 'DRAFT' || status === 'CONFIRMED';
 
   return (
     <div className="space-y-3">
@@ -120,14 +132,21 @@ export function SalesOrderLinesTable({
                       {l.variantName}
                     </div>
                   ) : null}
-                  {l.customerNote ? (
-                    <div className="mt-1 text-xs italic text-muted-foreground">
-                      “{l.customerNote}”
-                    </div>
-                  ) : null}
+                  <EditableNotesBlock
+                    salesOrderId={salesOrderId}
+                    lineId={l.id}
+                    customerNote={l.customerNote}
+                    internalNote={l.internalNote}
+                    editable={fieldsEditable}
+                  />
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  <div>{formatQty(l.qtyOrdered)}</div>
+                  <EditableQtyCell
+                    salesOrderId={salesOrderId}
+                    lineId={l.id}
+                    qtyOrdered={l.qtyOrdered.toString()}
+                    editable={fieldsEditable}
+                  />
                   {!isClosed ? (
                     <ReservationHint
                       reserved={l.qtyReserved}
@@ -146,11 +165,22 @@ export function SalesOrderLinesTable({
                   />
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  <div>{formatCurrency(l.unitPrice)}</div>
+                  <EditableUnitPriceCell
+                    salesOrderId={salesOrderId}
+                    lineId={l.id}
+                    unitPrice={l.unitPrice.toString()}
+                    editable={fieldsEditable}
+                  />
                   <PriceRuleBadge rule={l.priceRule} />
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {formatDiscount(l.discountPercent, l.discountAmount)}
+                  <EditableDiscountCell
+                    salesOrderId={salesOrderId}
+                    lineId={l.id}
+                    discountPercent={l.discountPercent?.toString() ?? null}
+                    discountAmount={l.discountAmount?.toString() ?? null}
+                    editable={fieldsEditable}
+                  />
                 </TableCell>
                 <TableCell className="text-right tabular-nums font-medium">
                   {formatCurrency(computeLineTotal(l, isClosed))}

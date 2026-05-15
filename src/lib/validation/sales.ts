@@ -121,6 +121,51 @@ export const updateSalesOrderLineQtyShippedInputSchema = z.object({
   qtyShipped: positiveDecimal,
 });
 
+// Inline per-field SO line edits. Allowed while the order is DRAFT or
+// CONFIRMED. Each field is independently optional — operators edit one
+// cell at a time and the route sends only what changed. discountPercent
+// and discountAmount are mutually exclusive (service-side flips the
+// counterpart to null when the operator supplies one). On CONFIRMED:
+//   - qty changes update qtyReserved + recompute the bin counter.
+//   - any total-changing edit re-runs the credit-limit + AR-hold gate.
+// Notes are nullable so an empty string from the input clears them.
+export const updateSalesOrderLineFieldsInputSchema = z
+  .object({
+    qtyOrdered: positiveDecimal.optional(),
+    unitPrice: nonNegativeDecimal.optional(),
+    discountPercent: percentDecimal.nullable().optional(),
+    discountAmount: nonNegativeDecimal.nullable().optional(),
+    customerNote: z.string().max(2000).nullable().optional(),
+    internalNote: z.string().max(2000).nullable().optional(),
+  })
+  .superRefine((data, ctx) => {
+    // Same exclusivity rule as the create/update line schemas — both
+    // discount fields set is a contract error from the client.
+    if (data.discountPercent != null && data.discountAmount != null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['discountAmount'],
+        message: 'Set discountPercent OR discountAmount, not both',
+      });
+    }
+    // At least one field must be present — empty payload = no-op the
+    // client shouldn't be sending.
+    const hasAny =
+      data.qtyOrdered !== undefined ||
+      data.unitPrice !== undefined ||
+      data.discountPercent !== undefined ||
+      data.discountAmount !== undefined ||
+      data.customerNote !== undefined ||
+      data.internalNote !== undefined;
+    if (!hasAny) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [],
+        message: 'At least one field is required',
+      });
+    }
+  });
+
 // reopenSalesOrder — corrections workflow: CLOSED → CONFIRMED,
 // DISPATCHED, or CANCELLED. paymentDecision must be 'unapply' when
 // the linked invoice has any non-reversed CreditApplication rows; the
@@ -157,6 +202,9 @@ export type CloseSalesOrderLineInput = z.infer<
 >;
 export type UpdateSalesOrderLineQtyShippedInput = z.infer<
   typeof updateSalesOrderLineQtyShippedInputSchema
+>;
+export type UpdateSalesOrderLineFieldsInput = z.infer<
+  typeof updateSalesOrderLineFieldsInputSchema
 >;
 export type ReopenSalesOrderInput = z.infer<
   typeof reopenSalesOrderInputSchema

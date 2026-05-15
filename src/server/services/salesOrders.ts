@@ -37,6 +37,7 @@ import {
   createSalesOrderInputSchema,
   reopenSalesOrderInputSchema,
   updateSalesOrderInputSchema,
+  updateSalesOrderLineFieldsInputSchema,
   updateSalesOrderLineQtyShippedInputSchema,
   type AddSalesOrderLinesInput,
   type CancelSalesOrderInput,
@@ -44,6 +45,7 @@ import {
   type CreateSalesOrderInput,
   type ReopenSalesOrderInput,
   type UpdateSalesOrderInput,
+  type UpdateSalesOrderLineFieldsInput,
   type UpdateSalesOrderLineQtyShippedInput,
 } from '@/lib/validation/sales';
 
@@ -1070,6 +1072,193 @@ export async function updateSalesOrderLineQtyShipped(
       after: { qtyShipped: after.qtyShipped },
       ctx,
     });
+    return after;
+  });
+}
+
+/**
+ * Inline per-field edit for a SO line. Used by the SO detail page's
+ * click-to-edit cells while the order is DRAFT or CONFIRMED. The
+ * caller sends ONLY the fields that changed; absent keys are left
+ * untouched. Mutual-exclusion rule on discountPercent/discountAmount
+ * is preserved by nulling the counterpart whenever one is set.
+ *
+ * Status windows:
+ *   - DRAFT: free edits; no reservation/credit-gate side effects.
+ *   - CONFIRMED: qty edits update qtyReserved + recompute the bin
+ *     counter; total-changing edits (qty, unitPrice, discount) re-run
+ *     the credit-limit + AR-hold gate against the post-edit total.
+ *   - DISPATCHED / CLOSED / CANCELLED: rejected.
+ *
+ * Audit-side: emits a single UPDATE row covering the field diff.
+ */
+export async function updateSalesOrderLineFields(
+  db: PrismaClient,
+  salesOrderId: string,
+  lineId: string,
+  input: UpdateSalesOrderLineFieldsInput,
+  ctx?: AuditContext,
+): Promise<SalesOrderLine> {
+  const data = updateSalesOrderLineFieldsInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    // Pull the full SO row so computeSalesOrderTotal (which expects
+    // every SalesOrder column) works without casts. Pilot scale —
+    // single-row fetch on a tx-locked context.
+    const line = await tx.salesOrderLine.findUnique({
+      where: { id: lineId },
+      include: { salesOrder: true },
+    });
+    if (!line || line.deletedAt != null) {
+      throw new Error(`SalesOrderLine not found: ${lineId}`);
+    }
+    if (line.salesOrder.id !== salesOrderId) {
+      throw new Error(
+        `Line ${lineId} does not belong to SalesOrder ${salesOrderId}`,
+      );
+    }
+    if (
+      line.salesOrder.status !== SalesOrderStatus.DRAFT &&
+      line.salesOrder.status !== SalesOrderStatus.CONFIRMED
+    ) {
+      throw new Error(
+        `Cannot edit line fields while SalesOrder is in status ${line.salesOrder.status}`,
+      );
+    }
+
+    // Build the update payload. Note that `null` is a meaningful value
+    // here (clears the field); we distinguish "unset" via the schema's
+    // .optional() — absent key means don't touch. Discount mutual-
+    // exclusion: when one is set non-null, the other goes to null so
+    // we never leave both populated.
+    const updateData: Prisma.SalesOrderLineUpdateInput = {};
+    let qtyChanged = false;
+    let totalAffecting = false;
+
+    if (data.qtyOrdered !== undefined) {
+      const next = new Prisma.Decimal(data.qtyOrdered);
+      if (!next.equals(line.qtyOrdered)) {
+        updateData.qtyOrdered = next;
+        qtyChanged = true;
+        totalAffecting = true;
+        // CONFIRMED orders keep qtyReserved = qtyOrdered. DRAFT
+        // orders don't reserve, so qtyReserved stays at 0.
+        if (line.salesOrder.status === SalesOrderStatus.CONFIRMED) {
+          updateData.qtyReserved = next;
+        }
+      }
+    }
+    if (data.unitPrice !== undefined) {
+      const next = new Prisma.Decimal(data.unitPrice);
+      if (!next.equals(line.unitPrice)) {
+        updateData.unitPrice = next;
+        // Operator overriding the resolver's chosen price — flag the
+        // priceRule so the audit trail and the line's price-rule
+        // badge accurately reflect the source.
+        updateData.priceRule = 'MANUAL_OVERRIDE';
+        totalAffecting = true;
+      }
+    }
+    if (data.discountPercent !== undefined) {
+      updateData.discountPercent =
+        data.discountPercent != null
+          ? new Prisma.Decimal(data.discountPercent)
+          : null;
+      // Mutual exclusion — null the counterpart unless the caller
+      // explicitly sent a discountAmount in the same payload (in which
+      // case the validator already rejected the request).
+      if (data.discountAmount === undefined) {
+        updateData.discountAmount = null;
+      }
+      totalAffecting = true;
+    }
+    if (data.discountAmount !== undefined) {
+      updateData.discountAmount =
+        data.discountAmount != null
+          ? new Prisma.Decimal(data.discountAmount)
+          : null;
+      if (data.discountPercent === undefined) {
+        updateData.discountPercent = null;
+      }
+      totalAffecting = true;
+    }
+    if (data.customerNote !== undefined) {
+      updateData.customerNote = data.customerNote;
+    }
+    if (data.internalNote !== undefined) {
+      updateData.internalNote = data.internalNote;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      // No real changes — return the existing line without an audit
+      // row. The validator already enforces a non-empty payload, but
+      // the operator might have edited to the same value.
+      return line;
+    }
+
+    // If the qty changed on a CONFIRMED order, lock the bin so a
+    // concurrent SO close on the same bin serializes against this
+    // edit. The recompute below will see the updated qtyReserved.
+    if (qtyChanged && line.salesOrder.status === SalesOrderStatus.CONFIRMED) {
+      await lockBin(tx, line.variantId, line.warehouseId);
+    }
+
+    const before = {
+      qtyOrdered: line.qtyOrdered,
+      unitPrice: line.unitPrice,
+      priceRule: line.priceRule,
+      discountPercent: line.discountPercent,
+      discountAmount: line.discountAmount,
+      customerNote: line.customerNote,
+      internalNote: line.internalNote,
+    };
+
+    const after = await tx.salesOrderLine.update({
+      where: { id: lineId },
+      data: updateData,
+    });
+
+    if (qtyChanged && line.salesOrder.status === SalesOrderStatus.CONFIRMED) {
+      await recomputeReservedForBin(tx, line.variantId, line.warehouseId);
+    }
+
+    // Credit-limit + AR-hold re-check on CONFIRMED orders when the
+    // edit might have pushed the total higher. Reuses the same
+    // enforce helper that confirm + add-lines call so the contract
+    // stays in one place.
+    if (
+      totalAffecting &&
+      line.salesOrder.status === SalesOrderStatus.CONFIRMED
+    ) {
+      const afterLines = await tx.salesOrderLine.findMany({
+        where: { salesOrderId, deletedAt: null },
+      });
+      await enforceCreditAndArHold(tx, {
+        salesOrderId,
+        customerId: line.salesOrder.customerId,
+        orderTotal: computeSalesOrderTotal({
+          ...line.salesOrder,
+          lines: afterLines,
+        }),
+      });
+    }
+
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'SalesOrderLine',
+      entityId: lineId,
+      before,
+      after: {
+        qtyOrdered: after.qtyOrdered,
+        unitPrice: after.unitPrice,
+        priceRule: after.priceRule,
+        discountPercent: after.discountPercent,
+        discountAmount: after.discountAmount,
+        customerNote: after.customerNote,
+        internalNote: after.internalNote,
+      },
+      ctx,
+    });
+
     return after;
   });
 }
