@@ -32,7 +32,7 @@ export default async function NewVendorCreditPage() {
           </h1>
           <p className="text-sm text-muted-foreground">
             Create a draft. Confirm posts the GL leg (DR AP / CR Vendor
-            Credits Available). Lines sum must equal the header amount.
+            Credits Available).
           </p>
         </div>
       </div>

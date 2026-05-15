@@ -51,7 +51,6 @@ export default async function EditVendorCreditPage({
 
   const defaults: Partial<VcFormValues> = {
     vendorId: vc.vendorId,
-    amount: vc.amount.toString(),
     creditDate: vc.creditDate.toISOString().slice(0, 10),
     currency: vc.currency ?? '',
     reason: vc.reason ?? '',

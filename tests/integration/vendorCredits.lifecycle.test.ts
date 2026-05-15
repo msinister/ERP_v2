@@ -144,6 +144,21 @@ suite('VendorCredit lifecycle (slice D)', () => {
     ).rejects.toThrow(/Line totals .* don't match credit amount/);
   });
 
+  it('createVendorCreditDraft: omitted amount derives credit total from SUM(line.amount)', async () => {
+    const vc = await createVendorCreditDraft(db, {
+      vendorId: vendor.id,
+      // No `amount` — service derives it from lines. This is the
+      // path the GUI uses now that the header amount input is gone.
+      reason: 'damaged shipment',
+      lines: [
+        { description: 'damaged box A', amount: '30' },
+        { description: 'damaged box B', amount: '20.50' },
+      ],
+    });
+    expect(vc.amount.toString()).toBe(new Prisma.Decimal('50.5').toString());
+    expect(vc.lines).toHaveLength(2);
+  });
+
   it('createVendorCreditDraft: rejects soft-deleted vendor', async () => {
     await db.vendor.update({
       where: { id: vendor.id },

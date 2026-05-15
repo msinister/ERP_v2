@@ -95,8 +95,17 @@ export async function createVendorCreditDraft(
   ctx?: AuditContext,
 ): Promise<VendorCreditWithLines> {
   const data = createVendorCreditInputSchema.parse(input);
-  const amount = new Prisma.Decimal(data.amount);
-  validateLineSum(amount, data.lines);
+  // Derive amount from lines when the caller doesn't supply one.
+  // When the caller DOES supply one, run the historical strict check
+  // so direct API callers can still assert the total they expect.
+  const linesSum = data.lines.reduce(
+    (acc, l) => acc.plus(new Prisma.Decimal(l.amount)),
+    new Prisma.Decimal(0),
+  );
+  const amount = data.amount != null ? new Prisma.Decimal(data.amount) : linesSum;
+  if (data.amount != null) {
+    validateLineSum(amount, data.lines);
+  }
 
   return db.$transaction(async (tx) => {
     const vendor = await tx.vendor.findFirst({
@@ -168,12 +177,37 @@ export async function updateVendorCredit(
       );
     }
 
-    const nextAmount = data.amount != null
-      ? new Prisma.Decimal(data.amount)
-      : before.amount;
+    // Resolve the new amount. Three branches:
+    //   1. Caller supplied `amount` — historical strict path, validate
+    //      against whichever lines apply (new lines if also supplied,
+    //      otherwise the existing ones).
+    //   2. Caller supplied only `lines` — derive amount from the line
+    //      sum. This is the path the form takes (the UI no longer
+    //      surfaces a separate header-amount input).
+    //   3. Neither — keep the existing amount.
+    let nextAmount: Prisma.Decimal;
+    if (data.amount != null) {
+      nextAmount = new Prisma.Decimal(data.amount);
+      if (data.lines) {
+        validateLineSum(nextAmount, data.lines);
+      } else {
+        const existingAsInput: VendorCreditLineInput[] = before.lines.map((l) => ({
+          description: l.description,
+          amount: l.amount.toString(),
+          notes: l.notes ?? undefined,
+        }));
+        validateLineSum(nextAmount, existingAsInput);
+      }
+    } else if (data.lines) {
+      nextAmount = data.lines.reduce(
+        (acc, l) => acc.plus(new Prisma.Decimal(l.amount)),
+        new Prisma.Decimal(0),
+      );
+    } else {
+      nextAmount = before.amount;
+    }
 
     if (data.lines) {
-      validateLineSum(nextAmount, data.lines);
       await tx.vendorCreditLine.deleteMany({
         where: { vendorCreditId },
       });
@@ -186,15 +220,6 @@ export async function updateVendorCredit(
           notes: l.notes ?? null,
         })),
       });
-    } else if (data.amount != null) {
-      // Amount changed without supplying lines — only allow when the
-      // existing line sum still matches.
-      const existingAsInput: VendorCreditLineInput[] = before.lines.map((l) => ({
-        description: l.description,
-        amount: l.amount.toString(),
-        notes: l.notes ?? undefined,
-      }));
-      validateLineSum(nextAmount, existingAsInput);
     }
 
     const after = await tx.vendorCredit.update({

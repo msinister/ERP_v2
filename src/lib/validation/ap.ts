@@ -193,10 +193,17 @@ const vendorCreditLineInputSchema = z.object({
 
 export const createVendorCreditInputSchema = z.object({
   vendorId: z.string().min(1),
-  amount: decimalString.refine(
-    (v) => new Prisma.Decimal(v).greaterThan(0),
-    'Must be greater than 0',
-  ),
+  // Optional — when omitted, the service derives the amount from
+  // SUM(line.amount). The form sends nothing for amount so the
+  // total is always exactly the line sum. Direct API callers may
+  // still pass amount; the service then validates it matches the
+  // line sum (strict-validation path preserved for scripts/imports).
+  amount: decimalString
+    .refine(
+      (v) => new Prisma.Decimal(v).greaterThan(0),
+      'Must be greater than 0',
+    )
+    .optional(),
   creditDate: z.coerce.date().optional(),
   currency: z.string().min(3).max(3).optional(),
   reason: z.string().max(2000).optional(),

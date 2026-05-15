@@ -49,11 +49,11 @@ export type VendorOption = {
 };
 
 // ===========================================================================
-// Form schema — mirrors create/update VendorCreditInputSchema.
-// Lines are simple expense-style (description + amount) per pilot scope.
-// Math invariant SUM(line.amount) === amount is enforced at the service
-// layer, but we mirror it client-side as a soft warning so AP staff
-// catches typos before submit.
+// Form schema — mirrors create/update VendorCreditInputSchema, minus the
+// header `amount` field. The credit total is derived from SUM(line.amount)
+// at submit time and recomputed in real time for display. The service
+// layer accepts an omitted amount and derives the same sum server-side,
+// so there's a single source of truth.
 // ===========================================================================
 
 // Looser refine so operators can type ".25" without a leading zero;
@@ -71,7 +71,6 @@ const lineSchema = z.object({
 
 const formSchema = z.object({
   vendorId: z.string().min(1, 'Required'),
-  amount: positiveAmount,
   creditDate: z
     .union([
       z.literal(''),
@@ -94,7 +93,6 @@ export type VcFormMode =
 
 const DEFAULT_VALUES: VcFormValues = {
   vendorId: '',
-  amount: '',
   creditDate: '',
   currency: '',
   reason: '',
@@ -171,28 +169,20 @@ export function VcForm({
 
   const vendorId = watch('vendorId');
   const lines = watch('lines');
-  const headerAmount = watch('amount');
 
-  // Soft client-side mismatch warning. The service enforces SUM(line.amount)
-  // === amount strictly. Surface the mismatch up front so AP catches typos
-  // before submit; the form still lets them submit (server is source of
-  // truth).
+  // Authoritative credit total = sum of all valid line amounts. The
+  // service derives the same number server-side when the request omits
+  // `amount`; both views agree by construction.
   const linesSum = lines.reduce((acc, l) => {
     const n = Number(l.amount);
     if (!Number.isFinite(n)) return acc;
     return acc + n;
   }, 0);
-  const headerN = Number(headerAmount);
-  const mismatchAmount =
-    Number.isFinite(headerN) && Math.abs(linesSum - headerN) > 0.001
-      ? linesSum - headerN
-      : null;
 
   function submit(values: VcFormValues) {
     startTransition(async () => {
       const payload = {
         vendorId: values.vendorId,
-        amount: normalizeDecimalForSubmit(values.amount),
         creditDate: nullEmpty(values.creditDate),
         currency: nullEmpty(values.currency)?.toUpperCase(),
         reason: nullEmpty(values.reason),
@@ -249,11 +239,11 @@ export function VcForm({
     <form onSubmit={handleSubmit(submit)} className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Vendor &amp; total</CardTitle>
+          <CardTitle className="text-sm">Vendor</CardTitle>
         </CardHeader>
         <CardContent>
           <FieldGroup>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <Field>
                 <FieldLabel htmlFor="vendorId">Vendor</FieldLabel>
                 <Controller
@@ -261,7 +251,7 @@ export function VcForm({
                   name="vendorId"
                   render={({ field }) => (
                     <Select
-                      value={field.value === '' ? undefined : field.value}
+                      value={field.value}
                       onValueChange={field.onChange}
                       disabled={mode.kind === 'edit'}
                     >
@@ -307,20 +297,6 @@ export function VcForm({
                 />
                 <FieldError errors={[errors.vendorId]} />
               </Field>
-
-              <Field>
-                <FieldLabel htmlFor="amount">Credit amount</FieldLabel>
-                <Input
-                  id="amount"
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  aria-invalid={!!errors.amount}
-                  {...register('amount')}
-                />
-                <FieldError errors={[errors.amount]} />
-              </Field>
-            </div>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Field>
                 <FieldLabel htmlFor="creditDate">Credit date</FieldLabel>
                 <Input
@@ -379,17 +355,12 @@ export function VcForm({
             </div>
             <div className="flex justify-end border-t border-border pt-3 text-sm">
               <div className="text-right">
-                <div className="text-xs text-muted-foreground">Lines sum</div>
+                <div className="text-xs text-muted-foreground">
+                  Credit total
+                </div>
                 <div className="text-lg font-semibold tabular-nums">
                   {formatCurrency(linesSum.toFixed(2))}
                 </div>
-                {mismatchAmount != null ? (
-                  <p className="text-xs text-amber-600">
-                    Differs from header by{' '}
-                    {formatCurrency(Math.abs(mismatchAmount).toFixed(2))}.
-                    Server will reject mismatched totals.
-                  </p>
-                ) : null}
               </div>
             </div>
           </div>
