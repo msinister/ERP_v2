@@ -48,8 +48,18 @@ export const closePurchaseOrderInputSchema = z.object({
   reason: z.string().min(1, 'Reason is required').max(2000),
 });
 
+// Manual reopen of a CLOSED PO. Reason required so the audit trail
+// captures why the operator undid the close. The service clears
+// closeReason + closedAt and reverts the status to either
+// PARTIALLY_RECEIVED (some receipts already exist) or CONFIRMED
+// (none).
+export const reopenPurchaseOrderInputSchema = z.object({
+  reason: z.string().min(1, 'Reason is required').max(2000),
+});
+
 export type PurchaseOrderLineInput = z.infer<typeof purchaseOrderLineInputSchema>;
 export type CreatePurchaseOrderInput = z.infer<typeof createPurchaseOrderInputSchema>;
 export type UpdatePurchaseOrderInput = z.infer<typeof updatePurchaseOrderInputSchema>;
 export type CancelPurchaseOrderInput = z.infer<typeof cancelPurchaseOrderInputSchema>;
 export type ClosePurchaseOrderInput = z.infer<typeof closePurchaseOrderInputSchema>;
+export type ReopenPurchaseOrderInput = z.infer<typeof reopenPurchaseOrderInputSchema>;

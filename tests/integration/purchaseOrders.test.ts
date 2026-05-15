@@ -10,6 +10,7 @@ import {
   createPurchaseOrder,
   getPurchaseOrder,
   recomputeQtyReceivedForPoLine,
+  reopenPurchaseOrder,
   softDeletePurchaseOrder,
   updatePurchaseOrder,
 } from '@/server/services/purchaseOrders';
@@ -215,6 +216,128 @@ suite('PurchaseOrder service', () => {
     const after = await db.purchaseOrder.findUniqueOrThrow({ where: { id: po.id } });
     expect(after.status).toBe(PurchaseOrderStatus.CLOSED);
     expect(after.closeReason).toBe('vendor cancelled');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Manual reopen
+  // ---------------------------------------------------------------------------
+
+  it('reopenPurchaseOrder: rejects on non-CLOSED (e.g., CONFIRMED)', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await confirmPurchaseOrder(db, po.id);
+    await expect(
+      reopenPurchaseOrder(db, po.id, { reason: 'oops' }),
+    ).rejects.toThrow(/Cannot reopen PurchaseOrder in status CONFIRMED/);
+  });
+
+  it('reopenPurchaseOrder: CLOSED with no receipts → reverts to CONFIRMED and clears closeReason/closedAt', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await confirmPurchaseOrder(db, po.id);
+    await closePurchaseOrder(db, po.id, { reason: 'short ship' });
+
+    const reopened = await reopenPurchaseOrder(db, po.id, {
+      reason: 'vendor sending remaining units',
+    });
+    expect(reopened.status).toBe(PurchaseOrderStatus.CONFIRMED);
+    expect(reopened.closeReason).toBeNull();
+    expect(reopened.closedAt).toBeNull();
+  });
+
+  it('reopenPurchaseOrder: CLOSED with partial receipts → reverts to PARTIALLY_RECEIVED', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput('10', '1')] });
+    await confirmPurchaseOrder(db, po.id);
+
+    const poLine = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po.id },
+    });
+    const receipt = await db.receipt.create({
+      data: {
+        number: `TEST-RCPT-REOPEN-${Date.now()}`,
+        vendorId,
+        warehouseId,
+        status: ReceiptStatus.POSTED,
+        receivedAt: new Date(),
+      },
+    });
+    await db.receiptLine.create({
+      data: {
+        receiptId: receipt.id,
+        purchaseOrderLineId: poLine.id,
+        variantId,
+        warehouseId,
+        qtyReceived: new Prisma.Decimal('3'),
+        unitCost: new Prisma.Decimal('1'),
+      },
+    });
+    await db.purchaseOrderLine.update({
+      where: { id: poLine.id },
+      data: { qtyReceived: new Prisma.Decimal('3') },
+    });
+    await db.purchaseOrder.update({
+      where: { id: po.id },
+      data: { status: PurchaseOrderStatus.PARTIALLY_RECEIVED },
+    });
+
+    await closePurchaseOrder(db, po.id, { reason: 'short ship' });
+    const reopened = await reopenPurchaseOrder(db, po.id, {
+      reason: 'vendor sending remaining 7',
+    });
+    expect(reopened.status).toBe(PurchaseOrderStatus.PARTIALLY_RECEIVED);
+    expect(reopened.closeReason).toBeNull();
+    expect(reopened.closedAt).toBeNull();
+  });
+
+  it('reopenPurchaseOrder: receipt cancels resume driving status after reopen', async () => {
+    // After reopen the closeReason sentinel is gone, so the
+    // applyComputedPoStatus revert path should re-engage.
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput('10', '1')] });
+    await confirmPurchaseOrder(db, po.id);
+    const poLine = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po.id },
+    });
+    const receipt = await db.receipt.create({
+      data: {
+        number: `TEST-RCPT-REOPEN2-${Date.now()}`,
+        vendorId,
+        warehouseId,
+        status: ReceiptStatus.POSTED,
+        receivedAt: new Date(),
+      },
+    });
+    await db.receiptLine.create({
+      data: {
+        receiptId: receipt.id,
+        purchaseOrderLineId: poLine.id,
+        variantId,
+        warehouseId,
+        qtyReceived: new Prisma.Decimal('3'),
+        unitCost: new Prisma.Decimal('1'),
+      },
+    });
+    await db.purchaseOrderLine.update({
+      where: { id: poLine.id },
+      data: { qtyReceived: new Prisma.Decimal('3') },
+    });
+    await db.purchaseOrder.update({
+      where: { id: po.id },
+      data: { status: PurchaseOrderStatus.PARTIALLY_RECEIVED },
+    });
+    await closePurchaseOrder(db, po.id, { reason: 'closed early' });
+    await reopenPurchaseOrder(db, po.id, { reason: 'reopened' });
+
+    // Simulate receipt cancel — qtyReceived back to 0.
+    await db.purchaseOrderLine.update({
+      where: { id: poLine.id },
+      data: { qtyReceived: new Prisma.Decimal('0') },
+    });
+    const result = await db.$transaction((tx) =>
+      applyComputedPoStatus(tx, po.id),
+    );
+    // No closeReason sentinel → recompute is free to flip back to
+    // CONFIRMED.
+    expect(result.changed).toBe(true);
+    const after = await db.purchaseOrder.findUniqueOrThrow({ where: { id: po.id } });
+    expect(after.status).toBe(PurchaseOrderStatus.CONFIRMED);
   });
 
   it('softDelete only allowed for DRAFT or CANCELLED', async () => {

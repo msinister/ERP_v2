@@ -6,10 +6,12 @@ import {
   cancelPurchaseOrderInputSchema,
   closePurchaseOrderInputSchema,
   createPurchaseOrderInputSchema,
+  reopenPurchaseOrderInputSchema,
   updatePurchaseOrderInputSchema,
   type CancelPurchaseOrderInput,
   type ClosePurchaseOrderInput,
   type CreatePurchaseOrderInput,
+  type ReopenPurchaseOrderInput,
   type UpdatePurchaseOrderInput,
 } from '@/lib/validation/purchasing';
 
@@ -310,6 +312,66 @@ export async function closePurchaseOrder(
         status: PurchaseOrderStatus.CLOSED,
         closedAt: new Date(),
         closeReason: data.reason,
+      },
+    });
+    await audit(tx, {
+      action: AuditAction.STATUS_CHANGE,
+      entityType: 'PurchaseOrder',
+      entityId: id,
+      before: { status: before.status, closeReason: before.closeReason },
+      after: { status: after.status, closeReason: after.closeReason },
+      ctx: { ...ctx, reason: data.reason },
+    });
+    return after;
+  });
+}
+
+/**
+ * Manual reopen — reverse of closePurchaseOrder. Status gate: only
+ * CLOSED. Reverts to PARTIALLY_RECEIVED when any non-deleted PO line
+ * has qtyReceived > 0, else CONFIRMED. Clears closeReason + closedAt
+ * so a subsequent close-and-reopen cycle is clean (and so the manual-
+ * close sentinel that applyComputedPoStatus checks goes back to NULL).
+ *
+ * Pairs with closePurchaseOrder + the applyComputedPoStatus sentinel:
+ * after reopen, receipt cancels go back to driving the status the
+ * normal way. The auto-close path (every line fully received again)
+ * still works as it did before the close.
+ */
+export async function reopenPurchaseOrder(
+  db: PrismaClient,
+  id: string,
+  input: ReopenPurchaseOrderInput,
+  ctx?: AuditContext,
+): Promise<PurchaseOrder> {
+  const data = reopenPurchaseOrderInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    const before = await tx.purchaseOrder.findUnique({ where: { id } });
+    if (!before) throw new Error(`PurchaseOrder not found: ${id}`);
+    if (before.status !== PurchaseOrderStatus.CLOSED) {
+      throw new Error(
+        `Cannot reopen PurchaseOrder in status ${before.status} — only CLOSED can be reopened`,
+      );
+    }
+
+    const lines = await tx.purchaseOrderLine.findMany({
+      where: { purchaseOrderId: id, deletedAt: null },
+      select: { qtyReceived: true },
+    });
+    const totalReceived = lines.reduce(
+      (acc, l) => acc.plus(l.qtyReceived),
+      new Prisma.Decimal(0),
+    );
+    const nextStatus = totalReceived.greaterThan(0)
+      ? PurchaseOrderStatus.PARTIALLY_RECEIVED
+      : PurchaseOrderStatus.CONFIRMED;
+
+    const after = await tx.purchaseOrder.update({
+      where: { id },
+      data: {
+        status: nextStatus,
+        closedAt: null,
+        closeReason: null,
       },
     });
     await audit(tx, {

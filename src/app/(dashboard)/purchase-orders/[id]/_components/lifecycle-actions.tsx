@@ -9,6 +9,7 @@ import {
   PackageCheck,
   PackagePlus,
   Pencil,
+  RotateCcw,
   Trash2,
   XCircle,
 } from 'lucide-react';
@@ -64,6 +65,10 @@ export function LifecycleActions(props: Props) {
   // down to qtyReceived — the gap is the story the report tells).
   const canClose =
     status === 'CONFIRMED' || status === 'PARTIALLY_RECEIVED';
+  // Reverse of close: only meaningful when already CLOSED. Service
+  // picks the target state (PARTIALLY_RECEIVED if anything received,
+  // else CONFIRMED) from live line state.
+  const canReopen = status === 'CLOSED';
   // Service rejects cancel on CLOSED + CANCELLED. DRAFT cancel is also
   // allowed (use Delete instead is more natural, but cancel works too).
   const canCancel =
@@ -77,6 +82,7 @@ export function LifecycleActions(props: Props) {
       {canConfirm ? <ConfirmAction {...props} /> : null}
       {canReceive ? <ReceiveAction {...props} /> : null}
       {canClose ? <CloseAction {...props} /> : null}
+      {canReopen ? <ReopenAction {...props} /> : null}
       {canEdit ? (
         <Button
           variant="outline"
@@ -273,6 +279,100 @@ function CloseAction({ purchaseOrderId, purchaseOrderNumber }: Props) {
           <AlertDialogCancel disabled={pending}>Keep open</AlertDialogCancel>
           <AlertDialogAction onClick={onClose} disabled={pending}>
             {pending ? 'Closing…' : 'Close PO'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+// =============================================================================
+// Reopen — manual reopen-with-reason. Reason field is required;
+// service rejects empty strings. Status gate: CLOSED only. Service
+// picks the target state (PARTIALLY_RECEIVED if any qty received,
+// else CONFIRMED) — the UI doesn't expose a status picker because
+// the inversion is deterministic from the existing receipt state.
+// =============================================================================
+
+function ReopenAction({ purchaseOrderId, purchaseOrderNumber }: Props) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  function onReopen() {
+    setError(null);
+    if (reason.trim().length === 0) {
+      setError('Reason is required');
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const res = await fetch(
+          `/api/purchase-orders/${purchaseOrderId}/reopen`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reason: reason.trim() }),
+          },
+        );
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          toast.error(body.error ?? `Reopen failed (${res.status})`);
+          return;
+        }
+        toast.success(`Reopened ${purchaseOrderNumber}`);
+        setOpen(false);
+        setReason('');
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Network error');
+      }
+    });
+  }
+
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) {
+          setReason('');
+          setError(null);
+        }
+      }}
+    >
+      <Button size="sm" onClick={() => setOpen(true)}>
+        <RotateCcw />
+        Reopen
+      </Button>
+      <AlertDialogContent className="sm:max-w-md">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Reopen this PO?</AlertDialogTitle>
+          <AlertDialogDescription>
+            It will return to its previous state and can receive further
+            shipments. The close reason will be cleared.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <Field>
+          <FieldLabel htmlFor="reopen-reason">Reason</FieldLabel>
+          <Textarea
+            id="reopen-reason"
+            rows={3}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. vendor sending remaining units"
+            aria-invalid={!!error}
+          />
+          {error ? <FieldError errors={[{ message: error }]} /> : null}
+        </Field>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onReopen} disabled={pending}>
+            {pending ? 'Reopening…' : 'Reopen PO'}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
