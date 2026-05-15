@@ -1322,7 +1322,13 @@ model Setting {
 model Invoice {
   id             String        @id @default(cuid())
   number         String        @unique
-  salesOrderId   String        @unique
+  // Nullable + @unique = partial-unique on non-null (Postgres treats
+  // multiple NULLs as distinct). On reopen we NULL the FK to detach
+  // the invoice from the SO without voiding it; the orphan record
+  // stays queryable by id, applications + JE rows untouched. A
+  // subsequent close generates a fresh invoice cleanly because the
+  // unique index ignores the NULL'd row.
+  salesOrderId   String?       @unique
   customerId     String
   warehouseId    String
   status         InvoiceStatus @default(OPEN)
@@ -1358,7 +1364,7 @@ model Invoice {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  salesOrder         SalesOrder          @relation(fields: [salesOrderId], references: [id])
+  salesOrder         SalesOrder?         @relation(fields: [salesOrderId], references: [id])
   customer           Customer            @relation(fields: [customerId], references: [id])
   warehouse          Warehouse           @relation(fields: [warehouseId], references: [id])
   lines              InvoiceLine[]

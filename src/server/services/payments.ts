@@ -479,85 +479,100 @@ export async function reversePayment(
   ctx?: AuditContext,
 ): Promise<PaymentWithApplications> {
   const data = reversePaymentInputSchema.parse(input);
-  return db.$transaction(async (tx) => {
-    await lockPayment(tx, data.paymentId);
-    const before = await tx.payment.findUnique({
-      where: { id: data.paymentId },
-      include: { applications: true },
+  return db.$transaction(async (tx) =>
+    reversePaymentTx(tx, data, ctx),
+  );
+}
+
+/**
+ * Transaction-aware reverse-payment. Lifted out of reversePayment so
+ * higher-level operations (reopenSalesOrder, future bulk-reverse jobs)
+ * can compose payment reversal atomically with their own state changes.
+ * Callers must already hold an open Prisma transaction.
+ */
+export async function reversePaymentTx(
+  tx: Prisma.TransactionClient,
+  input: ReversePaymentInput,
+  ctx?: AuditContext,
+): Promise<PaymentWithApplications> {
+  const data = reversePaymentInputSchema.parse(input);
+  await lockPayment(tx, data.paymentId);
+  const before = await tx.payment.findUnique({
+    where: { id: data.paymentId },
+    include: { applications: true },
+  });
+  if (!before) throw new Error(`Payment not found: ${data.paymentId}`);
+  if (before.deletedAt) throw new Error('Payment is soft-deleted');
+  if (before.status === PaymentStatus.REVERSED) {
+    throw new Error('Payment is already REVERSED');
+  }
+
+  const customer = await tx.customer.findUniqueOrThrow({
+    where: { id: before.customerId },
+  });
+
+  // Mark all non-reversed applications as reversed; recompute each
+  // affected invoice.
+  const affectedInvoiceIds = new Set<string>();
+  const now = new Date();
+  for (const app of before.applications) {
+    if (app.reversedAt != null) continue;
+    await tx.creditApplication.update({
+      where: { id: app.id },
+      data: { reversedAt: now },
     });
-    if (!before) throw new Error(`Payment not found: ${data.paymentId}`);
-    if (before.deletedAt) throw new Error('Payment is soft-deleted');
-    if (before.status === PaymentStatus.REVERSED) {
-      throw new Error('Payment is already REVERSED');
-    }
+    affectedInvoiceIds.add(app.invoiceId);
+  }
+  for (const invoiceId of affectedInvoiceIds) {
+    await recomputeAmountPaidForInvoice(tx, invoiceId);
+  }
 
-    const customer = await tx.customer.findUniqueOrThrow({
-      where: { id: before.customerId },
-    });
+  const after = await tx.payment.update({
+    where: { id: data.paymentId },
+    data: {
+      status: PaymentStatus.REVERSED,
+      reversedAt: now,
+      reversedReason: data.reason,
+      appliedAmount: new Prisma.Decimal(0),
+    },
+    include: { applications: true },
+  });
 
-    // Mark all non-reversed applications as reversed; recompute each
-    // affected invoice.
-    const affectedInvoiceIds = new Set<string>();
-    const now = new Date();
-    for (const app of before.applications) {
-      if (app.reversedAt != null) continue;
-      await tx.creditApplication.update({
-        where: { id: app.id },
-        data: { reversedAt: now },
-      });
-      affectedInvoiceIds.add(app.invoiceId);
-    }
-    for (const invoiceId of affectedInvoiceIds) {
-      await recomputeAmountPaidForInvoice(tx, invoiceId);
-    }
-
-    const after = await tx.payment.update({
-      where: { id: data.paymentId },
-      data: {
-        status: PaymentStatus.REVERSED,
-        reversedAt: now,
-        reversedReason: data.reason,
-        appliedAmount: new Prisma.Decimal(0),
-      },
-      include: { applications: true },
-    });
-
-    // Reversal JE — only for non-APPLIED_CREDIT payments. APPLIED_CREDIT
-    // payments never posted a cash-receipt JE in the first place; their
-    // CM-linked applications above are now reversed, so the original CM
-    // confirmation JE remains in effect (the CM still has its credit).
-    if (before.method !== PaymentMethod.APPLIED_CREDIT) {
-      await post(tx, {
-        entityType: 'Payment',
-        entityId: data.paymentId,
-        description: `Reversal of payment ${before.number}: ${data.reason}`,
-        lines: [
-          { accountCode: AR_ACCOUNT, debit: before.amount, memo: 'AR — payment reversed' },
-          { accountCode: CASH_ACCOUNT, credit: before.amount, memo: 'Cash reversed' },
-        ],
-      });
-    }
-
-    // Commission reversal. APPLIED_CREDIT payments never accrued
-    // commission in the first place (Q1) so the lookup is a no-op
-    // there; the explicit gate is for clarity. triggeringPaymentId
-    // = sourcePaymentId for self-reversals (the only path today).
-    if (before.method !== PaymentMethod.APPLIED_CREDIT) {
-      await reverseCommissionForPaymentTx(tx, data.paymentId, data.paymentId, ctx);
-    }
-
-    await audit(tx, {
-      action: AuditAction.PAYMENT_REVERSED,
+  // Reversal JE — only for non-APPLIED_CREDIT payments. APPLIED_CREDIT
+  // payments never posted a cash-receipt JE in the first place; their
+  // CM-linked applications above are now reversed, so the original CM
+  // confirmation JE remains in effect (the CM still has its credit).
+  if (before.method !== PaymentMethod.APPLIED_CREDIT) {
+    await post(tx, {
       entityType: 'Payment',
       entityId: data.paymentId,
-      before: { status: before.status },
-      after: { status: after.status, reversedAt: after.reversedAt },
-      ctx: { ...ctx, reason: data.reason },
+      description: `Reversal of payment ${before.number}: ${data.reason}`,
+      lines: [
+        { accountCode: AR_ACCOUNT, debit: before.amount, memo: 'AR — payment reversed' },
+        { accountCode: CASH_ACCOUNT, credit: before.amount, memo: 'Cash reversed' },
+      ],
     });
+  }
 
-    void customer;
-    return after;
+  // Commission reversal. APPLIED_CREDIT payments never accrued
+  // commission in the first place (Q1) so the lookup is a no-op
+  // there; the explicit gate is for clarity. triggeringPaymentId
+  // = sourcePaymentId for self-reversals (the only path today).
+  if (before.method !== PaymentMethod.APPLIED_CREDIT) {
+    await reverseCommissionForPaymentTx(tx, data.paymentId, data.paymentId, ctx);
+  }
+
+  await audit(tx, {
+    action: AuditAction.PAYMENT_REVERSED,
+    entityType: 'Payment',
+    entityId: data.paymentId,
+    before: { status: before.status },
+    after: { status: after.status, reversedAt: after.reversedAt },
+    ctx: { ...ctx, reason: data.reason },
   });
+
+  void customer;
+  return after;
 }
 
 // ---------------------------------------------------------------------------

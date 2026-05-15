@@ -8,8 +8,10 @@ import {
   MoreVertical,
   Pencil,
   PackageCheck,
+  RotateCcw,
   Send,
   Trash2,
+  Undo2,
   XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -51,14 +53,21 @@ export function LifecycleActions(props: Props) {
   const { status } = props;
 
   const canConfirm = status === 'DRAFT';
-  const canEdit = status === 'DRAFT';
+  // Edit reachable on DRAFT (full edit) or CONFIRMED (add-only — see
+  // addSalesOrderLines + the edit page's conditional gate). DISPATCHED
+  // and beyond stay locked.
+  const canEdit = status === 'DRAFT' || status === 'CONFIRMED';
   const canDispatch = status === 'CONFIRMED';
   // closeSalesOrder accepts CONFIRMED or DISPATCHED (pickup orders
   // skip dispatched per docs/05-sales-orders.md).
   const canClose = status === 'CONFIRMED' || status === 'DISPATCHED';
+  const canUndispatch = status === 'DISPATCHED';
+  const canReopen = status === 'CLOSED';
   const canCancel =
     status === 'DRAFT' || status === 'CONFIRMED' || status === 'DISPATCHED';
   const canDelete = status === 'DRAFT' || status === 'CANCELLED';
+
+  const hasMenu = canCancel || canDelete || canUndispatch || canReopen;
 
   return (
     <div className="flex items-center gap-2">
@@ -75,7 +84,7 @@ export function LifecycleActions(props: Props) {
           Edit
         </Button>
       ) : null}
-      {canCancel || canDelete ? (
+      {hasMenu ? (
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -89,6 +98,8 @@ export function LifecycleActions(props: Props) {
             <MoreVertical />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {canUndispatch ? <UndispatchMenuItem {...props} /> : null}
+            {canReopen ? <ReopenMenuItem {...props} /> : null}
             {canCancel ? <CancelMenuItem {...props} /> : null}
             {canDelete ? <DeleteMenuItem {...props} /> : null}
           </DropdownMenuContent>
@@ -444,6 +455,313 @@ function CloseAction({
 // Cancel — required reason. Surfaces SO_CANCEL_BLOCKED_BY_PAYMENT with
 // the offending payment numbers.
 // =============================================================================
+
+// =============================================================================
+// Un-dispatch — DISPATCHED → CONFIRMED, no inventory effects.
+// =============================================================================
+
+function UndispatchMenuItem({ salesOrderId, salesOrderNumber }: Props) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function onUndispatch() {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const res = await fetch(
+          `/api/sales-orders/${salesOrderId}/undispatch`,
+          { method: 'POST' },
+        );
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: string };
+          const message =
+            body.error ?? `Un-dispatch failed (${res.status})`;
+          // Surface both — inline keeps the operator anchored in the
+          // dialog (they may want to read it carefully or retry);
+          // toast guarantees visibility if the dialog dismisses for
+          // any reason (e.g. a base-ui portal quirk in the dropdown
+          // → dialog hand-off).
+          setError(message);
+          toast.error(message);
+          return;
+        }
+        toast.success(`Un-dispatched ${salesOrderNumber}`);
+        setOpen(false);
+        router.refresh();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Network error';
+        setError(message);
+        toast.error(message);
+      }
+    });
+  }
+
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setError(null);
+      }}
+    >
+      <DropdownMenuItem
+        onClick={(e) => {
+          e.preventDefault();
+          setOpen(true);
+        }}
+      >
+        <Undo2 className="size-4" />
+        Un-dispatch
+      </DropdownMenuItem>
+      <AlertDialogContent className="sm:max-w-md">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Un-dispatch this order?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Moves the order back to Confirmed. Inventory reservations stay as
+            they are — Dispatched is a shipping-intent marker, not an inventory
+            state.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {error ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+            {error}
+          </div>
+        ) : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Keep dispatched</AlertDialogCancel>
+          <AlertDialogAction onClick={onUndispatch} disabled={pending}>
+            {pending ? 'Un-dispatching…' : 'Un-dispatch'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+// =============================================================================
+// Reopen — CLOSED → CONFIRMED | DISPATCHED | CANCELLED.
+// Two-phase flow:
+//   - First attempt POSTs paymentDecision='none'. If the invoice has applied
+//     payments, the server returns 409 with the payment details. The dialog
+//     updates to show the payment summary + an "Unapply and reopen?" prompt.
+//   - Operator clicks Unapply → POST again with paymentDecision='unapply'.
+// =============================================================================
+
+type ReopenTarget = 'CONFIRMED' | 'DISPATCHED' | 'CANCELLED';
+
+type ReopenBlockedBody = {
+  code: 'SO_REOPEN_BLOCKED_BY_PAYMENT';
+  error: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  payments: Array<{
+    paymentId: string;
+    paymentNumber: string;
+    receivedAt: string;
+    amount: string;
+    amountAppliedToThisInvoice: string;
+  }>;
+};
+
+function ReopenMenuItem({ salesOrderId, salesOrderNumber }: Props) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [target, setTarget] = useState<ReopenTarget>('CONFIRMED');
+  const [paymentBlock, setPaymentBlock] = useState<ReopenBlockedBody | null>(
+    null,
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  function reset() {
+    setTarget('CONFIRMED');
+    setPaymentBlock(null);
+    setError(null);
+  }
+
+  function submit(decision: 'none' | 'unapply') {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const res = await fetch(
+          `/api/sales-orders/${salesOrderId}/reopen`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              targetStatus: target,
+              paymentDecision: decision,
+            }),
+          },
+        );
+        if (res.status === 409) {
+          const body = (await res.json().catch(() => ({}))) as
+            | ReopenBlockedBody
+            | { error?: string };
+          if (
+            'code' in body &&
+            body.code === 'SO_REOPEN_BLOCKED_BY_PAYMENT'
+          ) {
+            setPaymentBlock(body as ReopenBlockedBody);
+            return;
+          }
+          const message = ('error' in body && body.error) || 'Reopen blocked';
+          setError(message);
+          toast.error(message);
+          return;
+        }
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: string };
+          const message = body.error ?? `Reopen failed (${res.status})`;
+          // Show inline + toast so the operator keeps the context of
+          // which target they picked while reading the error.
+          setError(message);
+          toast.error(message);
+          return;
+        }
+        const labels: Record<ReopenTarget, string> = {
+          CONFIRMED: 'Confirmed',
+          DISPATCHED: 'Dispatched',
+          CANCELLED: 'Cancelled',
+        };
+        toast.success(
+          `${salesOrderNumber} reopened to ${labels[target]}` +
+            (decision === 'unapply' ? ' — payments unapplied' : ''),
+        );
+        setOpen(false);
+        reset();
+        router.refresh();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Network error';
+        setError(message);
+        toast.error(message);
+      }
+    });
+  }
+
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) reset();
+      }}
+    >
+      <DropdownMenuItem
+        onClick={(e) => {
+          e.preventDefault();
+          setOpen(true);
+        }}
+      >
+        <RotateCcw className="size-4" />
+        Reopen order
+      </DropdownMenuItem>
+      <AlertDialogContent className="sm:max-w-md">
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            {paymentBlock ? 'Unapply payment and reopen?' : 'Reopen this order?'}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            Reverses inventory deduction (stock back to Reserved) and unlinks
+            the invoice from this order. The invoice stays as a standalone
+            record — you&apos;ll need to void it or apply a credit memo
+            separately if the customer shouldn&apos;t be billed.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {paymentBlock ? (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+            <div className="mb-1 font-medium text-amber-700 dark:text-amber-400">
+              Applied payment on invoice {paymentBlock.invoiceNumber}
+            </div>
+            <ul className="space-y-1 text-muted-foreground">
+              {paymentBlock.payments.map((p) => (
+                <li key={p.paymentId}>
+                  <span className="font-mono text-foreground">
+                    {p.paymentNumber}
+                  </span>{' '}
+                  — {formatCurrency(p.amountAppliedToThisInvoice)} applied
+                  {Number(p.amount) !==
+                  Number(p.amountAppliedToThisInvoice) ? (
+                    <span className="text-amber-700 dark:text-amber-400">
+                      {' '}
+                      (payment total {formatCurrency(p.amount)} — reversal
+                      will unapply from every invoice it touches)
+                    </span>
+                  ) : null}{' '}
+                  on{' '}
+                  {new Date(p.receivedAt).toLocaleDateString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-muted-foreground">
+              Unapply the payment{paymentBlock.payments.length === 1 ? '' : 's'}{' '}
+              and reopen the order?
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3 text-xs">
+            <div className="text-muted-foreground">Reopen to:</div>
+            <div className="space-y-1.5">
+              {(['CONFIRMED', 'DISPATCHED', 'CANCELLED'] as const).map((t) => (
+                <label
+                  key={t}
+                  className="flex cursor-pointer items-center gap-2"
+                >
+                  <input
+                    type="radio"
+                    name="reopen-target"
+                    value={t}
+                    checked={target === t}
+                    onChange={() => setTarget(t)}
+                    className="size-3.5"
+                  />
+                  <span className="font-medium">
+                    {t === 'CONFIRMED'
+                      ? 'Confirmed'
+                      : t === 'DISPATCHED'
+                        ? 'Dispatched'
+                        : 'Cancelled'}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {t === 'CONFIRMED'
+                      ? '— restore reservation, ready to re-close'
+                      : t === 'DISPATCHED'
+                        ? '— restore reservation, ready to ship'
+                        : '— release reservation, mark cancelled'}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+        {error ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+            {error}
+          </div>
+        ) : null}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Keep closed</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => submit(paymentBlock ? 'unapply' : 'none')}
+            disabled={pending}
+          >
+            {pending
+              ? 'Working…'
+              : paymentBlock
+                ? 'Unapply & reopen'
+                : 'Reopen'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
 
 function CancelMenuItem({ salesOrderId, salesOrderNumber }: Props) {
   const router = useRouter();

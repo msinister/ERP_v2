@@ -16,6 +16,7 @@ import {
   OrderForm,
   type OrderFormValues,
 } from '../../_components/order-form';
+import { AddLinesForm } from './_components/add-lines-form';
 
 export const revalidate = 0;
 
@@ -30,11 +31,28 @@ export default async function EditSalesOrderPage({
     include: {
       lines: {
         where: { deletedAt: null },
+        include: {
+          variant: {
+            select: {
+              sku: true,
+              name: true,
+              product: { select: { name: true } },
+            },
+          },
+        },
         orderBy: { createdAt: 'asc' },
       },
+      warehouse: { select: { id: true, code: true } },
     },
   });
   if (!so) notFound();
+
+  // CONFIRMED → render the add-only form. Existing lines are
+  // read-only (qty/price locked) per the spec; new lines reserve
+  // inventory immediately via addSalesOrderLines.
+  if (so.status === 'CONFIRMED') {
+    return <ConfirmedEditView so={so} />;
+  }
 
   // updateSalesOrder rejects anything past DRAFT. Render a friendly
   // "not editable" card with a link back to the detail page instead
@@ -170,6 +188,104 @@ export default async function EditSalesOrderPage({
       />
     </div>
   );
+}
+
+// =============================================================================
+// CONFIRMED branch — add-only line editor. Pulls the same active variants
+// the create form uses (no inventory-by-warehouse lookup is needed — the
+// add path picks the SO's warehouse implicitly).
+// =============================================================================
+
+async function ConfirmedEditView({
+  so,
+}: {
+  so: Awaited<ReturnType<typeof loadConfirmedSo>>;
+}) {
+  // Active variants only — no need to surface historical/archived ones
+  // since we're adding fresh lines. Existing lines render from the
+  // included relation directly so archived variants on legacy lines
+  // still display.
+  const variants = await db.productVariant.findMany({
+    where: {
+      active: true,
+      deletedAt: null,
+      product: { active: true, deletedAt: null },
+    },
+    include: { product: { select: { name: true, basePrice: true } } },
+    orderBy: { sku: 'asc' },
+    take: 1000,
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-3">
+        <Link
+          href={`/sales-orders/${so.id}`}
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+        >
+          <ChevronLeft className="size-3.5" />
+          {so.number}
+        </Link>
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Add lines to confirmed order
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Existing lines are locked once an order is confirmed. New lines
+            reserve inventory immediately — reprint the pick sheet if the
+            warehouse has already started picking.
+          </p>
+        </div>
+      </div>
+
+      <AddLinesForm
+        salesOrderId={so.id}
+        salesOrderNumber={so.number}
+        warehouseId={so.warehouse.id}
+        warehouseCode={so.warehouse.code}
+        existingLines={so.lines.map((l) => ({
+          id: l.id,
+          sku: l.variant.sku,
+          productName: l.variant.product.name,
+          variantName: l.variant.name,
+          qtyOrdered: l.qtyOrdered.toString(),
+          qtyReserved: l.qtyReserved.toString(),
+          unitPrice: l.unitPrice.toString(),
+        }))}
+        variants={variants.map((v) => ({
+          id: v.id,
+          sku: v.sku,
+          productName: v.product.name,
+          variantName: v.name,
+          basePrice: v.product.basePrice?.toString() ?? null,
+        }))}
+      />
+    </div>
+  );
+}
+
+// Helper so ConfirmedEditView's `so` prop can be typed without manually
+// re-spelling the include shape. Plain function (not declared async)
+// so the Awaited<ReturnType> inference works.
+function loadConfirmedSo() {
+  return db.salesOrder.findFirstOrThrow({
+    include: {
+      lines: {
+        where: { deletedAt: null },
+        include: {
+          variant: {
+            select: {
+              sku: true,
+              name: true,
+              product: { select: { name: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+      },
+      warehouse: { select: { id: true, code: true } },
+    },
+  });
 }
 
 function NotEditable({

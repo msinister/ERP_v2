@@ -145,10 +145,10 @@ suite('Invoice lifecycle — auto-generation, void, AR balance', () => {
   it('closeSalesOrder generates an Invoice snapshotting SO totals + lines', async () => {
     const inv = await closeSOAndGetInvoice({});
     const so = await db.salesOrder.findUniqueOrThrow({
-      where: { id: inv.salesOrderId },
+      where: { id: inv.salesOrderId! },
     });
     expect(inv.number).toBe(so.number);
-    expect(inv.salesOrderId).toBe(so.id);
+    expect(inv.salesOrderId!).toBe(so.id);
     expect(inv.status).toBe(InvoiceStatus.OPEN);
     expect(inv.amountPaid.toString()).toBe(new Prisma.Decimal('0').toString());
     expect(inv.amountCredited.toString()).toBe(new Prisma.Decimal('0').toString());
@@ -223,10 +223,10 @@ suite('Invoice lifecycle — auto-generation, void, AR balance', () => {
       '@/server/services/invoices'
     );
     await db.$transaction((tx) =>
-      generateInvoiceForClosedSOTx(tx, inv.salesOrderId),
+      generateInvoiceForClosedSOTx(tx, inv.salesOrderId!),
     );
     const allInvoices = await db.invoice.findMany({
-      where: { salesOrderId: inv.salesOrderId },
+      where: { salesOrderId: inv.salesOrderId! },
     });
     expect(allInvoices).toHaveLength(1);
     const allJes = await db.journalEntry.findMany({

@@ -155,9 +155,35 @@ export async function generateInvoiceForClosedSOTx(
   // Net revenue line (subtotal − orderDiscount). Posted to 4100.
   const netRevenue = subtotal.minus(orderDiscount);
 
+  // Invoice numbering: first close uses the SO's number verbatim.
+  // Reopen-and-re-close cycles add "-R1", "-R2", … so the new
+  // invoice doesn't collide with the orphaned prior invoice on the
+  // unique-number constraint.
+  const priorInvoices = await tx.invoice.findMany({
+    where: {
+      OR: [
+        { number: so.number },
+        { number: { startsWith: `${so.number}-R` } },
+      ],
+    },
+    select: { number: true },
+  });
+  let nextNumber = so.number;
+  if (priorInvoices.length > 0) {
+    let maxSuffix = 0;
+    for (const p of priorInvoices) {
+      const match = p.number.match(/-R(\d+)$/);
+      if (match) {
+        const n = parseInt(match[1], 10);
+        if (n > maxSuffix) maxSuffix = n;
+      }
+    }
+    nextNumber = `${so.number}-R${maxSuffix + 1}`;
+  }
+
   const invoice = await tx.invoice.create({
     data: {
-      number: so.number,
+      number: nextNumber,
       salesOrderId: so.id,
       customerId: so.customerId,
       warehouseId: so.warehouseId,

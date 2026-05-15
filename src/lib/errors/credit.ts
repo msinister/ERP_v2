@@ -54,6 +54,46 @@ export class SalesOrderCancelBlockedError extends Error {
   }
 }
 
+export class SalesOrderReopenBlockedError extends Error {
+  readonly code = 'SO_REOPEN_BLOCKED_BY_PAYMENT';
+  readonly salesOrderId: string;
+  readonly invoiceId: string;
+  readonly invoiceNumber: string;
+  // Each entry = one non-reversed Payment that has applications on the
+  // invoice. The UI uses these to phrase the unapply-confirmation
+  // dialog ("payment of $X on <date>"). amountAppliedToThisInvoice is
+  // surfaced because the Payment may have been split across multiple
+  // invoices — reversePayment reverses the whole payment, but the
+  // dialog text should reflect the portion the operator sees on this
+  // SO's invoice.
+  readonly payments: ReadonlyArray<{
+    paymentId: string;
+    paymentNumber: string;
+    receivedAt: string; // ISO
+    amount: string; // total payment amount, Decimal as string
+    amountAppliedToThisInvoice: string;
+  }>;
+
+  constructor(args: {
+    salesOrderId: string;
+    invoiceId: string;
+    invoiceNumber: string;
+    payments: SalesOrderReopenBlockedError['payments'];
+  }) {
+    super(
+      `Cannot reopen SalesOrder ${args.salesOrderId}: invoice ${args.invoiceNumber} ` +
+        `has applied payment(s) (${args.payments
+          .map((p) => p.paymentNumber)
+          .join(', ')}). Unapply payment(s) first, then reopen.`,
+    );
+    this.name = 'SalesOrderReopenBlockedError';
+    this.salesOrderId = args.salesOrderId;
+    this.invoiceId = args.invoiceId;
+    this.invoiceNumber = args.invoiceNumber;
+    this.payments = args.payments;
+  }
+}
+
 export class ArHoldExceededError extends Error {
   readonly code = 'AR_HOLD_EXCEEDED';
   readonly customerId: string;

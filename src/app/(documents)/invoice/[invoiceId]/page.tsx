@@ -153,8 +153,15 @@ export default async function InvoiceDocumentPage({
 
   return (
     <DocumentShell
-      backHref={`/sales-orders/${invoice.salesOrderId}`}
-      backLabel={`SO ${invoice.salesOrder.number}`}
+      // Detached invoices (SO reopened) fall back to the invoices list.
+      backHref={
+        invoice.salesOrder
+          ? `/sales-orders/${invoice.salesOrderId}`
+          : '/invoices'
+      }
+      backLabel={
+        invoice.salesOrder ? `SO ${invoice.salesOrder.number}` : 'Invoices'
+      }
     >
       <DocumentHeader
         company={company}
@@ -165,8 +172,12 @@ export default async function InvoiceDocumentPage({
           ...(dueDate
             ? [{ label: 'Due', value: formatDate(dueDate) }]
             : []),
-          { label: 'SO #', value: invoice.salesOrder.number },
-          ...(invoice.salesOrder.customerPo
+          // salesOrder is nullable post-reopen — invoice can survive
+          // its SO being detached. Show the SO row only when still linked.
+          ...(invoice.salesOrder
+            ? [{ label: 'SO #', value: invoice.salesOrder.number }]
+            : []),
+          ...(invoice.salesOrder?.customerPo
             ? [{ label: 'Customer PO', value: invoice.salesOrder.customerPo }]
             : []),
         ]}
@@ -198,7 +209,7 @@ export default async function InvoiceDocumentPage({
         />
         <AddressBlock
           label="Ship to"
-          freeText={invoice.salesOrder.shippingAddress}
+          freeText={invoice.salesOrder?.shippingAddress ?? null}
           address={{ name: invoice.customer.name }}
         />
       </section>
@@ -219,7 +230,7 @@ export default async function InvoiceDocumentPage({
         <MetaPair
           label="Promised ship"
           value={
-            invoice.salesOrder.promisedShipDate
+            invoice.salesOrder?.promisedShipDate
               ? formatDate(invoice.salesOrder.promisedShipDate)
               : '—'
           }

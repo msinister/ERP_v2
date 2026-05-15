@@ -1,4 +1,9 @@
-import { Prisma, AuditAction, SalesOrderStatus } from '@/generated/tenant';
+import {
+  Prisma,
+  AuditAction,
+  InventoryMovementType,
+  SalesOrderStatus,
+} from '@/generated/tenant';
 import type {
   PrismaClient,
   SalesOrder,
@@ -20,16 +25,24 @@ import {
   ArHoldExceededError,
   CreditLimitExceededError,
   SalesOrderCancelBlockedError,
+  SalesOrderReopenBlockedError,
 } from '@/lib/errors/credit';
+import { reverseCogsForInvoiceTx } from '@/server/services/cogsReversal';
+import { reversePaymentTx } from '@/server/services/payments';
+import { recomputeOnHand } from '@/server/services/movements';
 import {
+  addSalesOrderLinesInputSchema,
   cancelSalesOrderInputSchema,
   closeSalesOrderInputSchema,
   createSalesOrderInputSchema,
+  reopenSalesOrderInputSchema,
   updateSalesOrderInputSchema,
   updateSalesOrderLineQtyShippedInputSchema,
+  type AddSalesOrderLinesInput,
   type CancelSalesOrderInput,
   type CloseSalesOrderInput,
   type CreateSalesOrderInput,
+  type ReopenSalesOrderInput,
   type UpdateSalesOrderInput,
   type UpdateSalesOrderLineQtyShippedInput,
 } from '@/lib/validation/sales';
@@ -380,6 +393,46 @@ export async function dispatchSalesOrder(
   });
 }
 
+/**
+ * DISPATCHED → CONFIRMED. Pure status flip — dispatched is a
+ * shipping-intent marker, not an inventory-state change (inventory
+ * movements happen on Confirm and Close only), so reverting it has
+ * no inventory side-effects. Useful when the warehouse was prepping
+ * an order, marked it dispatched, then discovered a problem that
+ * blocks shipment.
+ */
+export async function undispatchSalesOrder(
+  db: PrismaClient,
+  id: string,
+  ctx?: AuditContext,
+): Promise<SalesOrder> {
+  return db.$transaction(async (tx) => {
+    const before = await tx.salesOrder.findUnique({ where: { id } });
+    if (!before) throw new Error(`SalesOrder not found: ${id}`);
+    if (before.status !== SalesOrderStatus.DISPATCHED) {
+      throw new Error(
+        `Cannot un-dispatch SalesOrder in status ${before.status}`,
+      );
+    }
+    const after = await tx.salesOrder.update({
+      where: { id },
+      data: {
+        status: SalesOrderStatus.CONFIRMED,
+        dispatchedAt: null,
+      },
+    });
+    await audit(tx, {
+      action: AuditAction.STATUS_CHANGE,
+      entityType: 'SalesOrder',
+      entityId: id,
+      before: { status: before.status },
+      after: { status: after.status },
+      ctx,
+    });
+    return after;
+  });
+}
+
 export async function closeSalesOrder(
   db: PrismaClient,
   id: string,
@@ -576,6 +629,385 @@ export async function closeSalesOrder(
     }
     throw e;
   }
+}
+
+/**
+ * CLOSED → CONFIRMED | DISPATCHED | CANCELLED. Operator-driven
+ * corrections workflow when a close happened in error or needs
+ * adjustment. In one transaction:
+ *   1. Refuse if the invoice has non-reversed applied payments and
+ *      paymentDecision !== 'unapply' — throws SalesOrderReopenBlocked-
+ *      Error so the UI can prompt for confirmation.
+ *   2. Reverse each non-reversed payment (when opted in). Uses
+ *      reversePaymentTx so the reversal is atomic with the rest of
+ *      this transaction. Note: a payment split across multiple
+ *      invoices comes unapplied EVERYWHERE — operator is warned
+ *      client-side.
+ *   3. Reverse COGS via reverseCogsForInvoiceTx — restores FIFO
+ *      layers, posts the offsetting JE, recomputes onHand. Inventory
+ *      is fully back at this point.
+ *   4. Per line: clear inventoryMovementId, zero qtyShipped. Restore
+ *      qtyReserved = qtyOrdered when target ∈ {CONFIRMED, DISPATCHED};
+ *      leave at 0 for CANCELLED.
+ *   5. Unlink the invoice (Invoice.salesOrderId → null). Invoice
+ *      itself is unchanged: its AR/Revenue JE stays in effect, its
+ *      lines, applications, and commission accruals are untouched.
+ *      Operator decides what to do with the orphan separately.
+ *   6. Update SO: status → target, clear closedAt, set/clear
+ *      dispatchedAt + cancelledAt to match the target.
+ *   7. Recompute reserved per bin so the denormalized counter
+ *      reflects the new state.
+ *
+ * The invoice's AR exposure does NOT change. A subsequent close on
+ * this SO will generate a fresh invoice (the unique constraint on
+ * Invoice.salesOrderId is partial across nulls, so no collision).
+ */
+export async function reopenSalesOrder(
+  db: PrismaClient,
+  id: string,
+  input: ReopenSalesOrderInput,
+  ctx?: AuditContext,
+): Promise<SalesOrderWithLines> {
+  const data = reopenSalesOrderInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    const before = await tx.salesOrder.findUnique({
+      where: { id },
+      include: {
+        lines: { where: { deletedAt: null } },
+        invoice: {
+          include: {
+            applications: { where: { reversedAt: null } },
+          },
+        },
+      },
+    });
+    if (!before) throw new Error(`SalesOrder not found: ${id}`);
+    if (before.status !== SalesOrderStatus.CLOSED) {
+      throw new Error(`Cannot reopen SalesOrder in status ${before.status}`);
+    }
+    if (!before.invoice) {
+      // No invoice means close was rolled back somehow — there's
+      // nothing to unlink/reverse; just flip status. Defensive guard
+      // mostly — CLOSED SOs always have an invoice in pilot.
+      throw new Error(
+        `SalesOrder ${id} is CLOSED but has no linked invoice; manual cleanup required`,
+      );
+    }
+    const invoice = before.invoice;
+
+    // 1. Payment-application gate.
+    if (
+      invoice.applications.length > 0 &&
+      data.paymentDecision !== 'unapply'
+    ) {
+      const paymentIds = Array.from(
+        new Set(
+          invoice.applications
+            .map((a) => a.paymentId)
+            .filter((p): p is string => p != null),
+        ),
+      );
+      const payments = await tx.payment.findMany({
+        where: { id: { in: paymentIds }, reversedAt: null },
+        select: { id: true, number: true, receivedAt: true, amount: true },
+      });
+      const appliedByPaymentToThisInvoice = new Map<string, Prisma.Decimal>();
+      for (const a of invoice.applications) {
+        if (a.paymentId == null) continue;
+        const cur =
+          appliedByPaymentToThisInvoice.get(a.paymentId) ?? new Prisma.Decimal(0);
+        appliedByPaymentToThisInvoice.set(a.paymentId, cur.plus(a.amount));
+      }
+      throw new SalesOrderReopenBlockedError({
+        salesOrderId: id,
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.number,
+        payments: payments.map((p) => ({
+          paymentId: p.id,
+          paymentNumber: p.number,
+          receivedAt: p.receivedAt.toISOString(),
+          amount: p.amount.toString(),
+          amountAppliedToThisInvoice: (
+            appliedByPaymentToThisInvoice.get(p.id) ?? new Prisma.Decimal(0)
+          ).toString(),
+        })),
+      });
+    }
+
+    // 2. Reverse payments (when opted in). Group by paymentId so a
+    // payment split across multiple invoice-applications is reversed
+    // exactly once.
+    if (data.paymentDecision === 'unapply' && invoice.applications.length > 0) {
+      const paymentIds = Array.from(
+        new Set(
+          invoice.applications
+            .map((a) => a.paymentId)
+            .filter((p): p is string => p != null),
+        ),
+      );
+      const reason =
+        data.unapplyReason ?? `SO ${before.number} reopened by operator`;
+      for (const paymentId of paymentIds) {
+        await reversePaymentTx(tx, { paymentId, reason }, ctx);
+      }
+    }
+
+    // 3. Reverse COGS. Idempotent — if the invoice's cogsReversed flag
+    // is already set (operator double-clicked, replay), this is a no-op.
+    // Handles GL reversal + FIFO layer rebuild + onHand restore when
+    // FifoConsumption rows exist on the consume movements.
+    await reverseCogsForInvoiceTx(tx, invoice.id, ctx);
+
+    // 3b. Inventory restore fallback. reverseCogsForInvoiceTx
+    // short-circuits ("zero_reversal") on lines whose CONSUME
+    // movement has no FifoConsumption rows — common when stock was
+    // seeded outside the PO/receipt FIFO flow (e.g., direct
+    // receiveInventory). Without this sweep the onHand drop from
+    // close would linger. Per-line: detect zero-FIFO consume and
+    // post a manual ADJUST to bring the bin back. Lines whose stock
+    // is already restored (because COGS reversal handled it) are
+    // skipped by the FifoConsumption count check.
+    for (const line of before.lines) {
+      if (!line.inventoryMovementId) continue;
+      const consumed = await tx.fifoConsumption.count({
+        where: { movementId: line.inventoryMovementId },
+      });
+      if (consumed > 0) continue;
+      const consumeMovement = await tx.inventoryMovement.findUnique({
+        where: { id: line.inventoryMovementId },
+        select: { qty: true, variantId: true, warehouseId: true },
+      });
+      if (!consumeMovement) continue;
+      // Forward consume was negative qty; reverse is the positive twin.
+      await tx.inventoryMovement.create({
+        data: {
+          variantId: consumeMovement.variantId,
+          warehouseId: consumeMovement.warehouseId,
+          type: InventoryMovementType.ADJUST,
+          qty: consumeMovement.qty.negated(),
+          reference: before.number,
+          notes: `SO ${before.number} reopen — stock restored`,
+        },
+      });
+      await recomputeOnHand(
+        tx,
+        consumeMovement.variantId,
+        consumeMovement.warehouseId,
+      );
+    }
+
+    // 4. Per-line cleanup. Zero qtyShipped, drop the consume-movement
+    // back-pointer. Restore reservation when re-opening to a status
+    // that still holds inventory (CONFIRMED / DISPATCHED); CANCELLED
+    // releases reservation outright.
+    const restoreReservation =
+      data.targetStatus === 'CONFIRMED' || data.targetStatus === 'DISPATCHED';
+    const bins = uniqueBins(before.lines);
+    for (const b of bins) {
+      await lockBin(tx, b.variantId, b.warehouseId);
+    }
+    for (const line of before.lines) {
+      await tx.salesOrderLine.update({
+        where: { id: line.id },
+        data: {
+          inventoryMovementId: null,
+          qtyShipped: new Prisma.Decimal(0),
+          qtyReserved: restoreReservation
+            ? line.qtyOrdered
+            : new Prisma.Decimal(0),
+        },
+      });
+    }
+
+    // 5. Unlink invoice. NULL the FK so the SO surface no longer points
+    // at it; the invoice row itself is untouched.
+    await tx.invoice.update({
+      where: { id: invoice.id },
+      data: { salesOrderId: null },
+    });
+
+    // 6. Status flip + timestamp surgery. closedAt is always cleared;
+    // dispatchedAt + cancelledAt are set/cleared per target.
+    const now = new Date();
+    const targetStatus = SalesOrderStatus[data.targetStatus];
+    const updateData: Prisma.SalesOrderUpdateInput = {
+      status: targetStatus,
+      closedAt: null,
+    };
+    if (data.targetStatus === 'DISPATCHED') {
+      updateData.dispatchedAt = before.dispatchedAt ?? now;
+      updateData.cancelledAt = null;
+      updateData.cancelReason = null;
+    } else if (data.targetStatus === 'CONFIRMED') {
+      updateData.dispatchedAt = null;
+      updateData.cancelledAt = null;
+      updateData.cancelReason = null;
+    } else {
+      // CANCELLED — keep the original cancel-reason machinery
+      // available, but seed cancelledAt now and leave cancelReason
+      // for the operator to fill in via the existing cancel UI if
+      // they want a richer note. Reopen → CANCELLED is the "abandon
+      // this order's inventory effects" path.
+      updateData.dispatchedAt = null;
+      updateData.cancelledAt = now;
+      updateData.cancelReason =
+        before.cancelReason ?? `Reopened from CLOSED and cancelled`;
+    }
+    const after = await tx.salesOrder.update({
+      where: { id },
+      data: updateData,
+      include: { lines: true },
+    });
+
+    // 7. Recompute reserved per bin so the InventoryItem.reserved
+    // counter reflects the new SO state. Done AFTER the status flip
+    // so the new status drives the roll-up filter inside
+    // recomputeReservedForBin.
+    for (const b of bins) {
+      await recomputeReservedForBin(tx, b.variantId, b.warehouseId);
+    }
+
+    await audit(tx, {
+      action: AuditAction.STATUS_CHANGE,
+      entityType: 'SalesOrder',
+      entityId: id,
+      before: { status: before.status },
+      after: {
+        status: after.status,
+        targetStatus: data.targetStatus,
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.number,
+        invoiceUnlinked: true,
+        paymentsUnapplied: data.paymentDecision === 'unapply',
+      },
+      ctx,
+    });
+
+    return after;
+  });
+}
+
+/**
+ * CONFIRMED-only line add. Existing lines stay untouched; new lines
+ * go through the same resolvePrice + qtyReserved flow as confirm so
+ * they're immediately part of the reservation roll-up. Credit-limit
+ * and AR-hold gates re-run with the updated SO total — adding lines
+ * to a CONFIRMED order shouldn't be a back-door around credit
+ * enforcement.
+ *
+ * Why a separate service from updateSalesOrder: updateSalesOrder does
+ * wholesale lines-replace and rejects non-DRAFT. Folding partial-add
+ * semantics into it would muddy the contract; the spec'd "Edit a
+ * CONFIRMED order" UX is strictly add-only on the lines surface, so
+ * a dedicated entry point is cleaner.
+ */
+export async function addSalesOrderLines(
+  db: PrismaClient,
+  id: string,
+  input: AddSalesOrderLinesInput,
+  ctx?: AuditContext,
+): Promise<SalesOrderWithLines> {
+  const data = addSalesOrderLinesInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    const before = await tx.salesOrder.findUnique({
+      where: { id },
+      include: { lines: { where: { deletedAt: null } } },
+    });
+    if (!before) throw new Error(`SalesOrder not found: ${id}`);
+    if (before.status !== SalesOrderStatus.CONFIRMED) {
+      throw new Error(
+        `Cannot add lines to a SalesOrder in ${before.status} status — adding lines is only supported on CONFIRMED orders`,
+      );
+    }
+
+    // Resolve price + create + reserve each new line. Locks every
+    // (variant, warehouse) bin we're touching — including ones the
+    // existing lines already touch, so concurrent ops on the same
+    // bin serialize.
+    const newBins = uniqueBins(
+      data.lines.map((l) => ({
+        variantId: l.variantId,
+        warehouseId: l.warehouseId,
+      })),
+    );
+    for (const b of newBins) {
+      await lockBin(tx, b.variantId, b.warehouseId);
+    }
+
+    const createdLines: { id: string }[] = [];
+    for (const l of data.lines) {
+      const resolved = await resolvePrice(tx, {
+        variantId: l.variantId,
+        customerId: before.customerId,
+        qty: new Prisma.Decimal(l.qtyOrdered),
+        manualUnitPrice:
+          l.manualUnitPrice != null
+            ? new Prisma.Decimal(l.manualUnitPrice)
+            : null,
+      });
+      const operatorSetDiscount =
+        l.discountPercent != null || l.discountAmount != null;
+      const effectiveDiscountPercent = operatorSetDiscount
+        ? l.discountPercent != null
+          ? new Prisma.Decimal(l.discountPercent)
+          : null
+        : resolved.discountPercent;
+      const effectiveDiscountAmount =
+        l.discountAmount != null ? new Prisma.Decimal(l.discountAmount) : null;
+      const created = await tx.salesOrderLine.create({
+        data: {
+          salesOrderId: id,
+          variantId: l.variantId,
+          warehouseId: l.warehouseId,
+          qtyOrdered: new Prisma.Decimal(l.qtyOrdered),
+          // Reserve immediately — the SO is CONFIRMED, so reservation
+          // is the expected state.
+          qtyReserved: new Prisma.Decimal(l.qtyOrdered),
+          unitPrice: resolved.unitPrice,
+          priceRule: resolved.rule,
+          discountPercent: effectiveDiscountPercent,
+          discountAmount: effectiveDiscountAmount,
+          customerNote: l.customerNote ?? null,
+          internalNote: l.internalNote ?? null,
+        },
+      });
+      createdLines.push({ id: created.id });
+    }
+
+    // Re-run credit-limit + AR-hold gates with the post-add total.
+    // We re-fetch lines so the gate sees the full new shape.
+    const afterLines = await tx.salesOrderLine.findMany({
+      where: { salesOrderId: id, deletedAt: null },
+    });
+    await enforceCreditAndArHold(tx, {
+      salesOrderId: id,
+      customerId: before.customerId,
+      orderTotal: computeSalesOrderTotal({ ...before, lines: afterLines }),
+    });
+
+    // Recompute reserved on every touched bin. Includes the newly
+    // added bins; existing bins are unaffected by the add.
+    for (const b of newBins) {
+      await recomputeReservedForBin(tx, b.variantId, b.warehouseId);
+    }
+
+    const after = await tx.salesOrder.findUniqueOrThrow({
+      where: { id },
+      include: { lines: true },
+    });
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'SalesOrder',
+      entityId: id,
+      before: { lineCount: before.lines.length },
+      after: {
+        lineCount: after.lines.length,
+        addedLineIds: createdLines.map((l) => l.id),
+      },
+      ctx,
+    });
+    return after;
+  });
 }
 
 /**

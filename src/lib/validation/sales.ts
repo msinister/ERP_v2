@@ -121,6 +121,26 @@ export const updateSalesOrderLineQtyShippedInputSchema = z.object({
   qtyShipped: positiveDecimal,
 });
 
+// reopenSalesOrder — corrections workflow: CLOSED → CONFIRMED,
+// DISPATCHED, or CANCELLED. paymentDecision must be 'unapply' when
+// the linked invoice has any non-reversed CreditApplication rows; the
+// service throws SalesOrderReopenBlockedError otherwise so the UI can
+// prompt the operator. 'none' is the default for invoices that never
+// had a payment recorded.
+export const reopenSalesOrderInputSchema = z.object({
+  targetStatus: z.enum(['CONFIRMED', 'DISPATCHED', 'CANCELLED']),
+  paymentDecision: z.enum(['none', 'unapply']).default('none'),
+  unapplyReason: z.string().max(2000).optional(),
+});
+
+// Add-line on CONFIRMED. Re-uses the per-line shape from
+// salesOrderLineInputSchema (variant + warehouse + qty + price hints).
+// The service ensures bin reservation + credit-limit re-check happens
+// atomically with the inserts.
+export const addSalesOrderLinesInputSchema = z.object({
+  lines: z.array(salesOrderLineInputSchema).min(1),
+});
+
 export const closeSalesOrderInputSchema = z.object({
   shippingAmount: nonNegativeDecimal.optional(),
   handlingAmount: nonNegativeDecimal.optional(),
@@ -137,6 +157,12 @@ export type CloseSalesOrderLineInput = z.infer<
 >;
 export type UpdateSalesOrderLineQtyShippedInput = z.infer<
   typeof updateSalesOrderLineQtyShippedInputSchema
+>;
+export type ReopenSalesOrderInput = z.infer<
+  typeof reopenSalesOrderInputSchema
+>;
+export type AddSalesOrderLinesInput = z.infer<
+  typeof addSalesOrderLinesInputSchema
 >;
 // Customer stub validation moved to src/lib/validation/customers.ts as
 // part of the Customer master expansion slice — see that file for the

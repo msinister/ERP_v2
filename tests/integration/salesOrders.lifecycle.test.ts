@@ -8,12 +8,17 @@ import {
 } from '@/generated/tenant';
 import type { PrismaClient } from '@/generated/tenant';
 import {
+  addSalesOrderLines,
   closeSalesOrder,
   confirmSalesOrder,
   createSalesOrder,
   dispatchSalesOrder,
+  reopenSalesOrder,
+  undispatchSalesOrder,
   updateSalesOrderLineQtyShipped,
 } from '@/server/services/salesOrders';
+import { recordPayment } from '@/server/services/payments';
+import { SalesOrderReopenBlockedError } from '@/lib/errors/credit';
 import { receiveInventory } from '@/server/services/movements';
 import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 import { hasTenantDb, makeClient } from '../helpers/db';
@@ -425,6 +430,227 @@ suite('SalesOrder lifecycle', () => {
     expect(after.qtyShipped).toBe('7');
   });
 
+  // ===========================================================================
+  // Reversion workflows — undispatch, reopen, add-lines-on-confirmed
+  // ===========================================================================
+
+  it('undispatchSalesOrder flips DISPATCHED → CONFIRMED with no inventory effect', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('5'));
+    await confirmSalesOrder(db, so.id);
+    await dispatchSalesOrder(db, so.id);
+
+    const beforeInv = await db.inventoryItem.findUnique({
+      where: { variantId_warehouseId: { variantId, warehouseId } },
+    });
+    const undispatched = await undispatchSalesOrder(db, so.id);
+    expect(undispatched.status).toBe(SalesOrderStatus.CONFIRMED);
+    expect(undispatched.dispatchedAt).toBeNull();
+    const afterInv = await db.inventoryItem.findUnique({
+      where: { variantId_warehouseId: { variantId, warehouseId } },
+    });
+    // Reserved + OnHand should be identical — no inventory movement.
+    expect(afterInv!.onHand.toString()).toBe(beforeInv!.onHand.toString());
+    expect(afterInv!.reserved.toString()).toBe(beforeInv!.reserved.toString());
+  });
+
+  it('undispatchSalesOrder rejects when not DISPATCHED', async () => {
+    const so = await createSalesOrder(db, createInput('1'));
+    await expect(undispatchSalesOrder(db, so.id)).rejects.toThrow(
+      /Cannot un-dispatch SalesOrder in status DRAFT/,
+    );
+  });
+
+  it('reopenSalesOrder (no payments) → CONFIRMED: invoice detached, inventory restored, qtyShipped zeroed', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('5'));
+    await confirmSalesOrder(db, so.id);
+    const closed = await closeSalesOrder(db, so.id, undefined);
+    const invoiceBefore = await db.invoice.findUniqueOrThrow({
+      where: { salesOrderId: so.id },
+    });
+    expect(closed.status).toBe(SalesOrderStatus.CLOSED);
+
+    const reopened = await reopenSalesOrder(db, so.id, {
+      targetStatus: 'CONFIRMED',
+      paymentDecision: 'none',
+    });
+    expect(reopened.status).toBe(SalesOrderStatus.CONFIRMED);
+    expect(reopened.closedAt).toBeNull();
+    expect(reopened.lines[0].qtyShipped.toString()).toBe('0');
+    expect(reopened.lines[0].qtyReserved.toString()).toBe(
+      new Prisma.Decimal('5').toString(),
+    );
+    expect(reopened.lines[0].inventoryMovementId).toBeNull();
+
+    // Invoice still exists; SO link is NULL.
+    const invoiceAfter = await db.invoice.findUniqueOrThrow({
+      where: { id: invoiceBefore.id },
+    });
+    expect(invoiceAfter.salesOrderId).toBeNull();
+    expect(invoiceAfter.cogsReversed).toBe(true);
+
+    // Inventory: onHand restored to seed (20), reserved equals qtyOrdered (5).
+    const inv = await db.inventoryItem.findUnique({
+      where: { variantId_warehouseId: { variantId, warehouseId } },
+    });
+    expect(inv!.onHand.toString()).toBe(new Prisma.Decimal('20').toString());
+    expect(inv!.reserved.toString()).toBe(new Prisma.Decimal('5').toString());
+  });
+
+  it('reopenSalesOrder → CANCELLED zeroes reservation and stamps cancelledAt', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('5'));
+    await confirmSalesOrder(db, so.id);
+    await closeSalesOrder(db, so.id, undefined);
+
+    const reopened = await reopenSalesOrder(db, so.id, {
+      targetStatus: 'CANCELLED',
+      paymentDecision: 'none',
+    });
+    expect(reopened.status).toBe(SalesOrderStatus.CANCELLED);
+    expect(reopened.cancelledAt).not.toBeNull();
+    expect(reopened.lines[0].qtyReserved.toString()).toBe('0');
+
+    const inv = await db.inventoryItem.findUnique({
+      where: { variantId_warehouseId: { variantId, warehouseId } },
+    });
+    expect(inv!.onHand.toString()).toBe(new Prisma.Decimal('20').toString());
+    expect(inv!.reserved.toString()).toBe('0');
+  });
+
+  it('reopenSalesOrder followed by re-close generates a fresh invoice (no @unique collision)', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('3'));
+    await confirmSalesOrder(db, so.id);
+    const closed1 = await closeSalesOrder(db, so.id, undefined);
+    const inv1 = await db.invoice.findUniqueOrThrow({
+      where: { salesOrderId: so.id },
+    });
+
+    await reopenSalesOrder(db, so.id, {
+      targetStatus: 'CONFIRMED',
+      paymentDecision: 'none',
+    });
+    const closed2 = await closeSalesOrder(db, so.id, undefined);
+    const inv2 = await db.invoice.findUniqueOrThrow({
+      where: { salesOrderId: so.id },
+    });
+
+    expect(inv1.id).not.toBe(inv2.id);
+    expect(inv2.salesOrderId).toBe(so.id);
+    // Old invoice now orphaned.
+    const orphan = await db.invoice.findUniqueOrThrow({ where: { id: inv1.id } });
+    expect(orphan.salesOrderId).toBeNull();
+    void closed1;
+    void closed2;
+  });
+
+  it('reopenSalesOrder is blocked by applied payment when paymentDecision=none; structured error carries payment details', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('5'));
+    await confirmSalesOrder(db, so.id);
+    await closeSalesOrder(db, so.id, undefined);
+    const invoice = await db.invoice.findUniqueOrThrow({
+      where: { salesOrderId: so.id },
+    });
+
+    // Record a payment + apply to the invoice.
+    const payment = await recordPayment(db, {
+      customerId,
+      method: 'CHECK',
+      amount: invoice.total.toString(),
+      applications: [{ invoiceId: invoice.id, amount: invoice.total.toString() }],
+    });
+    void payment;
+
+    let threw: SalesOrderReopenBlockedError | null = null;
+    try {
+      await reopenSalesOrder(db, so.id, {
+        targetStatus: 'CONFIRMED',
+        paymentDecision: 'none',
+      });
+    } catch (e) {
+      if (e instanceof SalesOrderReopenBlockedError) threw = e;
+      else throw e;
+    }
+    expect(threw).not.toBeNull();
+    expect(threw!.invoiceId).toBe(invoice.id);
+    expect(threw!.payments.length).toBe(1);
+    expect(threw!.payments[0].amountAppliedToThisInvoice).toBe(
+      invoice.total.toString(),
+    );
+  });
+
+  it('reopenSalesOrder with paymentDecision=unapply reverses the payment and completes the reopen', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('5'));
+    await confirmSalesOrder(db, so.id);
+    await closeSalesOrder(db, so.id, undefined);
+    const invoice = await db.invoice.findUniqueOrThrow({
+      where: { salesOrderId: so.id },
+    });
+    const payment = await recordPayment(db, {
+      customerId,
+      method: 'CHECK',
+      amount: invoice.total.toString(),
+      applications: [{ invoiceId: invoice.id, amount: invoice.total.toString() }],
+    });
+
+    const reopened = await reopenSalesOrder(db, so.id, {
+      targetStatus: 'CONFIRMED',
+      paymentDecision: 'unapply',
+      unapplyReason: 'test reopen',
+    });
+    expect(reopened.status).toBe(SalesOrderStatus.CONFIRMED);
+
+    const reversedPayment = await db.payment.findUniqueOrThrow({
+      where: { id: payment.id },
+    });
+    expect(reversedPayment.status).toBe('REVERSED');
+    expect(reversedPayment.reversedAt).not.toBeNull();
+
+    // Invoice's amountPaid back to 0.
+    const invAfter = await db.invoice.findUniqueOrThrow({
+      where: { id: invoice.id },
+    });
+    expect(invAfter.amountPaid.toString()).toBe('0');
+    expect(invAfter.salesOrderId).toBeNull();
+  });
+
+  it('addSalesOrderLines: appends a line to a CONFIRMED order with inventory reserved immediately', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('3'));
+    await confirmSalesOrder(db, so.id);
+
+    const after = await addSalesOrderLines(db, so.id, {
+      lines: [{ variantId, warehouseId, qtyOrdered: '4' }],
+    });
+    expect(after.lines).toHaveLength(2);
+    const newLine = after.lines.find(
+      (l) => l.qtyOrdered.toString() === new Prisma.Decimal('4').toString(),
+    );
+    expect(newLine).toBeTruthy();
+    expect(newLine!.qtyReserved.toString()).toBe(
+      new Prisma.Decimal('4').toString(),
+    );
+
+    const inv = await db.inventoryItem.findUnique({
+      where: { variantId_warehouseId: { variantId, warehouseId } },
+    });
+    // Reserved bumped from 3 (original line) to 7 (3 + 4).
+    expect(inv!.reserved.toString()).toBe(new Prisma.Decimal('7').toString());
+  });
+
+  it('addSalesOrderLines rejects when SO is not CONFIRMED', async () => {
+    const so = await createSalesOrder(db, createInput('3'));
+    await expect(
+      addSalesOrderLines(db, so.id, {
+        lines: [{ variantId, warehouseId, qtyOrdered: '1' }],
+      }),
+    ).rejects.toThrow(/only supported on CONFIRMED orders/);
+  });
+
   it('Audit rows: CREATE on createSalesOrder, STATUS_CHANGE on each transition', async () => {
     await stockBin('20');
     const so = await createSalesOrder(db, createInput('2'));
@@ -487,6 +713,61 @@ async function wipe(
     }
   }
   await wipeInvoiceArtifactsForSOs(db, ourSos.map((s) => s.id));
+  // After reopen, the SO's invoice has salesOrderId=NULL — the
+  // by-SO-id sweep above misses it. Catch orphans by customerId.
+  const orphanInvoices = await db.invoice.findMany({
+    where: { customerId: ids.customerId, salesOrderId: null },
+    select: { id: true },
+  });
+  if (orphanInvoices.length > 0) {
+    const orphanIds = orphanInvoices.map((i) => i.id);
+    const orphanJes = await db.journalEntry.findMany({
+      where: { entityType: 'Invoice', entityId: { in: orphanIds } },
+      select: { id: true },
+    });
+    if (orphanJes.length > 0) {
+      const jeIds = orphanJes.map((j) => j.id);
+      await db.journalEntryLine.deleteMany({
+        where: { journalEntryId: { in: jeIds } },
+      });
+      await db.journalEntry.deleteMany({ where: { id: { in: jeIds } } });
+    }
+    await db.creditApplication.deleteMany({
+      where: { invoiceId: { in: orphanIds } },
+    });
+    await db.auditLog.deleteMany({
+      where: { entityType: 'Invoice', entityId: { in: orphanIds } },
+    });
+    await db.invoiceLine.deleteMany({ where: { invoiceId: { in: orphanIds } } });
+    await db.invoice.deleteMany({ where: { id: { in: orphanIds } } });
+  }
+  // Payments + their JEs/audit (reopen-with-unapply leaves REVERSED
+  // payments behind).
+  const ourPayments = await db.payment.findMany({
+    where: { customerId: ids.customerId },
+    select: { id: true },
+  });
+  if (ourPayments.length > 0) {
+    const paymentIds = ourPayments.map((p) => p.id);
+    const paymentJes = await db.journalEntry.findMany({
+      where: { entityType: 'Payment', entityId: { in: paymentIds } },
+      select: { id: true },
+    });
+    if (paymentJes.length > 0) {
+      const jeIds = paymentJes.map((j) => j.id);
+      await db.journalEntryLine.deleteMany({
+        where: { journalEntryId: { in: jeIds } },
+      });
+      await db.journalEntry.deleteMany({ where: { id: { in: jeIds } } });
+    }
+    await db.creditApplication.deleteMany({
+      where: { paymentId: { in: paymentIds } },
+    });
+    await db.auditLog.deleteMany({
+      where: { entityType: 'Payment', entityId: { in: paymentIds } },
+    });
+    await db.payment.deleteMany({ where: { id: { in: paymentIds } } });
+  }
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: ids.customerId } } });
   await db.salesOrder.deleteMany({ where: { customerId: ids.customerId } });
   await db.inventoryMovement.deleteMany({ where: { variantId: ids.variantId } });
