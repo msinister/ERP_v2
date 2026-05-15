@@ -18,6 +18,7 @@ export function SalesOrderTotalsCard({
   shippingAmount,
   handlingAmount,
   total,
+  status,
 }: {
   lines: SalesOrderLine[];
   orderDiscountAmount: Prisma.Decimal | null;
@@ -25,9 +26,15 @@ export function SalesOrderTotalsCard({
   shippingAmount: Prisma.Decimal | null;
   handlingAmount: Prisma.Decimal | null;
   total: Prisma.Decimal;
+  status: string;
 }) {
+  // CLOSED orders bill on qtyShipped (matches the invoice). Pre-CLOSED
+  // shows the order commitment basis (qtyOrdered). Same switch as
+  // lines-table — keeping the breakdown in sync with the row totals.
+  const isClosed = status === 'CLOSED';
   const subtotal = lines.reduce((acc, l) => {
-    let lineTotal = l.qtyOrdered.times(l.unitPrice);
+    const qty = isClosed ? l.qtyShipped : l.qtyOrdered;
+    let lineTotal = qty.times(l.unitPrice);
     if (l.discountAmount != null) {
       lineTotal = lineTotal.minus(l.discountAmount);
     } else if (l.discountPercent != null) {

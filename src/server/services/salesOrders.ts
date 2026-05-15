@@ -26,10 +26,12 @@ import {
   closeSalesOrderInputSchema,
   createSalesOrderInputSchema,
   updateSalesOrderInputSchema,
+  updateSalesOrderLineQtyShippedInputSchema,
   type CancelSalesOrderInput,
   type CloseSalesOrderInput,
   type CreateSalesOrderInput,
   type UpdateSalesOrderInput,
+  type UpdateSalesOrderLineQtyShippedInput,
 } from '@/lib/validation/sales';
 
 const SO_SEQUENCE_NAME = 'sales_order';
@@ -418,12 +420,62 @@ export async function closeSalesOrder(
         throw new Error('Cannot close a SalesOrder with no lines');
       }
 
+      // Resolve qtyShipped per line. When the caller supplies lines, each
+      // entry must reference a real line on THIS SO, no duplicates, and
+      // qtyShipped ≤ qtyOrdered. Lines not in the payload default to
+      // full qtyOrdered — matches the historical "ship everything"
+      // behavior.
+      const qtyShippedByLineId = new Map<string, Prisma.Decimal>();
+      if (data.lines && data.lines.length > 0) {
+        const validIds = new Set(before.lines.map((l) => l.id));
+        const qtyOrderedById = new Map(
+          before.lines.map((l) => [l.id, l.qtyOrdered]),
+        );
+        const seen = new Set<string>();
+        for (const inputLine of data.lines) {
+          if (!validIds.has(inputLine.id)) {
+            throw new Error(
+              `close(): line id ${inputLine.id} does not belong to SalesOrder ${id}`,
+            );
+          }
+          if (seen.has(inputLine.id)) {
+            throw new Error(
+              `close(): duplicate line id ${inputLine.id} in close payload`,
+            );
+          }
+          seen.add(inputLine.id);
+          const qtyShipped = new Prisma.Decimal(inputLine.qtyShipped);
+          const qtyOrdered = qtyOrderedById.get(inputLine.id)!;
+          if (qtyShipped.greaterThan(qtyOrdered)) {
+            throw new Error(
+              `close(): qtyShipped (${qtyShipped}) exceeds qtyOrdered (${qtyOrdered}) on line ${inputLine.id}`,
+            );
+          }
+          qtyShippedByLineId.set(inputLine.id, qtyShipped);
+        }
+      }
+
       const bins = uniqueBins(before.lines);
       for (const b of bins) {
         await lockBin(tx, b.variantId, b.warehouseId);
       }
 
       for (const line of before.lines) {
+        // Fallback chain for the effective shipped qty:
+        //   1. explicit close-dialog override (still supported on the
+        //      service contract for scripts / future flows)
+        //   2. inline-saved SOL.qtyShipped from the editable column on
+        //      the detail page (warehouse fills this in while the SO
+        //      is CONFIRMED / DISPATCHED) — only if > 0, since the
+        //      column defaults to 0 and 0 here means "operator never
+        //      touched it"
+        //   3. qtyOrdered — historical full-ship default for SOs
+        //      created before the inline-shipped column existed
+        const qtyToShip =
+          qtyShippedByLineId.get(line.id) ??
+          (line.qtyShipped.greaterThan(0)
+            ? line.qtyShipped
+            : line.qtyOrdered);
         let movementId: string;
         try {
           const movement = await consumeInventoryTx(
@@ -431,7 +483,7 @@ export async function closeSalesOrder(
             {
               variantId: line.variantId,
               warehouseId: line.warehouseId,
-              qty: line.qtyOrdered.toString(),
+              qty: qtyToShip.toString(),
               reference: before.number,
               createdById: ctx?.userId ?? undefined,
             },
@@ -446,7 +498,7 @@ export async function closeSalesOrder(
               salesOrderLineId: line.id,
               variantId: line.variantId,
               warehouseId: line.warehouseId,
-              qtyRequested: line.qtyOrdered.toString(),
+              qtyRequested: qtyToShip.toString(),
               error: msg,
             };
           }
@@ -456,7 +508,7 @@ export async function closeSalesOrder(
         await tx.salesOrderLine.update({
           where: { id: line.id },
           data: {
-            qtyShipped: line.qtyOrdered,
+            qtyShipped: qtyToShip,
             qtyReserved: new Prisma.Decimal(0),
             inventoryMovementId: movementId,
           },
@@ -524,6 +576,70 @@ export async function closeSalesOrder(
     }
     throw e;
   }
+}
+
+/**
+ * Inline qtyShipped editor — warehouse records what actually shipped
+ * per line before clicking Close. Available on CONFIRMED + DISPATCHED;
+ * other statuses are read-only (pre-CONFIRMED nothing has shipped;
+ * post-CLOSED the value is frozen because the invoice has been
+ * generated and inventory consumed).
+ *
+ * Validates 0 < qtyShipped ≤ line.qtyOrdered. closeSalesOrder later
+ * uses the saved value as its default when its `lines` payload is
+ * absent — see the fallback chain comment in closeSalesOrder.
+ */
+export async function updateSalesOrderLineQtyShipped(
+  db: PrismaClient,
+  salesOrderId: string,
+  lineId: string,
+  input: UpdateSalesOrderLineQtyShippedInput,
+  ctx?: AuditContext,
+): Promise<SalesOrderLine> {
+  const data = updateSalesOrderLineQtyShippedInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    const line = await tx.salesOrderLine.findUnique({
+      where: { id: lineId },
+      include: { salesOrder: { select: { id: true, status: true } } },
+    });
+    if (!line || line.deletedAt != null) {
+      throw new Error(`SalesOrderLine not found: ${lineId}`);
+    }
+    if (line.salesOrder.id !== salesOrderId) {
+      throw new Error(
+        `Line ${lineId} does not belong to SalesOrder ${salesOrderId}`,
+      );
+    }
+    if (
+      line.salesOrder.status !== SalesOrderStatus.CONFIRMED &&
+      line.salesOrder.status !== SalesOrderStatus.DISPATCHED
+    ) {
+      throw new Error(
+        `Cannot edit qtyShipped while SalesOrder is in status ${line.salesOrder.status}`,
+      );
+    }
+    const qtyShipped = new Prisma.Decimal(data.qtyShipped);
+    if (qtyShipped.greaterThan(line.qtyOrdered)) {
+      throw new Error(
+        `qtyShipped (${qtyShipped}) exceeds qtyOrdered (${line.qtyOrdered})`,
+      );
+    }
+
+    const before = { qtyShipped: line.qtyShipped };
+    const after = await tx.salesOrderLine.update({
+      where: { id: lineId },
+      data: { qtyShipped },
+    });
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'SalesOrderLine',
+      entityId: lineId,
+      before,
+      after: { qtyShipped: after.qtyShipped },
+      ctx,
+    });
+    return after;
+  });
 }
 
 export async function cancelSalesOrder(

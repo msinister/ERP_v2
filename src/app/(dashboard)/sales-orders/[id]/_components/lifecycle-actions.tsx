@@ -360,6 +360,11 @@ function CloseAction({
         const body: Record<string, string> = {};
         if (shipping) body.shippingAmount = shipping;
         if (handling) body.handlingAmount = handling;
+        // qtyShipped per line is captured inline on the SO detail
+        // page's Qty shipped column while the SO is CONFIRMED /
+        // DISPATCHED; closeSalesOrder picks up the saved values
+        // automatically. The Close dialog only collects header-level
+        // money fields.
         const res = await fetch(
           `/api/sales-orders/${salesOrderId}/close`,
           {
@@ -394,8 +399,9 @@ function CloseAction({
         <AlertDialogHeader>
           <AlertDialogTitle>Close this order?</AlertDialogTitle>
           <AlertDialogDescription>
-            Consumes reserved inventory, generates an invoice, and posts COGS.
-            Leave shipping or handling blank to keep the current value.
+            Consumes reserved inventory, generates an invoice (billed on
+            qty shipped from the lines table), and posts COGS. Leave
+            shipping or handling blank to keep the current value.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="grid grid-cols-2 gap-3">

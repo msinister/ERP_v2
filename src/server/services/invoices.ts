@@ -98,8 +98,13 @@ export async function generateInvoiceForClosedSOTx(
   // Compute line totals + subtotal at full Decimal precision. Each line
   // total honors per-line discount: lineTotal = qty * unitPrice, then
   // subtract discountAmount or apply discountPercent.
+  //
+  // Invoice the shipped qty, not the ordered qty. closeSalesOrder writes
+  // qtyShipped earlier in the same transaction (defaults to qtyOrdered
+  // when the operator doesn't adjust on close, so historical full-ship
+  // behavior is preserved). Partial shipments invoice only what shipped.
   const lineRows = so.lines.map((sol) => {
-    const qty = sol.qtyOrdered;
+    const qty = sol.qtyShipped;
     const unitPrice = sol.unitPrice;
     let lineTotal = qty.times(unitPrice);
     if (sol.discountAmount != null) {

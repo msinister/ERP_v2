@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import { Prisma, SalesOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { computeSalesOrderTotal } from '@/lib/ar/openSos';
 import { SalesOrderHeader } from './_components/header';
@@ -48,7 +49,21 @@ export default async function SalesOrderDetailPage({
     select: { id: true, name: true },
   });
 
-  const total = computeSalesOrderTotal(so);
+  // computeSalesOrderTotal stays on qtyOrdered — it's the projected
+  // commitment, used by credit-limit math for in-flight exposure.
+  // For the displayed grand-total on a CLOSED order we want the
+  // invoiced basis (qtyShipped), so the totals card matches the
+  // invoice line totals. Pre-CLOSED both numbers coincide.
+  const displayTotal =
+    so.status === SalesOrderStatus.CLOSED
+      ? computeSalesOrderTotal({
+          ...so,
+          lines: so.lines.map((l) => ({
+            ...l,
+            qtyOrdered: l.qtyShipped as Prisma.Decimal,
+          })),
+        })
+      : computeSalesOrderTotal(so);
 
   return (
     <div className="space-y-6">
@@ -72,6 +87,8 @@ export default async function SalesOrderDetailPage({
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <SalesOrderLinesTable
+            salesOrderId={so.id}
+            status={so.status}
             lines={so.lines.map((l) => ({
               id: l.id,
               sku: l.variant.sku,
@@ -113,7 +130,8 @@ export default async function SalesOrderDetailPage({
             orderDiscountPercent={so.orderDiscountPercent}
             shippingAmount={so.shippingAmount}
             handlingAmount={so.handlingAmount}
-            total={total}
+            total={displayTotal}
+            status={so.status}
           />
         </div>
       </div>

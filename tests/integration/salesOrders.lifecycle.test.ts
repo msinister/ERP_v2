@@ -12,6 +12,7 @@ import {
   confirmSalesOrder,
   createSalesOrder,
   dispatchSalesOrder,
+  updateSalesOrderLineQtyShipped,
 } from '@/server/services/salesOrders';
 import { receiveInventory } from '@/server/services/movements';
 import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
@@ -224,6 +225,206 @@ suite('SalesOrder lifecycle', () => {
     expect(stillDispatched!.status).toBe(SalesOrderStatus.DISPATCHED);
   });
 
+  it('Partial close: per-line qtyShipped < qtyOrdered consumes only shipped qty and shorts the invoice', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('10'));
+    await confirmSalesOrder(db, so.id);
+    const lineId = so.lines[0].id;
+
+    const closed = await closeSalesOrder(db, so.id, {
+      lines: [{ id: lineId, qtyShipped: '7' }],
+    });
+
+    expect(closed.status).toBe(SalesOrderStatus.CLOSED);
+    expect(closed.lines[0].qtyShipped.toString()).toBe(
+      new Prisma.Decimal('7').toString(),
+    );
+    expect(closed.lines[0].qtyOrdered.toString()).toBe(
+      new Prisma.Decimal('10').toString(),
+    );
+    expect(closed.lines[0].qtyReserved.toString()).toBe(
+      new Prisma.Decimal('0').toString(),
+    );
+
+    // Consumed only the shipped qty — not the ordered qty.
+    const movements = await db.inventoryMovement.findMany({
+      where: {
+        variantId,
+        warehouseId,
+        type: InventoryMovementType.CONSUME,
+        reference: closed.number,
+      },
+    });
+    expect(movements).toHaveLength(1);
+    expect(movements[0].qty.toString()).toBe(
+      new Prisma.Decimal('-7').toString(),
+    );
+
+    const inv = await db.inventoryItem.findUnique({
+      where: { variantId_warehouseId: { variantId, warehouseId } },
+    });
+    expect(inv!.onHand.toString()).toBe(new Prisma.Decimal('13').toString());
+
+    // Auto-invoice was billed on qtyShipped (7), not qtyOrdered (10).
+    const invoice = await db.invoice.findUnique({
+      where: { salesOrderId: so.id },
+      include: { lines: true },
+    });
+    expect(invoice).not.toBeNull();
+    expect(invoice!.lines).toHaveLength(1);
+    expect(invoice!.lines[0].qty.toString()).toBe(
+      new Prisma.Decimal('7').toString(),
+    );
+    expect(invoice!.lines[0].lineTotal.toString()).toBe(
+      // 7 * 9.99 = 69.93
+      new Prisma.Decimal('69.93').toString(),
+    );
+  });
+
+  it('Close rejects qtyShipped > qtyOrdered', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('5'));
+    await confirmSalesOrder(db, so.id);
+    const lineId = so.lines[0].id;
+
+    await expect(
+      closeSalesOrder(db, so.id, {
+        lines: [{ id: lineId, qtyShipped: '6' }],
+      }),
+    ).rejects.toThrow(/exceeds qtyOrdered/);
+
+    // SO still in CONFIRMED — close transaction rolled back.
+    const stillOpen = await db.salesOrder.findUnique({ where: { id: so.id } });
+    expect(stillOpen!.status).toBe(SalesOrderStatus.CONFIRMED);
+  });
+
+  it('Close rejects line id that does not belong to this SO', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('5'));
+    await confirmSalesOrder(db, so.id);
+
+    await expect(
+      closeSalesOrder(db, so.id, {
+        lines: [{ id: 'cln_does_not_exist', qtyShipped: '5' }],
+      }),
+    ).rejects.toThrow(/does not belong/);
+  });
+
+  it('Inline qtyShipped: persists on CONFIRMED and survives through close', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('10'));
+    await confirmSalesOrder(db, so.id);
+    const lineId = so.lines[0].id;
+
+    await updateSalesOrderLineQtyShipped(db, so.id, lineId, {
+      qtyShipped: '6',
+    });
+
+    const afterPatch = await db.salesOrderLine.findUnique({
+      where: { id: lineId },
+    });
+    expect(afterPatch!.qtyShipped.toString()).toBe(
+      new Prisma.Decimal('6').toString(),
+    );
+
+    // No `lines` payload on close → server falls back to the inline-
+    // saved value (6), not qtyOrdered (10).
+    const closed = await closeSalesOrder(db, so.id, undefined);
+    expect(closed.lines[0].qtyShipped.toString()).toBe(
+      new Prisma.Decimal('6').toString(),
+    );
+
+    const movements = await db.inventoryMovement.findMany({
+      where: {
+        variantId,
+        warehouseId,
+        type: InventoryMovementType.CONSUME,
+        reference: closed.number,
+      },
+    });
+    expect(movements).toHaveLength(1);
+    expect(movements[0].qty.toString()).toBe(
+      new Prisma.Decimal('-6').toString(),
+    );
+
+    const invoice = await db.invoice.findUnique({
+      where: { salesOrderId: so.id },
+      include: { lines: true },
+    });
+    expect(invoice!.lines[0].qty.toString()).toBe(
+      new Prisma.Decimal('6').toString(),
+    );
+  });
+
+  it('Inline qtyShipped: rejects qtyShipped > qtyOrdered', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('5'));
+    await confirmSalesOrder(db, so.id);
+    const lineId = so.lines[0].id;
+
+    await expect(
+      updateSalesOrderLineQtyShipped(db, so.id, lineId, {
+        qtyShipped: '6',
+      }),
+    ).rejects.toThrow(/exceeds qtyOrdered/);
+  });
+
+  it('Inline qtyShipped: rejects edit while SO is DRAFT (not yet CONFIRMED)', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('5'));
+    const lineId = so.lines[0].id;
+
+    await expect(
+      updateSalesOrderLineQtyShipped(db, so.id, lineId, {
+        qtyShipped: '3',
+      }),
+    ).rejects.toThrow(/Cannot edit qtyShipped while SalesOrder is in status DRAFT/);
+  });
+
+  it('Inline qtyShipped: rejects line id from a different SO', async () => {
+    await stockBin('20');
+    const soA = await createSalesOrder(db, createInput('5'));
+    const soB = await createSalesOrder(db, createInput('5'));
+    await confirmSalesOrder(db, soA.id);
+    await confirmSalesOrder(db, soB.id);
+
+    // Apply soB's line to soA → must be rejected.
+    await expect(
+      updateSalesOrderLineQtyShipped(db, soA.id, soB.lines[0].id, {
+        qtyShipped: '3',
+      }),
+    ).rejects.toThrow(/does not belong to SalesOrder/);
+  });
+
+  it('Inline qtyShipped: emits UPDATE audit row capturing before+after', async () => {
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('10'));
+    await confirmSalesOrder(db, so.id);
+    const lineId = so.lines[0].id;
+
+    await updateSalesOrderLineQtyShipped(
+      db,
+      so.id,
+      lineId,
+      { qtyShipped: '7' },
+      { userId: 'TEST-USER-SHIPPED' },
+    );
+
+    const rows = await db.auditLog.findMany({
+      where: {
+        entityType: 'SalesOrderLine',
+        entityId: lineId,
+        action: AuditAction.UPDATE,
+      },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].userId).toBe('TEST-USER-SHIPPED');
+    const before = rows[0].beforeJson as { qtyShipped: string };
+    const after = rows[0].afterJson as { qtyShipped: string };
+    expect(before.qtyShipped).toBe('0');
+    expect(after.qtyShipped).toBe('7');
+  });
+
   it('Audit rows: CREATE on createSalesOrder, STATUS_CHANGE on each transition', async () => {
     await stockBin('20');
     const so = await createSalesOrder(db, createInput('2'));
@@ -266,7 +467,7 @@ async function wipe(
   }
   const ourSos = await db.salesOrder.findMany({
     where: { customerId: ids.customerId },
-    select: { id: true },
+    select: { id: true, lines: { select: { id: true } } },
   });
   if (ourSos.length > 0) {
     await db.auditLog.deleteMany({
@@ -275,6 +476,15 @@ async function wipe(
         entityId: { in: ourSos.map((s) => s.id) },
       },
     });
+    const ourLineIds = ourSos.flatMap((s) => s.lines.map((l) => l.id));
+    if (ourLineIds.length > 0) {
+      await db.auditLog.deleteMany({
+        where: {
+          entityType: 'SalesOrderLine',
+          entityId: { in: ourLineIds },
+        },
+      });
+    }
   }
   await wipeInvoiceArtifactsForSOs(db, ourSos.map((s) => s.id));
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: ids.customerId } } });

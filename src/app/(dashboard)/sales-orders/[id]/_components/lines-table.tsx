@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency } from '@/lib/format';
+import { QtyShippedInput } from './qty-shipped-input';
 
 export type SalesOrderLineRow = {
   id: string;
@@ -27,7 +28,15 @@ export type SalesOrderLineRow = {
   internalNote: string | null;
 };
 
-export function SalesOrderLinesTable({ lines }: { lines: SalesOrderLineRow[] }) {
+export function SalesOrderLinesTable({
+  lines,
+  status,
+  salesOrderId,
+}: {
+  lines: SalesOrderLineRow[];
+  status: string;
+  salesOrderId: string;
+}) {
   if (lines.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
@@ -36,6 +45,13 @@ export function SalesOrderLinesTable({ lines }: { lines: SalesOrderLineRow[] }) 
     );
   }
 
+  const isClosed = status === 'CLOSED';
+  // CONFIRMED + DISPATCHED are the editable window for qtyShipped —
+  // CONFIRMED catches pickup orders that close without ever entering
+  // DISPATCHED. See updateSalesOrderLineQtyShipped for the matching
+  // server-side gate.
+  const isEditable = status === 'CONFIRMED' || status === 'DISPATCHED';
+
   return (
     <div className="rounded-lg border border-border">
       <Table>
@@ -43,7 +59,8 @@ export function SalesOrderLinesTable({ lines }: { lines: SalesOrderLineRow[] }) 
           <TableRow className="bg-muted/30 hover:bg-muted/30">
             <TableHead>SKU</TableHead>
             <TableHead>Description</TableHead>
-            <TableHead className="text-right">Qty</TableHead>
+            <TableHead className="text-right">Ordered</TableHead>
+            <TableHead className="text-right">Shipped</TableHead>
             <TableHead className="text-right">Unit price</TableHead>
             <TableHead className="text-right">Discount</TableHead>
             <TableHead className="text-right">Line total</TableHead>
@@ -70,9 +87,21 @@ export function SalesOrderLinesTable({ lines }: { lines: SalesOrderLineRow[] }) 
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 <div>{formatQty(l.qtyOrdered)}</div>
-                <ReservationHint
-                  reserved={l.qtyReserved}
-                  shipped={l.qtyShipped}
+                {!isClosed ? (
+                  <ReservationHint
+                    reserved={l.qtyReserved}
+                    shipped={l.qtyShipped}
+                  />
+                ) : null}
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                <ShippedCell
+                  salesOrderId={salesOrderId}
+                  lineId={l.id}
+                  qtyOrdered={l.qtyOrdered}
+                  qtyShipped={l.qtyShipped}
+                  isEditable={isEditable}
+                  isClosed={isClosed}
                 />
               </TableCell>
               <TableCell className="text-right tabular-nums">
@@ -83,7 +112,7 @@ export function SalesOrderLinesTable({ lines }: { lines: SalesOrderLineRow[] }) 
                 {formatDiscount(l.discountPercent, l.discountAmount)}
               </TableCell>
               <TableCell className="text-right tabular-nums font-medium">
-                {formatCurrency(computeLineTotal(l))}
+                {formatCurrency(computeLineTotal(l, isClosed))}
               </TableCell>
             </TableRow>
           ))}
@@ -91,6 +120,56 @@ export function SalesOrderLinesTable({ lines }: { lines: SalesOrderLineRow[] }) 
       </Table>
     </div>
   );
+}
+
+// Qty shipped cell — switches between the inline editor (CONFIRMED /
+// DISPATCHED), the closed-state read-only display (CLOSED, with a
+// "short" hint when shipped < ordered), and a dash for other statuses
+// where no shipment is meaningful.
+function ShippedCell({
+  salesOrderId,
+  lineId,
+  qtyOrdered,
+  qtyShipped,
+  isEditable,
+  isClosed,
+}: {
+  salesOrderId: string;
+  lineId: string;
+  qtyOrdered: Prisma.Decimal;
+  qtyShipped: Prisma.Decimal;
+  isEditable: boolean;
+  isClosed: boolean;
+}) {
+  if (isEditable) {
+    return (
+      <QtyShippedInput
+        salesOrderId={salesOrderId}
+        lineId={lineId}
+        qtyOrdered={qtyOrdered.toString()}
+        qtyShipped={qtyShipped.toString()}
+        editable
+      />
+    );
+  }
+  if (isClosed) {
+    const short = qtyShipped.lessThan(qtyOrdered);
+    return (
+      <>
+        <div>
+          <span className={short ? 'text-amber-600 dark:text-amber-500' : ''}>
+            {formatQty(qtyShipped)}
+          </span>
+        </div>
+        {short ? (
+          <div className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-500">
+            short
+          </div>
+        ) : null}
+      </>
+    );
+  }
+  return <span className="text-muted-foreground">—</span>;
 }
 
 function formatQty(qty: Prisma.Decimal): string {
@@ -112,8 +191,16 @@ function formatDiscount(
   return '—';
 }
 
-function computeLineTotal(l: SalesOrderLineRow): Prisma.Decimal {
-  let lineTotal = l.qtyOrdered.times(l.unitPrice);
+function computeLineTotal(
+  l: SalesOrderLineRow,
+  isClosed: boolean,
+): Prisma.Decimal {
+  // Pre-CLOSE the line total reflects the order's commitment (qtyOrdered).
+  // After CLOSE, switch to qtyShipped so the displayed total matches the
+  // invoice line that was actually generated — important for short
+  // shipments where ordered > shipped.
+  const qty = isClosed ? l.qtyShipped : l.qtyOrdered;
+  let lineTotal = qty.times(l.unitPrice);
   if (l.discountAmount != null) {
     lineTotal = lineTotal.minus(l.discountAmount);
   } else if (l.discountPercent != null) {

@@ -104,9 +104,27 @@ export const cancelSalesOrderInputSchema = z.object({
   reason: z.string().min(1).max(2000),
 });
 
+// Per-line qtyShipped on close. When omitted, every line ships its full
+// qtyOrdered (the historic behavior). When provided, every entry maps a
+// SalesOrderLine.id → the qty actually shipped; service-side enforces
+// qtyShipped ≤ qtyOrdered, IDs belong to the SO, and no duplicates.
+export const closeSalesOrderLineInputSchema = z.object({
+  id: z.string().min(1),
+  qtyShipped: positiveDecimal,
+});
+
+// Inline per-line qtyShipped update. Used by the SO detail page's
+// editable Qty shipped column while the SO is CONFIRMED or DISPATCHED
+// — operators record what actually went out before clicking Close.
+// Service-side enforces 0 < qtyShipped ≤ line.qtyOrdered.
+export const updateSalesOrderLineQtyShippedInputSchema = z.object({
+  qtyShipped: positiveDecimal,
+});
+
 export const closeSalesOrderInputSchema = z.object({
   shippingAmount: nonNegativeDecimal.optional(),
   handlingAmount: nonNegativeDecimal.optional(),
+  lines: z.array(closeSalesOrderLineInputSchema).optional(),
 });
 
 export type SalesOrderLineInput = z.infer<typeof salesOrderLineInputSchema>;
@@ -114,6 +132,12 @@ export type CreateSalesOrderInput = z.infer<typeof createSalesOrderInputSchema>;
 export type UpdateSalesOrderInput = z.infer<typeof updateSalesOrderInputSchema>;
 export type CancelSalesOrderInput = z.infer<typeof cancelSalesOrderInputSchema>;
 export type CloseSalesOrderInput = z.infer<typeof closeSalesOrderInputSchema>;
+export type CloseSalesOrderLineInput = z.infer<
+  typeof closeSalesOrderLineInputSchema
+>;
+export type UpdateSalesOrderLineQtyShippedInput = z.infer<
+  typeof updateSalesOrderLineQtyShippedInputSchema
+>;
 // Customer stub validation moved to src/lib/validation/customers.ts as
 // part of the Customer master expansion slice — see that file for the
 // full master schemas + the transition-phase stub shim.
