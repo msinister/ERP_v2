@@ -341,7 +341,7 @@ export function VendorForm({
                   name="paymentTermId"
                   render={({ field }) => (
                     <Select
-                      value={field.value || undefined}
+                      value={field.value === '' ? undefined : field.value}
                       onValueChange={field.onChange}
                     >
                       <SelectTrigger

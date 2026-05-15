@@ -261,7 +261,7 @@ export function VcForm({
                   name="vendorId"
                   render={({ field }) => (
                     <Select
-                      value={field.value || undefined}
+                      value={field.value === '' ? undefined : field.value}
                       onValueChange={field.onChange}
                       disabled={mode.kind === 'edit'}
                     >

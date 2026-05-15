@@ -313,7 +313,7 @@ export function PoForm({
                 name="vendorId"
                 render={({ field }) => (
                   <Select
-                    value={field.value || undefined}
+                    value={field.value === '' ? undefined : field.value}
                     onValueChange={field.onChange}
                     disabled={mode.kind === 'edit'}
                   >
@@ -372,7 +372,7 @@ export function PoForm({
                 name="warehouseId"
                 render={({ field }) => (
                   <Select
-                    value={field.value || undefined}
+                    value={field.value === '' ? undefined : field.value}
                     onValueChange={field.onChange}
                   >
                     <SelectTrigger
@@ -627,7 +627,7 @@ function LineRow({
               name={`lines.${index}.variantId`}
               render={({ field }) => (
                 <Select
-                  value={field.value || undefined}
+                  value={field.value === '' ? undefined : field.value}
                   onValueChange={field.onChange}
                 >
                   <SelectTrigger
