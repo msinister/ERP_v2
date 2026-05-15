@@ -123,7 +123,11 @@ export default async function SalesOrderDetailPage({
           />
         </div>
 
-        <div className="space-y-6">
+        {/* lg:self-start lets the column shrink to content so sticky has
+            somewhere to stick within the grid cell; without it the grid
+            stretches the column to match the lines column's height and
+            sticky becomes a no-op. */}
+        <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
           <SalesOrderTotalsCard
             lines={so.lines}
             orderDiscountAmount={so.orderDiscountAmount}

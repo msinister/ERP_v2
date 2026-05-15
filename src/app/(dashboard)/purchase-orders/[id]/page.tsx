@@ -141,7 +141,7 @@ export default async function PurchaseOrderDetailPage({
           <PurchaseOrderReceiptsTable receipts={receipts} />
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
           <PurchaseOrderTotalsCard
             lines={po.lines}
             currency={po.currency ?? 'USD'}

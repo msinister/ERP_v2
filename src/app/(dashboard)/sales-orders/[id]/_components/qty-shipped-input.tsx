@@ -111,7 +111,12 @@ export function QtyShippedInput({
   }
 
   return (
-    <div className="flex items-center justify-end gap-1.5">
+    // inline-flex (not flex) so the wrapper collapses to content
+    // width and inherits the parent's text-align. In the desktop
+    // table's text-right cell the wrapper sits flush right; in the
+    // mobile card's default-left Stat cell it sits flush left,
+    // aligned with the other stat values (Ordered, Unit price, etc.).
+    <div className="inline-flex items-center gap-1.5">
       <Input
         inputMode="decimal"
         aria-label="Qty shipped"

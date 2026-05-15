@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Prisma } from '@/generated/tenant';
 import {
   Table,
@@ -53,71 +54,188 @@ export function SalesOrderLinesTable({
   const isEditable = status === 'CONFIRMED' || status === 'DISPATCHED';
 
   return (
-    <div className="rounded-lg border border-border">
-      <Table>
-        <TableHeader>
-          <TableRow className="bg-muted/30 hover:bg-muted/30">
-            <TableHead>SKU</TableHead>
-            <TableHead>Description</TableHead>
-            <TableHead className="text-right">Ordered</TableHead>
-            <TableHead className="text-right">Shipped</TableHead>
-            <TableHead className="text-right">Unit price</TableHead>
-            <TableHead className="text-right">Discount</TableHead>
-            <TableHead className="text-right">Line total</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {lines.map((l) => (
-            <TableRow key={l.id}>
-              <TableCell className="font-mono text-xs text-muted-foreground">
-                {l.sku}
-              </TableCell>
-              <TableCell>
-                <div className="font-medium">{l.productName}</div>
-                {l.variantName ? (
-                  <div className="text-xs text-muted-foreground">
-                    {l.variantName}
-                  </div>
-                ) : null}
-                {l.customerNote ? (
-                  <div className="mt-1 text-xs italic text-muted-foreground">
-                    “{l.customerNote}”
-                  </div>
-                ) : null}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                <div>{formatQty(l.qtyOrdered)}</div>
-                {!isClosed ? (
-                  <ReservationHint
-                    reserved={l.qtyReserved}
-                    shipped={l.qtyShipped}
-                  />
-                ) : null}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                <ShippedCell
-                  salesOrderId={salesOrderId}
-                  lineId={l.id}
-                  qtyOrdered={l.qtyOrdered}
-                  qtyShipped={l.qtyShipped}
-                  isEditable={isEditable}
-                  isClosed={isClosed}
-                />
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                <div>{formatCurrency(l.unitPrice)}</div>
-                <PriceRuleBadge rule={l.priceRule} />
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {formatDiscount(l.discountPercent, l.discountAmount)}
-              </TableCell>
-              <TableCell className="text-right tabular-nums font-medium">
-                {formatCurrency(computeLineTotal(l, isClosed))}
-              </TableCell>
+    <>
+      {/* Mobile: one card per line, stacked. Hidden on md+ where the
+          full table takes over. The card view drops horizontal
+          scrolling entirely — every column wraps into the card. */}
+      <div className="space-y-3 md:hidden">
+        {lines.map((l) => (
+          <SalesOrderLineCard
+            key={l.id}
+            line={l}
+            isClosed={isClosed}
+            isEditable={isEditable}
+            salesOrderId={salesOrderId}
+          />
+        ))}
+      </div>
+
+      {/* Desktop: existing sticky-header scrollable table.
+          overflow-hidden so the inner scroll container respects the
+          outer rounded corners; max-h on Table's container creates
+          the scroll context that the sticky thead resolves to.
+          bg-background on the header keeps it opaque against
+          scrolling rows underneath — the existing bg-muted/30 tint
+          on the row layers on top. */}
+      <div className="hidden overflow-hidden rounded-lg border border-border md:block">
+        <Table containerClassName="max-h-[60vh] overflow-y-auto">
+          <TableHeader className="sticky top-0 z-10 bg-background">
+            <TableRow className="bg-muted/30 hover:bg-muted/30">
+              <TableHead>SKU</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead className="text-right">Ordered</TableHead>
+              <TableHead className="text-right">Shipped</TableHead>
+              <TableHead className="text-right">Unit price</TableHead>
+              <TableHead className="text-right">Discount</TableHead>
+              <TableHead className="text-right">Line total</TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {lines.map((l) => (
+              <TableRow key={l.id}>
+                <TableCell className="font-mono text-xs text-muted-foreground">
+                  {l.sku}
+                </TableCell>
+                <TableCell>
+                  <div className="font-medium">{l.productName}</div>
+                  {l.variantName ? (
+                    <div className="text-xs text-muted-foreground">
+                      {l.variantName}
+                    </div>
+                  ) : null}
+                  {l.customerNote ? (
+                    <div className="mt-1 text-xs italic text-muted-foreground">
+                      “{l.customerNote}”
+                    </div>
+                  ) : null}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  <div>{formatQty(l.qtyOrdered)}</div>
+                  {!isClosed ? (
+                    <ReservationHint
+                      reserved={l.qtyReserved}
+                      shipped={l.qtyShipped}
+                    />
+                  ) : null}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  <ShippedCell
+                    salesOrderId={salesOrderId}
+                    lineId={l.id}
+                    qtyOrdered={l.qtyOrdered}
+                    qtyShipped={l.qtyShipped}
+                    isEditable={isEditable}
+                    isClosed={isClosed}
+                  />
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  <div>{formatCurrency(l.unitPrice)}</div>
+                  <PriceRuleBadge rule={l.priceRule} />
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatDiscount(l.discountPercent, l.discountAmount)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums font-medium">
+                  {formatCurrency(computeLineTotal(l, isClosed))}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </>
+  );
+}
+
+// Mobile card variant — same data the desktop row shows, restacked
+// vertically. The QtyShippedInput renders here too when the SO is in
+// the editable window; each subtree manages its own local state, so
+// edits made on the mobile card and the (hidden) desktop row stay
+// independent until the next router.refresh() re-syncs from the
+// server.
+function SalesOrderLineCard({
+  line: l,
+  isClosed,
+  isEditable,
+  salesOrderId,
+}: {
+  line: SalesOrderLineRow;
+  isClosed: boolean;
+  isEditable: boolean;
+  salesOrderId: string;
+}) {
+  const hasDiscount = l.discountPercent != null || l.discountAmount != null;
+  return (
+    <div className="space-y-3 rounded-lg border border-border bg-card p-3">
+      <div>
+        <div className="font-mono text-xs text-muted-foreground">{l.sku}</div>
+        <div className="font-medium">{l.productName}</div>
+        {l.variantName ? (
+          <div className="text-xs text-muted-foreground">{l.variantName}</div>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <Stat label="Ordered">
+          <div className="tabular-nums">{formatQty(l.qtyOrdered)}</div>
+          {!isClosed ? (
+            <ReservationHint
+              reserved={l.qtyReserved}
+              shipped={l.qtyShipped}
+            />
+          ) : null}
+        </Stat>
+        <Stat label="Shipped">
+          <ShippedCell
+            salesOrderId={salesOrderId}
+            lineId={l.id}
+            qtyOrdered={l.qtyOrdered}
+            qtyShipped={l.qtyShipped}
+            isEditable={isEditable}
+            isClosed={isClosed}
+          />
+        </Stat>
+        <Stat label="Unit price">
+          <div className="tabular-nums">{formatCurrency(l.unitPrice)}</div>
+          <PriceRuleBadge rule={l.priceRule} />
+        </Stat>
+        <Stat label="Line total">
+          <div className="tabular-nums font-medium">
+            {formatCurrency(computeLineTotal(l, isClosed))}
+          </div>
+        </Stat>
+      </div>
+      {hasDiscount ? (
+        <div className="flex items-baseline gap-2 text-sm">
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Discount
+          </span>
+          <span className="tabular-nums">
+            {formatDiscount(l.discountPercent, l.discountAmount)}
+          </span>
+        </div>
+      ) : null}
+      {l.customerNote ? (
+        <div className="text-xs italic text-muted-foreground">
+          “{l.customerNote}”
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      {children}
     </div>
   );
 }

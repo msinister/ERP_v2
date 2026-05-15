@@ -109,7 +109,7 @@ export default async function VendorCreditDetailPage({
           />
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
           <VendorCreditTotalsCard
             status={vc.status}
             amount={vc.amount}

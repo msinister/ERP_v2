@@ -126,7 +126,7 @@ export default async function ReceiptDetailPage({
           />
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
           <Card>
             <CardHeader>
               <CardTitle className="text-sm">Totals</CardTitle>

@@ -235,7 +235,7 @@ export default async function BillDetailPage({
           />
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
           <BillTotalsCard
             status={bill.status}
             subtotal={bill.subtotal}

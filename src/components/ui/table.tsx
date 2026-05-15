@@ -4,11 +4,22 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+function Table({
+  className,
+  containerClassName,
+  ...props
+}: React.ComponentProps<"table"> & {
+  // Lets the consumer attach max-h / overflow-y to the scroll container
+  // (e.g., for sticky-header tables inside long detail pages). The
+  // default is the historical "relative w-full overflow-x-auto" — sticky
+  // <thead> resolves to this container, so adding overflow-y here is
+  // what pins the header during vertical scroll.
+  containerClassName?: string
+}) {
   return (
     <div
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      className={cn("relative w-full overflow-x-auto", containerClassName)}
     >
       <table
         data-slot="table"
