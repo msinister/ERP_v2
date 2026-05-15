@@ -716,6 +716,14 @@ model PurchaseOrder {
   createdById         String?
   confirmedAt         DateTime?
   closedAt            DateTime?
+  // Free-text reason supplied when an operator manually closes a PO
+  // before it's fully received (short shipment, vendor cancellation,
+  // damaged goods). NULL when the PO closed via the auto-close path
+  // (every line fully received). Presence of this value also tells
+  // applyComputedPoStatus to NOT revert a manual close if a downstream
+  // receipt cancel later drops the received total — the operator's
+  // explicit intent wins over the recomputed status.
+  closeReason         String?
   cancelledAt         DateTime?
   deletedAt           DateTime?
   createdAt           DateTime            @default(now())

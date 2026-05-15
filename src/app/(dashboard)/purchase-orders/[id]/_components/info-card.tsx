@@ -12,6 +12,7 @@ export function PurchaseOrderInfoCard({
     expectedReceiveDate: Date | null;
     currency: string;
     notes: string | null;
+    closeReason: string | null;
   };
 }) {
   return (
@@ -30,6 +31,12 @@ export function PurchaseOrderInfoCard({
           <Row label="Currency" value={po.currency} />
         </dl>
 
+        {po.closeReason ? (
+          // Renders only on PURs closed via the manual close-with-reason
+          // path. Auto-closed POs (every line fully received) leave
+          // closeReason NULL and this section stays hidden.
+          <NoteBlock label="Close reason" body={po.closeReason} />
+        ) : null}
         {po.notes ? (
           <NoteBlock label="Internal notes" body={po.notes} />
         ) : null}

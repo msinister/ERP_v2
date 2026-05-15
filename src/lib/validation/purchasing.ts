@@ -40,7 +40,16 @@ export const cancelPurchaseOrderInputSchema = z.object({
   reason: z.string().max(2000).optional(),
 });
 
+// Manual close — reason required (unlike cancel, where it's optional).
+// Operators reach this when no further receipts are expected: short
+// shipment, vendor cancellation, damaged goods. The reason persists
+// on PurchaseOrder.closeReason and shows on the PO detail page.
+export const closePurchaseOrderInputSchema = z.object({
+  reason: z.string().min(1, 'Reason is required').max(2000),
+});
+
 export type PurchaseOrderLineInput = z.infer<typeof purchaseOrderLineInputSchema>;
 export type CreatePurchaseOrderInput = z.infer<typeof createPurchaseOrderInputSchema>;
 export type UpdatePurchaseOrderInput = z.infer<typeof updatePurchaseOrderInputSchema>;
 export type CancelPurchaseOrderInput = z.infer<typeof cancelPurchaseOrderInputSchema>;
+export type ClosePurchaseOrderInput = z.infer<typeof closePurchaseOrderInputSchema>;

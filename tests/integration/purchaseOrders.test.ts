@@ -2,7 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { Prisma, PurchaseOrderStatus, ReceiptStatus } from '@/generated/tenant';
 import type { PrismaClient } from '@/generated/tenant';
 import {
+  applyComputedPoStatus,
   cancelPurchaseOrder,
+  closePurchaseOrder,
   computePoStatus,
   confirmPurchaseOrder,
   createPurchaseOrder,
@@ -113,6 +115,106 @@ suite('PurchaseOrder service', () => {
 
     // Re-cancel rejected.
     await expect(cancelPurchaseOrder(db, po.id, {})).rejects.toThrow(/already CANCELLED/);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Manual close
+  // ---------------------------------------------------------------------------
+
+  it('closePurchaseOrder: rejects on DRAFT (must be CONFIRMED or PARTIALLY_RECEIVED)', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await expect(
+      closePurchaseOrder(db, po.id, { reason: 'vendor short' }),
+    ).rejects.toThrow(/Cannot close PurchaseOrder in status DRAFT/);
+  });
+
+  it('closePurchaseOrder: CONFIRMED → CLOSED with reason persisted', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await confirmPurchaseOrder(db, po.id);
+    const closed = await closePurchaseOrder(db, po.id, {
+      reason: 'vendor discontinued',
+    });
+    expect(closed.status).toBe(PurchaseOrderStatus.CLOSED);
+    expect(closed.closedAt).not.toBeNull();
+    expect(closed.closeReason).toBe('vendor discontinued');
+  });
+
+  it('closePurchaseOrder: leaves line.qtyOrdered unchanged (reporting preserves the gap)', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput('10', '5')] });
+    await confirmPurchaseOrder(db, po.id);
+    await closePurchaseOrder(db, po.id, { reason: 'short ship' });
+
+    const line = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po.id },
+    });
+    expect(line.qtyOrdered.toString()).toBe(new Prisma.Decimal('10').toString());
+  });
+
+  it('closePurchaseOrder: re-close rejected once already CLOSED', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await confirmPurchaseOrder(db, po.id);
+    await closePurchaseOrder(db, po.id, { reason: 'short ship' });
+    await expect(
+      closePurchaseOrder(db, po.id, { reason: 'second close' }),
+    ).rejects.toThrow(/Cannot close PurchaseOrder in status CLOSED/);
+  });
+
+  it('applyComputedPoStatus: manual-close survives a downstream receipt-driven recompute', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput('10', '1')] });
+    await confirmPurchaseOrder(db, po.id);
+    const poLine = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po.id },
+    });
+
+    // Post a partial receipt (3 of 10), corrupt-style via direct
+    // tables — same pattern as the existing recompute test. PO moves
+    // to PARTIALLY_RECEIVED.
+    const receipt = await db.receipt.create({
+      data: {
+        number: `TEST-RCPT-CLOSE-${Date.now()}`,
+        vendorId,
+        warehouseId,
+        status: ReceiptStatus.POSTED,
+        receivedAt: new Date(),
+      },
+    });
+    await db.receiptLine.create({
+      data: {
+        receiptId: receipt.id,
+        purchaseOrderLineId: poLine.id,
+        variantId,
+        warehouseId,
+        qtyReceived: new Prisma.Decimal('3'),
+        unitCost: new Prisma.Decimal('1'),
+      },
+    });
+    await db.purchaseOrderLine.update({
+      where: { id: poLine.id },
+      data: { qtyReceived: new Prisma.Decimal('3') },
+    });
+    await db.purchaseOrder.update({
+      where: { id: po.id },
+      data: { status: PurchaseOrderStatus.PARTIALLY_RECEIVED },
+    });
+
+    // Operator closes with reason.
+    await closePurchaseOrder(db, po.id, { reason: 'vendor cancelled' });
+
+    // Now simulate a receipt cancel: drop qtyReceived back to 0 and
+    // call applyComputedPoStatus. The recomputed status would normally
+    // be CONFIRMED (zero received), but the manual closeReason
+    // sentinel preserves CLOSED.
+    await db.purchaseOrderLine.update({
+      where: { id: poLine.id },
+      data: { qtyReceived: new Prisma.Decimal('0') },
+    });
+    const result = await db.$transaction((tx) =>
+      applyComputedPoStatus(tx, po.id),
+    );
+    expect(result.changed).toBe(false);
+    const after = await db.purchaseOrder.findUniqueOrThrow({ where: { id: po.id } });
+    expect(after.status).toBe(PurchaseOrderStatus.CLOSED);
+    expect(after.closeReason).toBe('vendor cancelled');
   });
 
   it('softDelete only allowed for DRAFT or CANCELLED', async () => {

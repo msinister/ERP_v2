@@ -148,6 +148,7 @@ export default async function PurchaseOrderDetailPage({
               expectedReceiveDate: po.expectedReceiveDate,
               currency: po.currency ?? 'USD',
               notes: po.notes,
+              closeReason: po.closeReason,
             }}
           />
 

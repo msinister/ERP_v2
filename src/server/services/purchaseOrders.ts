@@ -4,9 +4,11 @@ import { audit, type AuditContext } from '@/lib/audit/audit';
 import { getNextSequence } from '@/lib/sequences/sequences';
 import {
   cancelPurchaseOrderInputSchema,
+  closePurchaseOrderInputSchema,
   createPurchaseOrderInputSchema,
   updatePurchaseOrderInputSchema,
   type CancelPurchaseOrderInput,
+  type ClosePurchaseOrderInput,
   type CreatePurchaseOrderInput,
   type UpdatePurchaseOrderInput,
 } from '@/lib/validation/purchasing';
@@ -100,6 +102,20 @@ export async function applyComputedPoStatus(
   const next = await computePoStatus(tx, purchaseOrderId);
   if (next === po.status) {
     return { previous: po.status, next, changed: false };
+  }
+
+  // Manual-close survival: when an operator manually closed the PO
+  // with a reason (closeReason set), keep it CLOSED even if a
+  // downstream receipt cancel would otherwise drop the received total
+  // back to a partial state. The explicit operator intent outranks
+  // the recomputed status; only the close-with-reason path can leave
+  // CLOSED (and that's a separate, deliberate action).
+  if (
+    po.status === PurchaseOrderStatus.CLOSED &&
+    po.closeReason != null &&
+    next !== PurchaseOrderStatus.CLOSED
+  ) {
+    return { previous: po.status, next: po.status, changed: false };
   }
 
   const updateData: Prisma.PurchaseOrderUpdateInput = { status: next };
@@ -252,6 +268,57 @@ export async function confirmPurchaseOrder(
       before: { status: before.status },
       after: { status: after.status },
       ctx,
+    });
+    return after;
+  });
+}
+
+/**
+ * Manual close. Allowed on CONFIRMED + PARTIALLY_RECEIVED — both
+ * states where some receipts may have already posted but no further
+ * receipts are coming. Sets `closeReason` so applyComputedPoStatus
+ * won't auto-revert if a downstream receipt cancel later changes the
+ * received totals.
+ *
+ * Distinct from the auto-close path inside applyComputedPoStatus —
+ * that path fires when every line is fully received and leaves
+ * closeReason NULL. The two close paths share `status = CLOSED` and
+ * `closedAt`, but only the manual path stores a reason.
+ */
+export async function closePurchaseOrder(
+  db: PrismaClient,
+  id: string,
+  input: ClosePurchaseOrderInput,
+  ctx?: AuditContext,
+): Promise<PurchaseOrder> {
+  const data = closePurchaseOrderInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    const before = await tx.purchaseOrder.findUnique({ where: { id } });
+    if (!before) throw new Error(`PurchaseOrder not found: ${id}`);
+    if (
+      before.status !== PurchaseOrderStatus.CONFIRMED &&
+      before.status !== PurchaseOrderStatus.PARTIALLY_RECEIVED
+    ) {
+      throw new Error(
+        `Cannot close PurchaseOrder in status ${before.status} — only CONFIRMED or PARTIALLY_RECEIVED can be manually closed`,
+      );
+    }
+
+    const after = await tx.purchaseOrder.update({
+      where: { id },
+      data: {
+        status: PurchaseOrderStatus.CLOSED,
+        closedAt: new Date(),
+        closeReason: data.reason,
+      },
+    });
+    await audit(tx, {
+      action: AuditAction.STATUS_CHANGE,
+      entityType: 'PurchaseOrder',
+      entityId: id,
+      before: { status: before.status, closeReason: before.closeReason },
+      after: { status: after.status, closeReason: after.closeReason },
+      ctx: { ...ctx, reason: data.reason },
     });
     return after;
   });
