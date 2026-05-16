@@ -53,7 +53,15 @@ export default async function SalesOrderDetailPage({
           // synthesize a header row above each bundle group.
           bundleSourceProduct: { select: { id: true, sku: true, name: true } },
         },
-        orderBy: { createdAt: 'asc' },
+        // createdAt + id tiebreaker: bundle-explode emits N lines
+        // inside one transaction with effectively-identical
+        // createdAt timestamps, so a single-key sort on createdAt
+        // leaves Postgres free to swap their order between renders.
+        // After an inline edit fires router.refresh(), the resorted
+        // lines made the just-edited row appear to jump position.
+        // Cuids are time-prefixed, so id-asc gives a stable secondary
+        // ordering that matches the original insertion order.
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       },
       customer: {
         select: { id: true, code: true, name: true, salesRepId: true },
