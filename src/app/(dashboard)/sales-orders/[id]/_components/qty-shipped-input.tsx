@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertCircle, Check, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { Input } from '@/components/ui/input';
 import {
   AlertDialog,
@@ -138,7 +139,16 @@ export function QtyShippedInput({
     if (n > ordered) {
       // Over-shipping path. Branch on tenant policy.
       if (overShippingPolicy === 'BLOCK') {
-        setState({ kind: 'error', message: `Max ${qtyOrdered}` });
+        // Show the rejection loudly: red-highlight on the input
+        // (aria-invalid via the state), a toast so the operator
+        // can't miss it, and revert the visible value back to the
+        // previous saved value. Without the revert the input would
+        // keep the rejected number on screen — that read as a
+        // successful save to operators in the bug report.
+        const message = `Cannot ship more than ${qtyOrdered} — over-shipping is set to Block`;
+        setState({ kind: 'error', message });
+        setValue(savedRef.current);
+        toast.error(message);
         return;
       }
       if (overShippingPolicy === 'CONFIRM') {
