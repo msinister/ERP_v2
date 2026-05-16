@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ChevronLeft, MoreVertical, Pencil } from 'lucide-react';
+import { ChevronLeft, MoreVertical, Pencil, Wrench } from 'lucide-react';
 import type { Product } from '@/generated/tenant';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -10,13 +10,24 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ArchiveProductAction } from './archive-action';
 
-export function ProductHeader({ product }: { product: Product }) {
+export function ProductHeader({
+  product,
+  hasBom = false,
+}: {
+  product: Product;
+  hasBom?: boolean;
+}) {
   const archived = product.deletedAt != null;
   const status: 'active' | 'inactive' | 'archived' = archived
     ? 'archived'
     : product.active
       ? 'active'
       : 'inactive';
+  const bomEligible = product.type === 'SIMPLE' || product.type === 'ASSEMBLED';
+  // Build action surfaces only when the product has a BOM defined —
+  // /work-orders/new short-circuits without one anyway, but no point
+  // dangling a dead button.
+  const showBuild = !archived && bomEligible && hasBom;
 
   return (
     <div className="space-y-3">
@@ -54,6 +65,17 @@ export function ProductHeader({ product }: { product: Product }) {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {showBuild ? (
+            <Button
+              size="sm"
+              render={
+                <Link href={`/work-orders/new?productId=${product.id}`} />
+              }
+            >
+              <Wrench />
+              Build
+            </Button>
+          ) : null}
           {!archived ? (
             <Button
               variant="outline"
@@ -118,6 +140,8 @@ function formatType(t: string): string {
   switch (t) {
     case 'SIMPLE':
       return 'Simple';
+    case 'ASSEMBLED':
+      return 'Assembled';
     case 'DROP_SHIP':
       return 'Drop-ship';
     case 'SERVICE':

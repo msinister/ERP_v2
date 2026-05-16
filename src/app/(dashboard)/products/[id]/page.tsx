@@ -256,7 +256,7 @@ export default async function ProductDetailPage({
 
   return (
     <div className="space-y-6">
-      <ProductHeader product={product} />
+      <ProductHeader product={product} hasBom={bomLineRows.length > 0} />
 
       <Tabs defaultValue="overview">
         <TabsList variant="line" className="overflow-x-auto">

@@ -23,6 +23,14 @@ enum InventoryMovementType {
   TRANSFER_IN
   RECEIVE_REVERSE
   RMA_RETURN
+  // BUILD_CONSUME pulls component variants out of inventory during a
+  // Work Order completion (FIFO-cost like CONSUME). BUILD_PRODUCE adds
+  // the finished good back at the rolled-up build cost (component
+  // FIFO cost per unit + per-unit labor). One completion event emits
+  // N BUILD_CONSUME rows (one per component) + one BUILD_PRODUCE row
+  // for the finished variant.
+  BUILD_CONSUME
+  BUILD_PRODUCE
 }
 
 enum PurchaseOrderStatus {
@@ -30,6 +38,13 @@ enum PurchaseOrderStatus {
   CONFIRMED
   PARTIALLY_RECEIVED
   CLOSED
+  CANCELLED
+}
+
+enum WorkOrderStatus {
+  DRAFT
+  IN_PROGRESS
+  COMPLETED
   CANCELLED
 }
 
@@ -301,9 +316,10 @@ model Product {
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
-  variants ProductVariant[]
-  images   ProductImage[]
-  bomLines BomLine[]        @relation("ProductBomLines")
+  variants    ProductVariant[]
+  images      ProductImage[]
+  bomLines    BomLine[]        @relation("ProductBomLines")
+  workOrders  WorkOrder[]      @relation("WorkOrderProduct")
 
   @@index([category])
   @@index([brand])
@@ -374,6 +390,10 @@ model ProductVariant {
   vendorProducts     VendorProduct[]
   billLines          BillLine[]
   bomComponentUsage  BomLine[]               @relation("BomLineComponent")
+  // Built as the finished variant on a Work Order.
+  workOrdersBuilt    WorkOrder[]             @relation("WorkOrderFinishedVariant")
+  // Consumed as a component in a Work Order's snapshot BOM.
+  workOrderComponents WorkOrderComponent[]   @relation("WorkOrderComponentVariant")
 
   @@index([productId])
 }
@@ -433,6 +453,7 @@ model Warehouse {
   invoices           Invoice[]
   fifoLayers         FifoLayer[]
   users              User[]
+  workOrders         WorkOrder[]
   inventoryAccount   GlAccount?          @relation(fields: [inventoryAccountId], references: [id])
 }
 
@@ -526,6 +547,10 @@ model FifoLayer {
   // allocations over its lifetime (e.g., freight bill + later customs
   // bill). reverseLandedCostAllocation walks these to restore originals.
   landedCostAllocationLines LandedCostAllocationLine[]
+  // Back-relation: Work Order completion event that produced this
+  // layer (BUILD_PRODUCE path). Set only on layers created by
+  // completeWorkOrder; null for layers from receipts / returns.
+  workOrderCompletion       WorkOrderCompletion?
 
   @@index([variantId, warehouseId, receivedDate, id])
   @@index([deletedAt])
@@ -1789,6 +1814,8 @@ model JournalEntry {
   // (entityType='Invoice', description LIKE 'Late landed cost%') to
   // separate from regular COGS.
   landedCostAllocationLines LandedCostAllocationLine[]
+  // Back-relation: Work Order completion events that posted this JE.
+  workOrderCompletions      WorkOrderCompletion[]
 
   @@index([entityType, entityId])
   @@index([postedAt])
@@ -2263,3 +2290,105 @@ model PeriodReconciliationCheck {
 
   @@index([fiscalPeriodId, checkedAt])
 }
+
+// =============================================================================
+// Work Orders (Build / Assembly)
+// -----------------------------------------------------------------------------
+// A WorkOrder records the intent to build N finished units of a parent
+// product from its BOM components. The lifecycle is:
+//
+//   DRAFT  → IN_PROGRESS (manual Start; BOM + labor snapshot are frozen)
+//   IN_PROGRESS → IN_PROGRESS (each Complete event consumes components,
+//                              produces finished good FIFO layer, posts JE;
+//                              partial completions keep status IN_PROGRESS)
+//   IN_PROGRESS → COMPLETED  (when qtyCompleted == qtyToBuild)
+//   DRAFT or IN_PROGRESS → CANCELLED  (manual, reason required)
+//
+// BOM and labor are SNAPSHOTTED at create time (WorkOrderComponent +
+// WorkOrder.laborCost). Subsequent BOM edits on the parent product don't
+// affect open WOs.
+//
+// laborCost is per finished unit. Editable while DRAFT; frozen on Start.
+// =============================================================================
+model WorkOrder {
+  id           String          @id @default(cuid())
+  number       String          @unique // WO-YYYY-NNNNN via Sequence
+  productId    String
+  // The variant of the assembled product that the finished units land
+  // on. Required — every variant has its own FIFO layers + inventory.
+  variantId    String
+  warehouseId  String
+  qtyToBuild   Decimal         @db.Decimal(18, 5)
+  qtyCompleted Decimal         @default(0) @db.Decimal(18, 5)
+  // Per-unit labor cost rolled into each built unit's FIFO layer.
+  // Snapshotted from Product.bomLaborCost at WO creation; editable
+  // until status leaves DRAFT.
+  laborCost    Decimal?        @db.Decimal(18, 5)
+  status       WorkOrderStatus @default(DRAFT)
+  notes        String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  cancelledAt  DateTime?
+  cancelReason String?
+  createdById  String?
+  deletedAt    DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  product     Product               @relation("WorkOrderProduct", fields: [productId], references: [id])
+  variant     ProductVariant        @relation("WorkOrderFinishedVariant", fields: [variantId], references: [id])
+  warehouse   Warehouse             @relation(fields: [warehouseId], references: [id])
+  components  WorkOrderComponent[]
+  completions WorkOrderCompletion[]
+
+  @@index([productId])
+  @@index([status])
+  @@index([warehouseId])
+  @@index([deletedAt])
+}
+
+// BOM snapshot at WO creation. qtyRequiredPerUnit mirrors the source
+// BomLine; the total qty consumed at completion = qtyRequiredPerUnit *
+// qtyToComplete for that event. Snapshotting keeps the build spec
+// stable even if the parent product's live BOM changes mid-WO.
+model WorkOrderComponent {
+  id                 String   @id @default(cuid())
+  workOrderId        String
+  componentVariantId String
+  qtyRequiredPerUnit Decimal  @db.Decimal(18, 5)
+  sortOrder          Int      @default(0)
+  notes              String?
+  createdAt          DateTime @default(now())
+
+  workOrder        WorkOrder      @relation(fields: [workOrderId], references: [id])
+  componentVariant ProductVariant @relation("WorkOrderComponentVariant", fields: [componentVariantId], references: [id])
+
+  @@index([workOrderId, sortOrder])
+  @@index([componentVariantId])
+}
+
+// One row per Complete event. Partial builds create N rows over the
+// life of the WO; each captures the qty completed, the per-unit FIFO
+// cost rolled up at that moment, the total labor expense booked, the
+// produced FIFO layer (1:1), and the posted JE. Audit-friendly trail
+// of "I built 3 on day 1, then 4 on day 5".
+model WorkOrderCompletion {
+  id              String   @id @default(cuid())
+  workOrderId     String
+  qtyCompleted    Decimal  @db.Decimal(18, 5)
+  unitCost        Decimal  @db.Decimal(18, 5)
+  totalLaborCost  Decimal  @db.Decimal(18, 5)
+  // 1:1 with the BUILD_PRODUCE FifoLayer this event created. Unique
+  // both directions so a layer is owned by exactly one completion.
+  producedLayerId String?  @unique
+  journalEntryId  String?
+  createdById     String?
+  createdAt       DateTime @default(now())
+
+  workOrder     WorkOrder     @relation(fields: [workOrderId], references: [id])
+  producedLayer FifoLayer?    @relation(fields: [producedLayerId], references: [id])
+  journalEntry  JournalEntry? @relation(fields: [journalEntryId], references: [id])
+
+  @@index([workOrderId])
+}
+
