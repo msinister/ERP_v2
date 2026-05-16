@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { Prisma, PurchaseOrderStatus, ReceiptStatus } from '@/generated/tenant';
 import type { PrismaClient } from '@/generated/tenant';
 import {
+  addPurchaseOrderLines,
   applyComputedPoStatus,
   cancelPurchaseOrder,
   closePurchaseOrder,
@@ -13,6 +14,7 @@ import {
   reopenPurchaseOrder,
   softDeletePurchaseOrder,
   updatePurchaseOrder,
+  updatePurchaseOrderLineFields,
 } from '@/server/services/purchaseOrders';
 import { hasTenantDb, makeClient } from '../helpers/db';
 
@@ -573,5 +575,200 @@ suite('PurchaseOrder service', () => {
 
     const healed = await db.purchaseOrderLine.findUnique({ where: { id: poLine.id } });
     expect(healed!.qtyReceived.toString()).toBe(new Prisma.Decimal('0').toString());
+  });
+
+  // ---------------------------------------------------------------------------
+  // updatePurchaseOrderLineFields — inline per-line edit
+  // ---------------------------------------------------------------------------
+
+  async function makePartialReceivedPo() {
+    const po = await createPurchaseOrder(db, {
+      vendorId,
+      lines: [lineInput('10', '1')],
+    });
+    await confirmPurchaseOrder(db, po.id);
+    const poLine = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po.id },
+    });
+    const receipt = await db.receipt.create({
+      data: {
+        number: `TEST-RCPT-LINEEDIT-${Date.now()}-${Math.random()}`,
+        vendorId,
+        warehouseId,
+        status: ReceiptStatus.POSTED,
+        receivedAt: new Date(),
+      },
+    });
+    await db.receiptLine.create({
+      data: {
+        receiptId: receipt.id,
+        purchaseOrderLineId: poLine.id,
+        variantId,
+        warehouseId,
+        qtyReceived: new Prisma.Decimal('3'),
+        unitCost: new Prisma.Decimal('1'),
+      },
+    });
+    await db.purchaseOrderLine.update({
+      where: { id: poLine.id },
+      data: { qtyReceived: new Prisma.Decimal('3') },
+    });
+    await db.purchaseOrder.update({
+      where: { id: po.id },
+      data: { status: PurchaseOrderStatus.PARTIALLY_RECEIVED },
+    });
+    return { po, poLine };
+  }
+
+  it('updatePurchaseOrderLineFields: unit cost update on CONFIRMED', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput('10', '1')] });
+    await confirmPurchaseOrder(db, po.id);
+    const line = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po.id },
+    });
+    const after = await updatePurchaseOrderLineFields(db, po.id, line.id, {
+      unitCost: '2.5',
+    });
+    expect(after.unitCost.toString()).toBe(new Prisma.Decimal('2.5').toString());
+  });
+
+  it('updatePurchaseOrderLineFields: notes + vendor SKU + MPN clear via null', async () => {
+    const { po, poLine } = await makePartialReceivedPo();
+    const after = await updatePurchaseOrderLineFields(db, po.id, poLine.id, {
+      notes: 'vendor billed differently',
+      vendorSku: 'V-123',
+      manufacturerPartNumber: null,
+    });
+    expect(after.notes).toBe('vendor billed differently');
+    expect(after.vendorSku).toBe('V-123');
+    expect(after.manufacturerPartNumber).toBeNull();
+  });
+
+  it('updatePurchaseOrderLineFields: rejects on DRAFT (use the full Edit form instead)', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput('10', '1')] });
+    const line = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po.id },
+    });
+    await expect(
+      updatePurchaseOrderLineFields(db, po.id, line.id, { unitCost: '2' }),
+    ).rejects.toThrow(/Cannot edit line fields while PurchaseOrder is in status DRAFT/);
+  });
+
+  it('updatePurchaseOrderLineFields: rejects on CLOSED and CANCELLED', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput('10', '1')] });
+    await confirmPurchaseOrder(db, po.id);
+    await closePurchaseOrder(db, po.id, { reason: 'short ship' });
+    const line = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po.id },
+    });
+    await expect(
+      updatePurchaseOrderLineFields(db, po.id, line.id, { unitCost: '2' }),
+    ).rejects.toThrow(/Cannot edit line fields while PurchaseOrder is in status CLOSED/);
+
+    const po2 = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await cancelPurchaseOrder(db, po2.id, { reason: 'oops' });
+    const line2 = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: po2.id },
+    });
+    await expect(
+      updatePurchaseOrderLineFields(db, po2.id, line2.id, { unitCost: '2' }),
+    ).rejects.toThrow(/Cannot edit line fields while PurchaseOrder is in status CANCELLED/);
+  });
+
+  it('updatePurchaseOrderLineFields: qtyOrdered floor — cannot reduce below qtyReceived', async () => {
+    const { po, poLine } = await makePartialReceivedPo();
+    // qtyReceived is 3 — try to drop to 2.
+    await expect(
+      updatePurchaseOrderLineFields(db, po.id, poLine.id, { qtyOrdered: '2' }),
+    ).rejects.toThrow(/Cannot reduce qtyOrdered/);
+    // Boundary: equal to qtyReceived is allowed.
+    const after = await updatePurchaseOrderLineFields(db, po.id, poLine.id, {
+      qtyOrdered: '3',
+    });
+    expect(after.qtyOrdered.toString()).toBe(new Prisma.Decimal('3').toString());
+  });
+
+  it('updatePurchaseOrderLineFields: lowering qtyOrdered to qtyReceived auto-closes via applyComputedPoStatus', async () => {
+    const { po, poLine } = await makePartialReceivedPo();
+    // PO is PARTIALLY_RECEIVED with line 3/10. Drop ordered to 3 →
+    // every line fully received → status should flip to CLOSED.
+    await updatePurchaseOrderLineFields(db, po.id, poLine.id, { qtyOrdered: '3' });
+    const after = await db.purchaseOrder.findUniqueOrThrow({ where: { id: po.id } });
+    expect(after.status).toBe(PurchaseOrderStatus.CLOSED);
+    // No manual closeReason — this is the auto-close path.
+    expect(after.closeReason).toBeNull();
+  });
+
+  it('updatePurchaseOrderLineFields: line belonging to a different PO is rejected', async () => {
+    const poA = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await confirmPurchaseOrder(db, poA.id);
+    const lineA = await db.purchaseOrderLine.findFirstOrThrow({
+      where: { purchaseOrderId: poA.id },
+    });
+    const poB = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await confirmPurchaseOrder(db, poB.id);
+
+    await expect(
+      updatePurchaseOrderLineFields(db, poB.id, lineA.id, { unitCost: '2' }),
+    ).rejects.toThrow(/does not belong to PurchaseOrder/);
+  });
+
+  // ---------------------------------------------------------------------------
+  // addPurchaseOrderLines
+  // ---------------------------------------------------------------------------
+
+  it('addPurchaseOrderLines: CONFIRMED → appends new lines at qtyReceived=0, status unchanged', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput('5', '1')] });
+    await confirmPurchaseOrder(db, po.id);
+
+    const after = await addPurchaseOrderLines(db, po.id, {
+      lines: [lineInput('3', '2'), lineInput('1', '4')],
+    });
+    expect(after.status).toBe(PurchaseOrderStatus.CONFIRMED);
+    expect(after.lines).toHaveLength(3);
+    const added = after.lines.filter(
+      (l) => !l.qtyOrdered.equals(new Prisma.Decimal('5')),
+    );
+    expect(added).toHaveLength(2);
+    expect(added.every((l) => l.qtyReceived.equals(new Prisma.Decimal('0')))).toBe(true);
+  });
+
+  it('addPurchaseOrderLines: PARTIALLY_RECEIVED → appends, status stays PR', async () => {
+    const { po } = await makePartialReceivedPo();
+    const after = await addPurchaseOrderLines(db, po.id, {
+      lines: [lineInput('7', '1')],
+    });
+    expect(after.status).toBe(PurchaseOrderStatus.PARTIALLY_RECEIVED);
+    expect(after.lines).toHaveLength(2);
+  });
+
+  it('addPurchaseOrderLines: rejects on DRAFT (use Edit form lines-replace)', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await expect(
+      addPurchaseOrderLines(db, po.id, { lines: [lineInput()] }),
+    ).rejects.toThrow(/Cannot add lines to PurchaseOrder in status DRAFT/);
+  });
+
+  it('addPurchaseOrderLines: rejects on CLOSED and CANCELLED', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await confirmPurchaseOrder(db, po.id);
+    await closePurchaseOrder(db, po.id, { reason: 'closed' });
+    await expect(
+      addPurchaseOrderLines(db, po.id, { lines: [lineInput()] }),
+    ).rejects.toThrow(/Cannot add lines to PurchaseOrder in status CLOSED/);
+
+    const po2 = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await cancelPurchaseOrder(db, po2.id, { reason: 'oops' });
+    await expect(
+      addPurchaseOrderLines(db, po2.id, { lines: [lineInput()] }),
+    ).rejects.toThrow(/Cannot add lines to PurchaseOrder in status CANCELLED/);
+  });
+
+  it('addPurchaseOrderLines: empty lines array is rejected at the validator', async () => {
+    const po = await createPurchaseOrder(db, { vendorId, lines: [lineInput()] });
+    await confirmPurchaseOrder(db, po.id);
+    await expect(
+      addPurchaseOrderLines(db, po.id, { lines: [] }),
+    ).rejects.toThrow();
   });
 });

@@ -3,16 +3,20 @@ import type { PrismaClient, PurchaseOrder, PurchaseOrderLine } from '@/generated
 import { audit, type AuditContext } from '@/lib/audit/audit';
 import { getNextSequence } from '@/lib/sequences/sequences';
 import {
+  addPurchaseOrderLinesInputSchema,
   cancelPurchaseOrderInputSchema,
   closePurchaseOrderInputSchema,
   createPurchaseOrderInputSchema,
   reopenPurchaseOrderInputSchema,
   updatePurchaseOrderInputSchema,
+  updatePurchaseOrderLineFieldsInputSchema,
+  type AddPurchaseOrderLinesInput,
   type CancelPurchaseOrderInput,
   type ClosePurchaseOrderInput,
   type CreatePurchaseOrderInput,
   type ReopenPurchaseOrderInput,
   type UpdatePurchaseOrderInput,
+  type UpdatePurchaseOrderLineFieldsInput,
 } from '@/lib/validation/purchasing';
 
 const PO_SEQUENCE_NAME = 'purchase_order';
@@ -578,4 +582,201 @@ export async function listPurchaseOrdersPaged(
     db.purchaseOrder.count({ where }),
   ]);
   return { rows, total };
+}
+
+/**
+ * Inline per-field edit on a single PO line. Status gate: CONFIRMED +
+ * PARTIALLY_RECEIVED. DRAFT continues to use the wholesale Edit form;
+ * CLOSED + CANCELLED are rejected.
+ *
+ * qtyOrdered enforces a floor of qtyReceived — reducing below would
+ * leave the line in a logical inconsistency (more received than
+ * ordered).
+ *
+ * unitCost edits do NOT touch FIFO / already-posted ReceiptLines —
+ * those snapshot the cost at receipt time. The PO line's unitCost is
+ * a forward-looking hint that drives future receipt UI defaults +
+ * reporting.
+ *
+ * After the update, applyComputedPoStatus is invoked so that lowering
+ * qtyOrdered to exactly match qtyReceived on the last unfilled line
+ * can auto-close the PO via the normal compute path.
+ */
+export async function updatePurchaseOrderLineFields(
+  db: PrismaClient,
+  purchaseOrderId: string,
+  lineId: string,
+  input: UpdatePurchaseOrderLineFieldsInput,
+  ctx?: AuditContext,
+): Promise<PurchaseOrderLine> {
+  const data = updatePurchaseOrderLineFieldsInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    const line = await tx.purchaseOrderLine.findUnique({
+      where: { id: lineId },
+      include: { purchaseOrder: true },
+    });
+    if (!line || line.deletedAt != null) {
+      throw new Error(`PurchaseOrderLine not found: ${lineId}`);
+    }
+    if (line.purchaseOrder.id !== purchaseOrderId) {
+      throw new Error(
+        `Line ${lineId} does not belong to PurchaseOrder ${purchaseOrderId}`,
+      );
+    }
+    if (
+      line.purchaseOrder.status !== PurchaseOrderStatus.CONFIRMED &&
+      line.purchaseOrder.status !== PurchaseOrderStatus.PARTIALLY_RECEIVED
+    ) {
+      throw new Error(
+        `Cannot edit line fields while PurchaseOrder is in status ${line.purchaseOrder.status}`,
+      );
+    }
+
+    const updateData: Prisma.PurchaseOrderLineUpdateInput = {};
+
+    if (data.qtyOrdered !== undefined) {
+      const next = new Prisma.Decimal(data.qtyOrdered);
+      if (next.lessThan(line.qtyReceived)) {
+        throw new Error(
+          `Cannot reduce qtyOrdered (${next.toString()}) below qtyReceived (${line.qtyReceived.toString()}) — receive history would be inconsistent`,
+        );
+      }
+      if (!next.equals(line.qtyOrdered)) {
+        updateData.qtyOrdered = next;
+      }
+    }
+    if (data.unitCost !== undefined) {
+      const next = new Prisma.Decimal(data.unitCost);
+      if (!next.equals(line.unitCost)) {
+        updateData.unitCost = next;
+      }
+    }
+    if (data.vendorSku !== undefined) {
+      updateData.vendorSku = data.vendorSku;
+    }
+    if (data.manufacturerPartNumber !== undefined) {
+      updateData.manufacturerPartNumber = data.manufacturerPartNumber;
+    }
+    if (data.notes !== undefined) {
+      updateData.notes = data.notes;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      // No-op edit (operator typed the same value back) — return
+      // existing line without an audit row. The validator already
+      // enforces a non-empty payload.
+      return line;
+    }
+
+    const before = {
+      qtyOrdered: line.qtyOrdered,
+      unitCost: line.unitCost,
+      vendorSku: line.vendorSku,
+      manufacturerPartNumber: line.manufacturerPartNumber,
+      notes: line.notes,
+    };
+
+    const after = await tx.purchaseOrderLine.update({
+      where: { id: lineId },
+      data: updateData,
+    });
+
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'PurchaseOrderLine',
+      entityId: lineId,
+      before,
+      after: {
+        qtyOrdered: after.qtyOrdered,
+        unitCost: after.unitCost,
+        vendorSku: after.vendorSku,
+        manufacturerPartNumber: after.manufacturerPartNumber,
+        notes: after.notes,
+      },
+      ctx,
+    });
+
+    // qtyOrdered changes can push the PO across the auto-close
+    // threshold (every line fully received). Run the same recompute
+    // hook receipts use, so the state stays consistent.
+    if (updateData.qtyOrdered !== undefined) {
+      await applyComputedPoStatus(tx, purchaseOrderId);
+    }
+
+    return after;
+  });
+}
+
+/**
+ * Add one or more lines to an existing PO. Status gate: CONFIRMED +
+ * PARTIALLY_RECEIVED. DRAFT continues to use the wholesale Edit form
+ * (which already supports adding lines via the lines-replace path);
+ * CLOSED + CANCELLED are rejected.
+ *
+ * New lines start at qtyReceived = 0 (schema default). No status flip
+ * needed: adding unreceived lines to CONFIRMED stays CONFIRMED, and
+ * adding to PARTIALLY_RECEIVED stays PARTIALLY_RECEIVED. The
+ * computePoStatus formula handles both cases (more lines to receive
+ * keeps the PO in its current pre-close state).
+ */
+export async function addPurchaseOrderLines(
+  db: PrismaClient,
+  purchaseOrderId: string,
+  input: AddPurchaseOrderLinesInput,
+  ctx?: AuditContext,
+): Promise<PurchaseOrder & { lines: PurchaseOrderLine[] }> {
+  const data = addPurchaseOrderLinesInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    const before = await tx.purchaseOrder.findUnique({
+      where: { id: purchaseOrderId },
+      include: { lines: { where: { deletedAt: null } } },
+    });
+    if (!before) {
+      throw new Error(`PurchaseOrder not found: ${purchaseOrderId}`);
+    }
+    if (
+      before.status !== PurchaseOrderStatus.CONFIRMED &&
+      before.status !== PurchaseOrderStatus.PARTIALLY_RECEIVED
+    ) {
+      throw new Error(
+        `Cannot add lines to PurchaseOrder in status ${before.status} — only CONFIRMED or PARTIALLY_RECEIVED`,
+      );
+    }
+
+    const createdLines: { id: string }[] = [];
+    for (const l of data.lines) {
+      const created = await tx.purchaseOrderLine.create({
+        data: {
+          purchaseOrderId,
+          variantId: l.variantId,
+          warehouseId: l.warehouseId,
+          qtyOrdered: new Prisma.Decimal(l.qtyOrdered),
+          unitCost: new Prisma.Decimal(l.unitCost),
+          vendorSku: l.vendorSku,
+          manufacturerPartNumber: l.manufacturerPartNumber,
+          notes: l.notes,
+        },
+      });
+      createdLines.push({ id: created.id });
+    }
+
+    const after = await tx.purchaseOrder.findUniqueOrThrow({
+      where: { id: purchaseOrderId },
+      include: { lines: { where: { deletedAt: null } } },
+    });
+
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'PurchaseOrder',
+      entityId: purchaseOrderId,
+      before: { lineCount: before.lines.length },
+      after: {
+        lineCount: after.lines.length,
+        addedLineIds: createdLines.map((l) => l.id),
+      },
+      ctx,
+    });
+
+    return after;
+  });
 }

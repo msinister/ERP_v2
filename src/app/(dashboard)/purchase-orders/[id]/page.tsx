@@ -127,6 +127,8 @@ export default async function PurchaseOrderDetailPage({
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <PurchaseOrderLinesTable
+            purchaseOrderId={po.id}
+            status={po.status}
             lines={po.lines.map((l) => ({
               id: l.id,
               sku: l.variant.sku,

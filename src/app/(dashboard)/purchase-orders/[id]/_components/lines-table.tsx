@@ -1,5 +1,8 @@
+import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Prisma } from '@/generated/tenant';
+import { Plus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -11,6 +14,13 @@ import {
 import { formatCurrency } from '@/lib/format';
 import { ProductThumbnail } from '@/components/shared/product-thumbnail';
 import { ProductImageToggle } from '@/components/shared/product-image-toggle';
+import {
+  EditableLineNotesCell,
+  EditableMpnCell,
+  EditableQtyOrderedCell,
+  EditableUnitCostCell,
+  EditableVendorSkuCell,
+} from './editable-line-cells';
 
 export type PurchaseOrderLineRow = {
   id: string;
@@ -28,26 +38,57 @@ export type PurchaseOrderLineRow = {
 };
 
 export function PurchaseOrderLinesTable({
+  purchaseOrderId,
+  status,
   lines,
 }: {
+  purchaseOrderId: string;
+  status: string;
   lines: PurchaseOrderLineRow[];
 }) {
+  const editable = status === 'CONFIRMED' || status === 'PARTIALLY_RECEIVED';
+  // "+ Add lines" button mirrors the status window the service gates
+  // against (CONFIRMED + PARTIALLY_RECEIVED). DRAFT uses the full Edit
+  // form; CLOSED + CANCELLED don't accept additions.
+  const canAddLines = editable;
+
+  const Header = (
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex-1" />
+      <div className="flex items-center gap-2">
+        <ProductImageToggle />
+        {canAddLines ? (
+          <Button
+            variant="outline"
+            size="sm"
+            render={
+              <Link href={`/purchase-orders/${purchaseOrderId}/add-lines`} />
+            }
+          >
+            <Plus />
+            Add lines
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+
   if (lines.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
-        No lines on this PO.
+      <div className="space-y-3">
+        {Header}
+        <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
+          No lines on this PO.
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
-        <ProductImageToggle />
-      </div>
+      {Header}
 
-      {/* Mobile card stack — visible below md. Drops the horizontal
-          scroll the table would otherwise force. */}
+      {/* Mobile card stack — visible below md. */}
       <div className="space-y-3 md:hidden">
         {lines.map((l) => (
           <div
@@ -64,16 +105,20 @@ export function PurchaseOrderLinesTable({
               <div className="min-w-0 flex-1">
                 <div className="font-mono text-xs text-muted-foreground">
                   {l.sku}
-                  {l.vendorSku ? (
-                    <span className="ml-2 text-[10px] uppercase tracking-wide">
-                      vendor: {l.vendorSku}
-                    </span>
-                  ) : null}
-                  {l.manufacturerPartNumber ? (
-                    <span className="ml-2 text-[10px] uppercase tracking-wide">
-                      mpn: {l.manufacturerPartNumber}
-                    </span>
-                  ) : null}
+                  <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
+                    <EditableVendorSkuCell
+                      purchaseOrderId={purchaseOrderId}
+                      lineId={l.id}
+                      vendorSku={l.vendorSku}
+                      editable={editable}
+                    />
+                    <EditableMpnCell
+                      purchaseOrderId={purchaseOrderId}
+                      lineId={l.id}
+                      manufacturerPartNumber={l.manufacturerPartNumber}
+                      editable={editable}
+                    />
+                  </div>
                 </div>
                 <div className="font-medium">{l.productName}</div>
                 {l.variantName ? (
@@ -85,7 +130,15 @@ export function PurchaseOrderLinesTable({
             </div>
             <div className="grid grid-cols-3 gap-3 text-sm">
               <Stat label="Qty">
-                <div className="tabular-nums">{formatQty(l.qtyOrdered)}</div>
+                <div className="tabular-nums">
+                  <EditableQtyOrderedCell
+                    purchaseOrderId={purchaseOrderId}
+                    lineId={l.id}
+                    qtyOrdered={l.qtyOrdered.toString()}
+                    qtyReceived={l.qtyReceived.toString()}
+                    editable={editable}
+                  />
+                </div>
                 <ReceivedHint
                   ordered={l.qtyOrdered}
                   received={l.qtyReceived}
@@ -93,7 +146,12 @@ export function PurchaseOrderLinesTable({
               </Stat>
               <Stat label="Unit cost">
                 <div className="tabular-nums">
-                  {formatCurrency(l.unitCost)}
+                  <EditableUnitCostCell
+                    purchaseOrderId={purchaseOrderId}
+                    lineId={l.id}
+                    unitCost={l.unitCost.toString()}
+                    editable={editable}
+                  />
                 </div>
               </Stat>
               <Stat label="Ext.">
@@ -110,11 +168,12 @@ export function PurchaseOrderLinesTable({
                 {l.warehouseCode}
               </span>
             </div>
-            {l.notes ? (
-              <div className="text-xs italic text-muted-foreground">
-                “{l.notes}”
-              </div>
-            ) : null}
+            <EditableLineNotesCell
+              purchaseOrderId={purchaseOrderId}
+              lineId={l.id}
+              notes={l.notes}
+              editable={editable}
+            />
           </div>
         ))}
       </div>
@@ -146,16 +205,20 @@ export function PurchaseOrderLinesTable({
                 </TableCell>
                 <TableCell className="font-mono text-xs text-muted-foreground">
                   {l.sku}
-                  {l.vendorSku ? (
-                    <div className="mt-0.5 text-[10px] uppercase tracking-wide">
-                      vendor: {l.vendorSku}
-                    </div>
-                  ) : null}
-                  {l.manufacturerPartNumber ? (
-                    <div className="text-[10px] uppercase tracking-wide">
-                      mpn: {l.manufacturerPartNumber}
-                    </div>
-                  ) : null}
+                  <div className="mt-0.5 space-y-0.5">
+                    <EditableVendorSkuCell
+                      purchaseOrderId={purchaseOrderId}
+                      lineId={l.id}
+                      vendorSku={l.vendorSku}
+                      editable={editable}
+                    />
+                    <EditableMpnCell
+                      purchaseOrderId={purchaseOrderId}
+                      lineId={l.id}
+                      manufacturerPartNumber={l.manufacturerPartNumber}
+                      editable={editable}
+                    />
+                  </div>
                 </TableCell>
                 <TableCell>
                   <div className="font-medium">{l.productName}</div>
@@ -164,24 +227,38 @@ export function PurchaseOrderLinesTable({
                       {l.variantName}
                     </div>
                   ) : null}
-                  {l.notes ? (
-                    <div className="mt-1 text-xs italic text-muted-foreground">
-                      “{l.notes}”
-                    </div>
-                  ) : null}
+                  <div className="mt-1">
+                    <EditableLineNotesCell
+                      purchaseOrderId={purchaseOrderId}
+                      lineId={l.id}
+                      notes={l.notes}
+                      editable={editable}
+                    />
+                  </div>
                 </TableCell>
                 <TableCell className="font-mono text-xs text-muted-foreground">
                   {l.warehouseCode}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  <div>{formatQty(l.qtyOrdered)}</div>
+                  <EditableQtyOrderedCell
+                    purchaseOrderId={purchaseOrderId}
+                    lineId={l.id}
+                    qtyOrdered={l.qtyOrdered.toString()}
+                    qtyReceived={l.qtyReceived.toString()}
+                    editable={editable}
+                  />
                   <ReceivedHint
                     ordered={l.qtyOrdered}
                     received={l.qtyReceived}
                   />
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
-                  {formatCurrency(l.unitCost)}
+                  <EditableUnitCostCell
+                    purchaseOrderId={purchaseOrderId}
+                    lineId={l.id}
+                    unitCost={l.unitCost.toString()}
+                    editable={editable}
+                  />
                 </TableCell>
                 <TableCell className="text-right tabular-nums font-medium">
                   {formatCurrency(l.qtyOrdered.times(l.unitCost))}
@@ -226,8 +303,6 @@ function ReceivedHint({
   received: Prisma.Decimal;
 }) {
   if (received.lessThanOrEqualTo(0)) return null;
-  // Over-receive is allowed-with-warning per spec — flag it visually
-  // so the operator sees it on the PO without digging into receipts.
   const overReceived = received.greaterThan(ordered);
   const label = overReceived
     ? `over-recv ${formatQty(received)}`
