@@ -115,10 +115,11 @@ export async function setProductBom(
     }
     if (
       product.type !== ProductType.SIMPLE &&
-      product.type !== ProductType.ASSEMBLED
+      product.type !== ProductType.ASSEMBLED &&
+      product.type !== ProductType.BUNDLE
     ) {
       throw new Error(
-        `Cannot set BOM on Product with type ${product.type} — only SIMPLE and ASSEMBLED products support BOMs`,
+        `Cannot set BOM on Product with type ${product.type} — only SIMPLE, ASSEMBLED, and BUNDLE products support BOMs`,
       );
     }
 

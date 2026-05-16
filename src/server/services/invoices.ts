@@ -130,6 +130,10 @@ export async function generateInvoiceForClosedSOTx(
         discountPercent: sol.discountPercent,
         discountAmount: sol.discountAmount,
         lineTotal,
+        // Carry bundle grouping forward so future PDF / portal work
+        // can render the bundle header above grouped invoice lines.
+        bundleGroupId: sol.bundleGroupId,
+        bundleSourceProductId: sol.bundleSourceProductId,
       },
     };
   });

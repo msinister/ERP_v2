@@ -13,6 +13,7 @@ enum ProductType {
   DROP_SHIP
   SERVICE
   ASSEMBLED
+  BUNDLE
 }
 
 enum InventoryMovementType {
@@ -235,6 +236,11 @@ enum PriceResolutionRule {
   TIER_DISCOUNT
   PROMO
   COST_PLUS
+  // Set on SalesOrderLine rows produced by exploding a BUNDLE product.
+  // The unitPrice is computed by the bundle allocator (basePrice × qty
+  // weighting against the bundle total). An inline price edit flips
+  // this to MANUAL_OVERRIDE via updateSalesOrderLineFields.
+  BUNDLE_ALLOCATED
 }
 
 // Allocation method for late landed cost (freight, customs, handling)
@@ -316,10 +322,14 @@ model Product {
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
-  variants    ProductVariant[]
-  images      ProductImage[]
-  bomLines    BomLine[]        @relation("ProductBomLines")
-  workOrders  WorkOrder[]      @relation("WorkOrderProduct")
+  variants                 ProductVariant[]
+  images                   ProductImage[]
+  bomLines                 BomLine[]        @relation("ProductBomLines")
+  workOrders               WorkOrder[]      @relation("WorkOrderProduct")
+  // Back-relations for the bundle-explode flow: SalesOrderLine and
+  // InvoiceLine rows that point at this BUNDLE product as their source.
+  bundleSourceSalesOrderLines SalesOrderLine[] @relation("BundleSourceSalesOrderLines")
+  bundleSourceInvoiceLines    InvoiceLine[]    @relation("BundleSourceInvoiceLines")
 
   @@index([category])
   @@index([brand])
@@ -1013,18 +1023,28 @@ model SalesOrderLine {
   // SOLine → InventoryMovement → FifoConsumption to compute COGS at
   // invoice time. Nullable for legacy / pre-close rows.
   inventoryMovementId String?             @unique
+  // Bundle grouping: when a BUNDLE product is added to an SO it
+  // explodes into N component lines that all share the same
+  // bundleGroupId + bundleSourceProductId. The bundle itself never
+  // becomes a SalesOrderLine — components carry the data.
+  // bundleSourceProductId points at the BUNDLE product so the UI can
+  // render a synthetic header ("Bundle: NK-COMBO-3") above the group.
+  bundleGroupId         String?
+  bundleSourceProductId String?
   deletedAt           DateTime?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
-  salesOrder        SalesOrder         @relation(fields: [salesOrderId], references: [id])
-  variant           ProductVariant     @relation(fields: [variantId], references: [id])
-  warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
-  inventoryMovement InventoryMovement? @relation(fields: [inventoryMovementId], references: [id])
+  salesOrder          SalesOrder         @relation(fields: [salesOrderId], references: [id])
+  variant             ProductVariant     @relation(fields: [variantId], references: [id])
+  warehouse           Warehouse          @relation(fields: [warehouseId], references: [id])
+  inventoryMovement   InventoryMovement? @relation(fields: [inventoryMovementId], references: [id])
+  bundleSourceProduct Product?           @relation("BundleSourceSalesOrderLines", fields: [bundleSourceProductId], references: [id])
 
   @@index([salesOrderId])
   @@index([variantId, warehouseId])
   @@index([deletedAt])
+  @@index([bundleGroupId])
 }
 
 // Admin-managed list. Seeded with Net 30, COD, Prepay, 50% deposit,
@@ -1508,17 +1528,24 @@ model InvoiceLine {
   discountAmount   Decimal?  @db.Decimal(18, 5)
   lineTotal        Decimal   @db.Decimal(18, 5)
   qtyReturned      Decimal   @default(0) @db.Decimal(18, 5)
+  // Bundle grouping, copied from SalesOrderLine at invoice generation
+  // time. The PDF template doesn't render bundle headers yet (deferred
+  // slice) but the data is preserved so it can.
+  bundleGroupId         String?
+  bundleSourceProductId String?
   deletedAt        DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  invoice         Invoice          @relation(fields: [invoiceId], references: [id])
-  variant         ProductVariant   @relation(fields: [variantId], references: [id])
-  rmaLines        RmaLine[]
-  creditMemoLines CreditMemoLine[]
+  invoice             Invoice          @relation(fields: [invoiceId], references: [id])
+  variant             ProductVariant   @relation(fields: [variantId], references: [id])
+  rmaLines            RmaLine[]
+  creditMemoLines     CreditMemoLine[]
+  bundleSourceProduct Product?         @relation("BundleSourceInvoiceLines", fields: [bundleSourceProductId], references: [id])
 
   @@index([invoiceId])
   @@index([variantId])
+  @@index([bundleGroupId])
 }
 
 // A money-receiving event. One Payment can be split across many

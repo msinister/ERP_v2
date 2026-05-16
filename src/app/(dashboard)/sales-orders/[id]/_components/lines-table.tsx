@@ -36,6 +36,9 @@ export type SalesOrderLineRow = {
   customerNote: string | null;
   internalNote: string | null;
   imageUrl: string | null;
+  bundleGroupId: string | null;
+  bundleSourceSku: string | null;
+  bundleSourceName: string | null;
 };
 
 export function SalesOrderLinesTable({
@@ -56,6 +59,43 @@ export function SalesOrderLinesTable({
   }
 
   const isClosed = status === 'CLOSED';
+  // Bundle group totals — used by the synthetic header rows. Bundle
+  // header rows aren't real SalesOrderLines; they're derived from
+  // consecutive lines sharing a bundleGroupId.
+  const groupTotals = new Map<string, Prisma.Decimal>();
+  for (const l of lines) {
+    if (l.bundleGroupId == null) continue;
+    const lt = computeLineTotal(l, isClosed);
+    const acc = groupTotals.get(l.bundleGroupId) ?? new Prisma.Decimal(0);
+    groupTotals.set(l.bundleGroupId, acc.plus(lt));
+  }
+  // displayItems interleaves bundle header rows with regular line
+  // items, in the original order. Walks lines once; emits a header
+  // each time the bundleGroupId changes to a non-null value.
+  type DisplayItem =
+    | {
+        kind: 'header';
+        groupId: string;
+        bundleSku: string | null;
+        bundleName: string | null;
+        total: Prisma.Decimal;
+      }
+    | { kind: 'line'; line: SalesOrderLineRow };
+  const displayItems: DisplayItem[] = [];
+  let lastGroupId: string | null = null;
+  for (const l of lines) {
+    if (l.bundleGroupId != null && l.bundleGroupId !== lastGroupId) {
+      displayItems.push({
+        kind: 'header',
+        groupId: l.bundleGroupId,
+        bundleSku: l.bundleSourceSku,
+        bundleName: l.bundleSourceName,
+        total: groupTotals.get(l.bundleGroupId) ?? new Prisma.Decimal(0),
+      });
+    }
+    lastGroupId = l.bundleGroupId;
+    displayItems.push({ kind: 'line', line: l });
+  }
   // CONFIRMED + DISPATCHED are the editable window for qtyShipped —
   // CONFIRMED catches pickup orders that close without ever entering
   // DISPATCHED. See updateSalesOrderLineQtyShipped for the matching
@@ -79,17 +119,30 @@ export function SalesOrderLinesTable({
       </div>
 
       {/* Mobile: one card per line, stacked. Hidden on md+ where the
-          full table takes over. */}
+          full table takes over. Bundle header cards interleave above
+          their component groups. */}
       <div className="space-y-3 md:hidden">
-        {lines.map((l) => (
-          <SalesOrderLineCard
-            key={l.id}
-            line={l}
-            isClosed={isClosed}
-            isEditable={isEditable}
-            salesOrderId={salesOrderId}
-          />
-        ))}
+        {displayItems.map((item, idx) => {
+          if (item.kind === 'header') {
+            return (
+              <BundleHeaderCard
+                key={`h-${item.groupId}-${idx}`}
+                bundleSku={item.bundleSku}
+                bundleName={item.bundleName}
+                total={item.total}
+              />
+            );
+          }
+          return (
+            <SalesOrderLineCard
+              key={item.line.id}
+              line={item.line}
+              isClosed={isClosed}
+              isEditable={isEditable}
+              salesOrderId={salesOrderId}
+            />
+          );
+        })}
       </div>
 
       {/* Desktop: sticky-header scrollable table. */}
@@ -114,79 +167,98 @@ export function SalesOrderLinesTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {lines.map((l) => (
-              <TableRow key={l.id}>
-                <TableCell className="[.hide-product-images_&]:hidden">
-                  <ProductThumbnail
-                    src={l.imageUrl}
-                    productName={l.productName}
+            {displayItems.map((item, idx) => {
+              if (item.kind === 'header') {
+                return (
+                  <BundleHeaderRow
+                    key={`h-${item.groupId}-${idx}`}
+                    bundleSku={item.bundleSku}
+                    bundleName={item.bundleName}
+                    total={item.total}
                   />
-                </TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">
-                  {l.sku}
-                </TableCell>
-                <TableCell>
-                  <div className="font-medium">{l.productName}</div>
-                  {l.variantName ? (
-                    <div className="text-xs text-muted-foreground">
-                      {l.variantName}
-                    </div>
-                  ) : null}
-                  <EditableNotesBlock
-                    salesOrderId={salesOrderId}
-                    lineId={l.id}
-                    customerNote={l.customerNote}
-                    internalNote={l.internalNote}
-                    editable={fieldsEditable}
-                  />
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  <EditableQtyCell
-                    salesOrderId={salesOrderId}
-                    lineId={l.id}
-                    qtyOrdered={l.qtyOrdered.toString()}
-                    editable={fieldsEditable}
-                  />
-                  {!isClosed ? (
-                    <ReservationHint
-                      reserved={l.qtyReserved}
-                      shipped={l.qtyShipped}
+                );
+              }
+              const l = item.line;
+              const inBundle = l.bundleGroupId != null;
+              return (
+                <TableRow key={l.id}>
+                  <TableCell className="[.hide-product-images_&]:hidden">
+                    <ProductThumbnail
+                      src={l.imageUrl}
+                      productName={l.productName}
                     />
-                  ) : null}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  <ShippedCell
-                    salesOrderId={salesOrderId}
-                    lineId={l.id}
-                    qtyOrdered={l.qtyOrdered}
-                    qtyShipped={l.qtyShipped}
-                    isEditable={isEditable}
-                    isClosed={isClosed}
-                  />
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  <EditableUnitPriceCell
-                    salesOrderId={salesOrderId}
-                    lineId={l.id}
-                    unitPrice={l.unitPrice.toString()}
-                    editable={fieldsEditable}
-                  />
-                  <PriceRuleBadge rule={l.priceRule} />
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  <EditableDiscountCell
-                    salesOrderId={salesOrderId}
-                    lineId={l.id}
-                    discountPercent={l.discountPercent?.toString() ?? null}
-                    discountAmount={l.discountAmount?.toString() ?? null}
-                    editable={fieldsEditable}
-                  />
-                </TableCell>
-                <TableCell className="text-right tabular-nums font-medium">
-                  {formatCurrency(computeLineTotal(l, isClosed))}
-                </TableCell>
-              </TableRow>
-            ))}
+                  </TableCell>
+                  <TableCell
+                    className={
+                      'font-mono text-xs text-muted-foreground ' +
+                      (inBundle ? 'pl-6' : '')
+                    }
+                  >
+                    {l.sku}
+                  </TableCell>
+                  <TableCell>
+                    <div className="font-medium">{l.productName}</div>
+                    {l.variantName ? (
+                      <div className="text-xs text-muted-foreground">
+                        {l.variantName}
+                      </div>
+                    ) : null}
+                    <EditableNotesBlock
+                      salesOrderId={salesOrderId}
+                      lineId={l.id}
+                      customerNote={l.customerNote}
+                      internalNote={l.internalNote}
+                      editable={fieldsEditable}
+                    />
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    <EditableQtyCell
+                      salesOrderId={salesOrderId}
+                      lineId={l.id}
+                      qtyOrdered={l.qtyOrdered.toString()}
+                      editable={fieldsEditable}
+                    />
+                    {!isClosed ? (
+                      <ReservationHint
+                        reserved={l.qtyReserved}
+                        shipped={l.qtyShipped}
+                      />
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    <ShippedCell
+                      salesOrderId={salesOrderId}
+                      lineId={l.id}
+                      qtyOrdered={l.qtyOrdered}
+                      qtyShipped={l.qtyShipped}
+                      isEditable={isEditable}
+                      isClosed={isClosed}
+                    />
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    <EditableUnitPriceCell
+                      salesOrderId={salesOrderId}
+                      lineId={l.id}
+                      unitPrice={l.unitPrice.toString()}
+                      editable={fieldsEditable}
+                    />
+                    <PriceRuleBadge rule={l.priceRule} />
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    <EditableDiscountCell
+                      salesOrderId={salesOrderId}
+                      lineId={l.id}
+                      discountPercent={l.discountPercent?.toString() ?? null}
+                      discountAmount={l.discountAmount?.toString() ?? null}
+                      editable={fieldsEditable}
+                    />
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums font-medium">
+                    {formatCurrency(computeLineTotal(l, isClosed))}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
           </TableBody>
         </Table>
       </div>
@@ -435,7 +507,69 @@ function priceRuleLabel(rule: string): string {
       return 'promo';
     case 'COST_PLUS':
       return 'cost+';
+    case 'BUNDLE_ALLOCATED':
+      return 'bundle';
     default:
       return rule.toLowerCase();
   }
+}
+
+// Synthetic row rendered above each bundle's component lines on the
+// desktop table. Sum of children's line totals = the bundle's effective
+// price (manual override or basePrice × bundleQty when the explode ran).
+function BundleHeaderRow({
+  bundleSku,
+  bundleName,
+  total,
+}: {
+  bundleSku: string | null;
+  bundleName: string | null;
+  total: Prisma.Decimal;
+}) {
+  return (
+    <TableRow className="bg-amber-50/50 hover:bg-amber-50/70 dark:bg-amber-950/20 dark:hover:bg-amber-950/30">
+      <TableCell className="[.hide-product-images_&]:hidden" />
+      <TableCell className="font-mono text-xs font-medium">
+        <span className="rounded bg-amber-200/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-900 dark:bg-amber-800/40 dark:text-amber-200">
+          Bundle
+        </span>{' '}
+        {bundleSku ?? '—'}
+      </TableCell>
+      <TableCell className="font-medium">{bundleName ?? '—'}</TableCell>
+      <TableCell />
+      <TableCell />
+      <TableCell />
+      <TableCell />
+      <TableCell className="text-right tabular-nums font-semibold">
+        {formatCurrency(total)}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+// Mobile companion — appears above the component cards for each
+// bundle group on viewports < md.
+function BundleHeaderCard({
+  bundleSku,
+  bundleName,
+  total,
+}: {
+  bundleSku: string | null;
+  bundleName: string | null;
+  total: Prisma.Decimal;
+}) {
+  return (
+    <div className="rounded-lg border border-amber-300/60 bg-amber-50/50 p-3 dark:border-amber-700/40 dark:bg-amber-950/20">
+      <div className="flex items-center justify-between gap-3">
+        <div className="space-y-0.5">
+          <span className="rounded bg-amber-200/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-900 dark:bg-amber-800/40 dark:text-amber-200">
+            Bundle
+          </span>
+          <div className="font-mono text-xs">{bundleSku ?? '—'}</div>
+          <div className="text-sm font-medium">{bundleName ?? '—'}</div>
+        </div>
+        <div className="tabular-nums font-semibold">{formatCurrency(total)}</div>
+      </div>
+    </div>
+  );
 }

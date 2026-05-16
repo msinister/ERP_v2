@@ -2,6 +2,7 @@ import {
   Prisma,
   AuditAction,
   InventoryMovementType,
+  PriceResolutionRule,
   SalesOrderStatus,
 } from '@/generated/tenant';
 import type {
@@ -30,6 +31,7 @@ import {
 import { reverseCogsForInvoiceTx } from '@/server/services/cogsReversal';
 import { reversePaymentTx } from '@/server/services/payments';
 import { recomputeOnHand } from '@/server/services/movements';
+import { expandBundleLinesInTx } from '@/server/services/bundleExplode';
 import {
   addSalesOrderLinesInputSchema,
   cancelSalesOrderInputSchema,
@@ -111,39 +113,63 @@ export async function createSalesOrder(
       useYear: true,
     });
 
+    // Explode any BUNDLE inputs into component-line inputs first.
+    // Non-bundle inputs pass through untouched. The explode returns
+    // pre-allocated prices on bundle children so the resolver doesn't
+    // re-price them.
+    const expandedInputs = await expandBundleLinesInTx(
+      tx,
+      data.lines,
+      data.warehouseId,
+    );
+
     // Resolve every line's unit price through the pricing resolver. Never
-    // bypass — see CLAUDE.md non-negotiable rules.
+    // bypass — see CLAUDE.md non-negotiable rules. Bundle-allocated
+    // lines short-circuit the resolver: they carry their pre-computed
+    // unitPrice + BUNDLE_ALLOCATED rule. Inline edit later flips the
+    // rule to MANUAL_OVERRIDE.
     const resolvedLines = [];
-    for (const l of data.lines) {
-      const resolved = await resolvePrice(tx, {
-        variantId: l.variantId,
-        customerId: data.customerId,
-        qty: new Prisma.Decimal(l.qtyOrdered),
-        manualUnitPrice:
-          l.manualUnitPrice != null ? new Prisma.Decimal(l.manualUnitPrice) : null,
-      });
+    for (const l of expandedInputs) {
+      const isBundleAllocated = l._allocatedUnitPrice != null;
+      const unitPrice = isBundleAllocated
+        ? new Prisma.Decimal(l._allocatedUnitPrice!)
+        : null;
+      const resolved = isBundleAllocated
+        ? null
+        : await resolvePrice(tx, {
+            variantId: l.variantId,
+            customerId: data.customerId,
+            qty: new Prisma.Decimal(l.qtyOrdered),
+            manualUnitPrice:
+              l.manualUnitPrice != null ? new Prisma.Decimal(l.manualUnitPrice) : null,
+          });
       // Operator-supplied discountPercent / discountAmount always win.
       // Tier-discount pre-fill (resolved.discountPercent) only applies
       // when the operator left BOTH discount fields blank. No stacking.
+      // Bundle-allocated lines never carry resolver discounts.
       const operatorSetDiscount =
         l.discountPercent != null || l.discountAmount != null;
       const effectiveDiscountPercent = operatorSetDiscount
         ? l.discountPercent != null
           ? new Prisma.Decimal(l.discountPercent)
           : null
-        : resolved.discountPercent;
+        : resolved?.discountPercent ?? null;
       const effectiveDiscountAmount =
         l.discountAmount != null ? new Prisma.Decimal(l.discountAmount) : null;
       resolvedLines.push({
         variantId: l.variantId,
         warehouseId: l.warehouseId,
         qtyOrdered: new Prisma.Decimal(l.qtyOrdered),
-        unitPrice: resolved.unitPrice,
-        priceRule: resolved.rule,
+        unitPrice: unitPrice ?? resolved!.unitPrice,
+        priceRule: isBundleAllocated
+          ? PriceResolutionRule.BUNDLE_ALLOCATED
+          : resolved!.rule,
         discountPercent: effectiveDiscountPercent,
         discountAmount: effectiveDiscountAmount,
         customerNote: l.customerNote ?? null,
         internalNote: l.internalNote ?? null,
+        bundleGroupId: l._bundleGroupId ?? null,
+        bundleSourceProductId: l._bundleSourceProductId ?? null,
       });
     }
 
@@ -922,12 +948,20 @@ export async function addSalesOrderLines(
       );
     }
 
+    // Explode any BUNDLE inputs first. After this the loop only sees
+    // concrete component lines + non-bundle pass-throughs.
+    const expandedInputs = await expandBundleLinesInTx(
+      tx,
+      data.lines,
+      before.warehouseId,
+    );
+
     // Resolve price + create + reserve each new line. Locks every
     // (variant, warehouse) bin we're touching — including ones the
     // existing lines already touch, so concurrent ops on the same
     // bin serialize.
     const newBins = uniqueBins(
-      data.lines.map((l) => ({
+      expandedInputs.map((l) => ({
         variantId: l.variantId,
         warehouseId: l.warehouseId,
       })),
@@ -937,23 +971,29 @@ export async function addSalesOrderLines(
     }
 
     const createdLines: { id: string }[] = [];
-    for (const l of data.lines) {
-      const resolved = await resolvePrice(tx, {
-        variantId: l.variantId,
-        customerId: before.customerId,
-        qty: new Prisma.Decimal(l.qtyOrdered),
-        manualUnitPrice:
-          l.manualUnitPrice != null
-            ? new Prisma.Decimal(l.manualUnitPrice)
-            : null,
-      });
+    for (const l of expandedInputs) {
+      const isBundleAllocated = l._allocatedUnitPrice != null;
+      const unitPrice = isBundleAllocated
+        ? new Prisma.Decimal(l._allocatedUnitPrice!)
+        : null;
+      const resolved = isBundleAllocated
+        ? null
+        : await resolvePrice(tx, {
+            variantId: l.variantId,
+            customerId: before.customerId,
+            qty: new Prisma.Decimal(l.qtyOrdered),
+            manualUnitPrice:
+              l.manualUnitPrice != null
+                ? new Prisma.Decimal(l.manualUnitPrice)
+                : null,
+          });
       const operatorSetDiscount =
         l.discountPercent != null || l.discountAmount != null;
       const effectiveDiscountPercent = operatorSetDiscount
         ? l.discountPercent != null
           ? new Prisma.Decimal(l.discountPercent)
           : null
-        : resolved.discountPercent;
+        : resolved?.discountPercent ?? null;
       const effectiveDiscountAmount =
         l.discountAmount != null ? new Prisma.Decimal(l.discountAmount) : null;
       const created = await tx.salesOrderLine.create({
@@ -965,12 +1005,16 @@ export async function addSalesOrderLines(
           // Reserve immediately — the SO is CONFIRMED, so reservation
           // is the expected state.
           qtyReserved: new Prisma.Decimal(l.qtyOrdered),
-          unitPrice: resolved.unitPrice,
-          priceRule: resolved.rule,
+          unitPrice: unitPrice ?? resolved!.unitPrice,
+          priceRule: isBundleAllocated
+            ? PriceResolutionRule.BUNDLE_ALLOCATED
+            : resolved!.rule,
           discountPercent: effectiveDiscountPercent,
           discountAmount: effectiveDiscountAmount,
           customerNote: l.customerNote ?? null,
           internalNote: l.internalNote ?? null,
+          bundleGroupId: l._bundleGroupId ?? null,
+          bundleSourceProductId: l._bundleSourceProductId ?? null,
         },
       });
       createdLines.push({ id: created.id });

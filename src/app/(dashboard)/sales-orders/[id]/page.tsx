@@ -47,6 +47,10 @@ export default async function SalesOrderDetailPage({
             },
           },
           warehouse: { select: { code: true, name: true } },
+          // Pull the parent bundle's display data for any line that
+          // came from a bundle explode. The lines-table uses this to
+          // synthesize a header row above each bundle group.
+          bundleSourceProduct: { select: { id: true, sku: true, name: true } },
         },
         orderBy: { createdAt: 'asc' },
       },
@@ -120,6 +124,9 @@ export default async function SalesOrderDetailPage({
               customerNote: l.customerNote,
               internalNote: l.internalNote,
               imageUrl: resolveLineImageUrl(l.variant),
+              bundleGroupId: l.bundleGroupId,
+              bundleSourceSku: l.bundleSourceProduct?.sku ?? null,
+              bundleSourceName: l.bundleSourceProduct?.name ?? null,
             }))}
           />
 

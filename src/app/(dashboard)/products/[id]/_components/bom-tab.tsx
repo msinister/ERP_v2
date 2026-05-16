@@ -101,7 +101,11 @@ export function BomTab({
   existingLines: BomTabExistingLine[];
   componentOptions: BomComponentOption[];
 }) {
-  if (productType !== 'SIMPLE' && productType !== 'ASSEMBLED') {
+  if (
+    productType !== 'SIMPLE' &&
+    productType !== 'ASSEMBLED' &&
+    productType !== 'BUNDLE'
+  ) {
     return (
       <Card>
         <CardHeader>
@@ -109,9 +113,9 @@ export function BomTab({
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            Bills of materials are only supported on Simple and Assembled
-            products. To build assemblies from this product, change its
-            type on the Overview tab.
+            Bills of materials are only supported on Simple, Assembled, and
+            Bundle products. To use this product as a build parent or a
+            bundle, change its type on the Overview tab.
           </p>
         </CardContent>
       </Card>
@@ -120,6 +124,7 @@ export function BomTab({
   return (
     <BomEditor
       productId={productId}
+      productType={productType}
       laborCost={laborCost}
       existingLines={existingLines}
       componentOptions={componentOptions}
@@ -129,15 +134,21 @@ export function BomTab({
 
 function BomEditor({
   productId,
+  productType,
   laborCost: initialLaborCost,
   existingLines,
   componentOptions,
 }: {
   productId: string;
+  productType: string;
   laborCost: string | null;
   existingLines: BomTabExistingLine[];
   componentOptions: BomComponentOption[];
 }) {
+  // BUNDLE products never accrue a per-unit labor cost — they explode
+  // into component SO lines at sale time and never produce inventory.
+  // Hide the labor section for them.
+  const showLabor = productType !== 'BUNDLE';
   const router = useRouter();
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [pending, startTransition] = useTransition();
@@ -230,8 +241,11 @@ function BomEditor({
             sortOrder: i,
             ...(d.notes.trim() !== '' ? { notes: d.notes.trim() } : {}),
           })),
-          laborCost:
-            laborCost.trim() === ''
+          // BUNDLE products never carry labor — force null on save even
+          // if the row had a stale value from a prior product type.
+          laborCost: !showLabor
+            ? null
+            : laborCost.trim() === ''
               ? null
               : normalizeDecimalForSubmit(laborCost.trim()),
         };
@@ -264,6 +278,7 @@ function BomEditor({
   if (mode === 'view') {
     return (
       <BomReadView
+        productType={productType}
         laborCost={initialLaborCost}
         existingLines={existingLines}
         onEdit={enterEdit}
@@ -303,35 +318,37 @@ function BomEditor({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Labor cost per build</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Field>
-            <FieldLabel htmlFor="bom-labor">
-              Flat $ added to each finished unit (optional)
-            </FieldLabel>
-            <Input
-              id="bom-labor"
-              inputMode="decimal"
-              placeholder="0.00"
-              value={laborCost}
-              onChange={(e) => setLaborCost(e.target.value)}
-              aria-invalid={!!laborError}
-              className="max-w-[12rem]"
-            />
-            {laborError ? (
-              <FieldError errors={[{ message: laborError }]} />
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Leave blank for no labor charge. Rolled into the FIFO cost
-                of every built unit.
-              </p>
-            )}
-          </Field>
-        </CardContent>
-      </Card>
+      {showLabor ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Labor cost per build</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Field>
+              <FieldLabel htmlFor="bom-labor">
+                Flat $ added to each finished unit (optional)
+              </FieldLabel>
+              <Input
+                id="bom-labor"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={laborCost}
+                onChange={(e) => setLaborCost(e.target.value)}
+                aria-invalid={!!laborError}
+                className="max-w-[12rem]"
+              />
+              {laborError ? (
+                <FieldError errors={[{ message: laborError }]} />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Leave blank for no labor charge. Rolled into the FIFO cost
+                  of every built unit.
+                </p>
+              )}
+            </Field>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="flex items-center justify-end gap-2">
         <Button
@@ -351,14 +368,17 @@ function BomEditor({
 }
 
 function BomReadView({
+  productType,
   laborCost,
   existingLines,
   onEdit,
 }: {
+  productType: string;
   laborCost: string | null;
   existingLines: BomTabExistingLine[];
   onEdit: () => void;
 }) {
+  const isBundle = productType === 'BUNDLE';
   const totalComponents = existingLines.length;
   // Highlight duplicate component variants in the read view — the
   // schema allows them but it's almost always a typo worth noticing.
@@ -372,14 +392,19 @@ function BomReadView({
     return dupes;
   }, [existingLines]);
 
+  const emptyHint = isBundle
+    ? 'No components defined. Add components below to define the bundle contents — the bundle price is set on the product Overview tab.'
+    : 'No components defined. Add components and a labor cost to enable builds.';
+  const summaryLabel = isBundle ? 'in bundle' : 'per finished unit';
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           {totalComponents === 0
-            ? 'No components defined. Add components and a labor cost to enable builds.'
-            : `${totalComponents} component${totalComponents === 1 ? '' : 's'} per finished unit${
-                laborCost != null
+            ? emptyHint
+            : `${totalComponents} component${totalComponents === 1 ? '' : 's'} ${summaryLabel}${
+                !isBundle && laborCost != null
                   ? ` · labor ${formatCurrency(laborCost)} / build`
                   : ''
               }`}

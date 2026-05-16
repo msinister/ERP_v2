@@ -25,6 +25,13 @@ export async function createProduct(
 ): Promise<CreateProductResult> {
   const parsed = productCreateSchema.parse(input);
   const { defaultVariant: seed, ...productData } = parsed;
+  // BUNDLE products are virtual — they explode on SO entry and never
+  // hold inventory of their own. Force tracksInventory=false even if
+  // the caller passed true; FIFO layers / movements never reference
+  // bundle products.
+  if (productData.type === 'BUNDLE') {
+    productData.tracksInventory = false;
+  }
   return db.$transaction(async (tx) => {
     const product = await tx.product.create({ data: productData });
     await audit(tx, {
@@ -67,6 +74,13 @@ export async function updateProduct(
   return db.$transaction(async (tx) => {
     const before = await tx.product.findUnique({ where: { id } });
     if (!before) throw new Error(`Product not found: ${id}`);
+    // BUNDLE products force tracksInventory=false (see createProduct).
+    // Applies when the update changes type → BUNDLE or when an
+    // already-BUNDLE product gets a tracksInventory=true sneak-in.
+    const effectiveType = data.type ?? before.type;
+    if (effectiveType === 'BUNDLE') {
+      data.tracksInventory = false;
+    }
     const after = await tx.product.update({ where: { id }, data });
     await audit(tx, {
       action: AuditAction.UPDATE,

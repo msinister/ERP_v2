@@ -142,6 +142,8 @@ function formatType(t: string): string {
       return 'Simple';
     case 'ASSEMBLED':
       return 'Assembled';
+    case 'BUNDLE':
+      return 'Bundle';
     case 'DROP_SHIP':
       return 'Drop-ship';
     case 'SERVICE':

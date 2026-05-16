@@ -193,7 +193,7 @@ suite('BOM service', () => {
       setProductBom(db, ds.id, {
         lines: [{ componentVariantId: componentAVariantId, qtyRequired: '1' }],
       }, ctx),
-    ).rejects.toThrow(/only SIMPLE and ASSEMBLED/);
+    ).rejects.toThrow(/only SIMPLE, ASSEMBLED, and BUNDLE/);
 
     const sv = await db.product.create({
       data: { sku: `${TAG}-SVC`, name: 'Svc', type: ProductType.SERVICE },
@@ -202,7 +202,7 @@ suite('BOM service', () => {
       setProductBom(db, sv.id, {
         lines: [{ componentVariantId: componentAVariantId, qtyRequired: '1' }],
       }, ctx),
-    ).rejects.toThrow(/only SIMPLE and ASSEMBLED/);
+    ).rejects.toThrow(/only SIMPLE, ASSEMBLED, and BUNDLE/);
   });
 
   it('setProductBom: rejects self-reference (parent variant used as component)', async () => {

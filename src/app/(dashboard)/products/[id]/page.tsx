@@ -190,10 +190,14 @@ export default async function ProductDetailPage({
     negativeAllocation: m.negativeAllocation,
   }));
 
-  // BOM data only loaded when the tab is shown (SIMPLE + ASSEMBLED).
-  // For other types (DROP_SHIP / SERVICE) the tab is hidden entirely.
+  // BOM data only loaded when the tab is shown (SIMPLE + ASSEMBLED +
+  // BUNDLE). For other types (DROP_SHIP / SERVICE) the tab is hidden
+  // entirely. BUNDLE products use the same BOM table for the bundle
+  // composition; the tab label adapts based on the product type.
   const bomEligible =
-    product.type === 'SIMPLE' || product.type === 'ASSEMBLED';
+    product.type === 'SIMPLE' ||
+    product.type === 'ASSEMBLED' ||
+    product.type === 'BUNDLE';
 
   // BOM lines for the read view: pre-joined component variant + parent
   // product names so the table renders without a second lookup.
