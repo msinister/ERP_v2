@@ -45,10 +45,12 @@ export function SalesOrderLinesTable({
   lines,
   status,
   salesOrderId,
+  overShippingPolicy,
 }: {
   lines: SalesOrderLineRow[];
   status: string;
   salesOrderId: string;
+  overShippingPolicy: 'ALLOW' | 'CONFIRM' | 'BLOCK';
 }) {
   if (lines.length === 0) {
     return (
@@ -140,6 +142,7 @@ export function SalesOrderLinesTable({
               isClosed={isClosed}
               isEditable={isEditable}
               salesOrderId={salesOrderId}
+              overShippingPolicy={overShippingPolicy}
             />
           );
         })}
@@ -233,6 +236,7 @@ export function SalesOrderLinesTable({
                       qtyShipped={l.qtyShipped}
                       isEditable={isEditable}
                       isClosed={isClosed}
+                      overShippingPolicy={overShippingPolicy}
                     />
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
@@ -277,11 +281,13 @@ function SalesOrderLineCard({
   isClosed,
   isEditable,
   salesOrderId,
+  overShippingPolicy,
 }: {
   line: SalesOrderLineRow;
   isClosed: boolean;
   isEditable: boolean;
   salesOrderId: string;
+  overShippingPolicy: 'ALLOW' | 'CONFIRM' | 'BLOCK';
 }) {
   const hasDiscount = l.discountPercent != null || l.discountAmount != null;
   return (
@@ -317,6 +323,7 @@ function SalesOrderLineCard({
             qtyShipped={l.qtyShipped}
             isEditable={isEditable}
             isClosed={isClosed}
+            overShippingPolicy={overShippingPolicy}
           />
         </Stat>
         <Stat label="Unit price">
@@ -376,6 +383,7 @@ function ShippedCell({
   qtyShipped,
   isEditable,
   isClosed,
+  overShippingPolicy,
 }: {
   salesOrderId: string;
   lineId: string;
@@ -383,6 +391,7 @@ function ShippedCell({
   qtyShipped: Prisma.Decimal;
   isEditable: boolean;
   isClosed: boolean;
+  overShippingPolicy: 'ALLOW' | 'CONFIRM' | 'BLOCK';
 }) {
   if (isEditable) {
     return (
@@ -392,6 +401,7 @@ function ShippedCell({
         qtyOrdered={qtyOrdered.toString()}
         qtyShipped={qtyShipped.toString()}
         editable
+        overShippingPolicy={overShippingPolicy}
       />
     );
   }

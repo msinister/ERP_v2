@@ -156,6 +156,32 @@ export type CommissionPayoutCycleOnDisk = z.infer<
 >;
 
 // ---------------------------------------------------------------------------
+// over_shipping_policy
+// ---------------------------------------------------------------------------
+// Shape on disk: { policy: 'ALLOW' | 'CONFIRM' | 'BLOCK' }
+// Tenant-wide policy for the case where qtyShipped > qtyOrdered on an SO
+// line (intentional over-ship, e.g., the warehouse pulled extras to
+// cover damages and shipped them anyway).
+//   BLOCK   — server rejects qtyShipped > qtyOrdered. Original behavior.
+//   CONFIRM — server accepts; the UI must show a confirmation dialog
+//             before the PATCH lands (no server enforcement of the
+//             dialog — it's an operator-facing speed bump only).
+//   ALLOW   — server accepts; UI saves immediately.
+// Defensive default in the wrapper is CONFIRM (matches the spec's
+// requested default).
+
+export const overShippingPolicyValueSchema = z.object({
+  policy: z.enum(['ALLOW', 'CONFIRM', 'BLOCK']),
+});
+
+export type OverShippingPolicyOnDisk = z.infer<
+  typeof overShippingPolicyValueSchema
+>;
+
+export type OverShippingPolicyValue =
+  OverShippingPolicyOnDisk['policy'];
+
+// ---------------------------------------------------------------------------
 // Per-key registry — useful for a future generic admin UI that needs to
 // validate any key by name. For now only one entry; later admin settings
 // (late_fee_default, ar_hold_default, etc.) get added here as they ship.
@@ -166,6 +192,7 @@ export const SETTING_KEYS = {
   NEGATIVE_INVENTORY_ALLOWED: 'negative_inventory_allowed',
   TIER_DISCOUNT_PERCENTAGES: 'tier_discount_percentages',
   COMMISSION_PAYOUT_CYCLE: 'commission_payout_cycle',
+  OVER_SHIPPING_POLICY: 'over_shipping_policy',
 } as const;
 
 export const settingValueSchemas: ReadonlyMap<string, z.ZodTypeAny> = new Map<
@@ -176,4 +203,5 @@ export const settingValueSchemas: ReadonlyMap<string, z.ZodTypeAny> = new Map<
   [SETTING_KEYS.NEGATIVE_INVENTORY_ALLOWED, negativeInventoryAllowedValueSchema],
   [SETTING_KEYS.TIER_DISCOUNT_PERCENTAGES, tierDiscountPercentagesValueSchema],
   [SETTING_KEYS.COMMISSION_PAYOUT_CYCLE, commissionPayoutCycleValueSchema],
+  [SETTING_KEYS.OVER_SHIPPING_POLICY, overShippingPolicyValueSchema],
 ]);

@@ -21,6 +21,11 @@ import {
 import { recordPayment } from '@/server/services/payments';
 import { SalesOrderReopenBlockedError } from '@/lib/errors/credit';
 import { receiveInventory } from '@/server/services/movements';
+import { setSetting } from '@/server/services/settings';
+import {
+  SETTING_KEYS,
+  overShippingPolicyValueSchema,
+} from '@/lib/validation/settings';
 import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { upsertTestCustomer } from '../helpers/customerStub';
@@ -287,21 +292,40 @@ suite('SalesOrder lifecycle', () => {
     );
   });
 
-  it('Close rejects qtyShipped > qtyOrdered', async () => {
-    await stockBin('20');
-    const so = await createSalesOrder(db, createInput('5'));
-    await confirmSalesOrder(db, so.id);
-    const lineId = so.lines[0].id;
+  it('Close rejects qtyShipped > qtyOrdered when overShippingPolicy=BLOCK', async () => {
+    // Same gate as the inline editor — defensive default is CONFIRM
+    // (accept); flip to BLOCK to assert the historical reject path.
+    // The dedicated overShippingPolicy.test.ts covers CONFIRM + ALLOW
+    // accept paths for the close payload.
+    await setSetting(
+      db,
+      SETTING_KEYS.OVER_SHIPPING_POLICY,
+      { policy: 'BLOCK' },
+      overShippingPolicyValueSchema,
+    );
+    try {
+      await stockBin('20');
+      const so = await createSalesOrder(db, createInput('5'));
+      await confirmSalesOrder(db, so.id);
+      const lineId = so.lines[0].id;
 
-    await expect(
-      closeSalesOrder(db, so.id, {
-        lines: [{ id: lineId, qtyShipped: '6' }],
-      }),
-    ).rejects.toThrow(/exceeds qtyOrdered/);
+      await expect(
+        closeSalesOrder(db, so.id, {
+          lines: [{ id: lineId, qtyShipped: '6' }],
+        }),
+      ).rejects.toThrow(/exceeds qtyOrdered/);
 
-    // SO still in CONFIRMED — close transaction rolled back.
-    const stillOpen = await db.salesOrder.findUnique({ where: { id: so.id } });
-    expect(stillOpen!.status).toBe(SalesOrderStatus.CONFIRMED);
+      // SO still in CONFIRMED — close transaction rolled back.
+      const stillOpen = await db.salesOrder.findUnique({ where: { id: so.id } });
+      expect(stillOpen!.status).toBe(SalesOrderStatus.CONFIRMED);
+    } finally {
+      await setSetting(
+        db,
+        SETTING_KEYS.OVER_SHIPPING_POLICY,
+        { policy: 'CONFIRM' },
+        overShippingPolicyValueSchema,
+      );
+    }
   });
 
   it('Close rejects line id that does not belong to this SO', async () => {
@@ -362,17 +386,37 @@ suite('SalesOrder lifecycle', () => {
     );
   });
 
-  it('Inline qtyShipped: rejects qtyShipped > qtyOrdered', async () => {
-    await stockBin('20');
-    const so = await createSalesOrder(db, createInput('5'));
-    await confirmSalesOrder(db, so.id);
-    const lineId = so.lines[0].id;
+  it('Inline qtyShipped: rejects qtyShipped > qtyOrdered when overShippingPolicy=BLOCK', async () => {
+    // Defensive default is CONFIRM (accepts the over-ship); flip to
+    // BLOCK to assert the historical reject path. Reset to CONFIRM
+    // after the assertion so subsequent tests see the documented
+    // default. The dedicated over-shipping-policy test file covers
+    // the CONFIRM + ALLOW accept paths in matrix form.
+    await setSetting(
+      db,
+      SETTING_KEYS.OVER_SHIPPING_POLICY,
+      { policy: 'BLOCK' },
+      overShippingPolicyValueSchema,
+    );
+    try {
+      await stockBin('20');
+      const so = await createSalesOrder(db, createInput('5'));
+      await confirmSalesOrder(db, so.id);
+      const lineId = so.lines[0].id;
 
-    await expect(
-      updateSalesOrderLineQtyShipped(db, so.id, lineId, {
-        qtyShipped: '6',
-      }),
-    ).rejects.toThrow(/exceeds qtyOrdered/);
+      await expect(
+        updateSalesOrderLineQtyShipped(db, so.id, lineId, {
+          qtyShipped: '6',
+        }),
+      ).rejects.toThrow(/exceeds qtyOrdered/);
+    } finally {
+      await setSetting(
+        db,
+        SETTING_KEYS.OVER_SHIPPING_POLICY,
+        { policy: 'CONFIRM' },
+        overShippingPolicyValueSchema,
+      );
+    }
   });
 
   it('Inline qtyShipped: rejects edit while SO is DRAFT (not yet CONFIRMED)', async () => {
@@ -684,6 +728,51 @@ suite('SalesOrder lifecycle', () => {
       new Prisma.Decimal('7').toString(),
     );
     expect(reopened.lines[0].inventoryMovementId).toBeNull();
+  });
+
+  it('reopenSalesOrder preserves over-shipped qtyShipped (regression: was resetting to 0)', async () => {
+    // The over-ship test scenario the user reported: ordered=1, the
+    // warehouse over-ships and records qtyShipped=12 at close time.
+    // Reopen MUST preserve the 12 — without the fix it reset to 0,
+    // which the QtyShippedInput then masked by pre-filling qtyOrdered
+    // (1), making it look to the operator like 12 became 1.
+    await setSetting(
+      db,
+      SETTING_KEYS.OVER_SHIPPING_POLICY,
+      { policy: 'ALLOW' },
+      overShippingPolicyValueSchema,
+    );
+    try {
+      await stockBin('20');
+      const so = await createSalesOrder(db, createInput('1'));
+      await confirmSalesOrder(db, so.id);
+      // Inline-set qtyShipped=12 (over-ship) before close. Then close
+      // using that persisted value via the fallback chain.
+      await updateSalesOrderLineQtyShipped(db, so.id, so.lines[0].id, {
+        qtyShipped: '12',
+      });
+      const closed = await closeSalesOrder(db, so.id, undefined);
+      expect(closed.lines[0].qtyShipped.toString()).toBe(
+        new Prisma.Decimal('12').toString(),
+      );
+
+      const reopened = await reopenSalesOrder(db, so.id, {
+        targetStatus: 'DISPATCHED',
+        paymentDecision: 'none',
+      });
+      // The bug: qtyShipped was reset to 0 here. The fix: preserve it.
+      expect(reopened.lines[0].qtyShipped.toString()).toBe(
+        new Prisma.Decimal('12').toString(),
+      );
+      expect(reopened.lines[0].inventoryMovementId).toBeNull();
+    } finally {
+      await setSetting(
+        db,
+        SETTING_KEYS.OVER_SHIPPING_POLICY,
+        { policy: 'CONFIRM' },
+        overShippingPolicyValueSchema,
+      );
+    }
   });
 
   it('reopenSalesOrder → CANCELLED zeroes reservation and stamps cancelledAt', async () => {

@@ -32,6 +32,7 @@ import { reverseCogsForInvoiceTx } from '@/server/services/cogsReversal';
 import { reversePaymentTx } from '@/server/services/payments';
 import { recomputeOnHand } from '@/server/services/movements';
 import { expandBundleLinesInTx } from '@/server/services/bundleExplode';
+import { getOverShippingPolicy } from '@/server/services/overShipping';
 import {
   addSalesOrderLinesInputSchema,
   cancelSalesOrderInputSchema,
@@ -503,9 +504,10 @@ export async function closeSalesOrder(
 
       // Resolve qtyShipped per line. When the caller supplies lines, each
       // entry must reference a real line on THIS SO, no duplicates, and
-      // qtyShipped ≤ qtyOrdered. Lines not in the payload default to
-      // full qtyOrdered — matches the historical "ship everything"
-      // behavior.
+      // qtyShipped ≤ qtyOrdered (unless the tenant-wide overShipping
+      // policy permits otherwise — same gate the inline qtyShipped
+      // editor uses). Lines not in the payload default to full
+      // qtyOrdered — matches the historical "ship everything" behavior.
       const qtyShippedByLineId = new Map<string, Prisma.Decimal>();
       if (data.lines && data.lines.length > 0) {
         const validIds = new Set(before.lines.map((l) => l.id));
@@ -513,6 +515,8 @@ export async function closeSalesOrder(
           before.lines.map((l) => [l.id, l.qtyOrdered]),
         );
         const seen = new Set<string>();
+        // Fetch the policy once before walking the payload.
+        const overShippingPolicy = await getOverShippingPolicy(tx);
         for (const inputLine of data.lines) {
           if (!validIds.has(inputLine.id)) {
             throw new Error(
@@ -527,7 +531,10 @@ export async function closeSalesOrder(
           seen.add(inputLine.id);
           const qtyShipped = new Prisma.Decimal(inputLine.qtyShipped);
           const qtyOrdered = qtyOrderedById.get(inputLine.id)!;
-          if (qtyShipped.greaterThan(qtyOrdered)) {
+          if (
+            qtyShipped.greaterThan(qtyOrdered) &&
+            overShippingPolicy === 'BLOCK'
+          ) {
             throw new Error(
               `close(): qtyShipped (${qtyShipped}) exceeds qtyOrdered (${qtyOrdered}) on line ${inputLine.id}`,
             );
@@ -830,12 +837,11 @@ export async function reopenSalesOrder(
     // (CONFIRMED / DISPATCHED); CANCELLED releases reservation
     // outright. qtyShipped is PRESERVED — the operator is reopening
     // to make corrections, not to lose their shipping data. Without
-    // preservation, the warehouse-captured shipped count gets
-    // silently rewritten on reopen (and over-shipments looked like
-    // they "snapped back" to qtyOrdered because the QtyShippedInput
-    // pre-fill chain hides the zero). If the operator wants to
-    // revise the shipped count, they edit it inline via the
-    // QtyShippedInput on the reopened SO.
+    // preservation, an over-ship (qtyShipped > qtyOrdered) gets
+    // silently rewritten on reopen and the warehouse loses what was
+    // actually picked. If the operator wants to revise the shipped
+    // count, they edit it inline via the QtyShippedInput on the
+    // reopened SO.
     const restoreReservation =
       data.targetStatus === 'CONFIRMED' || data.targetStatus === 'DISPATCHED';
     const bins = uniqueBins(before.lines);
@@ -1105,9 +1111,16 @@ export async function updateSalesOrderLineQtyShipped(
     }
     const qtyShipped = new Prisma.Decimal(data.qtyShipped);
     if (qtyShipped.greaterThan(line.qtyOrdered)) {
-      throw new Error(
-        `qtyShipped (${qtyShipped}) exceeds qtyOrdered (${line.qtyOrdered})`,
-      );
+      // Tenant-wide over-shipping policy decides whether qtyShipped >
+      // qtyOrdered is allowed. BLOCK rejects (original behavior);
+      // CONFIRM + ALLOW both pass through (CONFIRM relies on the UI
+      // to surface a confirmation dialog before this PATCH lands).
+      const policy = await getOverShippingPolicy(tx);
+      if (policy === 'BLOCK') {
+        throw new Error(
+          `qtyShipped (${qtyShipped}) exceeds qtyOrdered (${line.qtyOrdered})`,
+        );
+      }
     }
 
     const before = { qtyShipped: line.qtyShipped };

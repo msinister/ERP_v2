@@ -6,6 +6,7 @@ import {
   lineItemImageVariantSelect,
   resolveLineImageUrl,
 } from '@/lib/products/lineItemImage';
+import { getOverShippingPolicy } from '@/server/services/overShipping';
 import { SalesOrderHeader } from './_components/header';
 import { SalesOrderLinesTable } from './_components/lines-table';
 import { SalesOrderTotalsCard } from './_components/totals-card';
@@ -68,6 +69,12 @@ export default async function SalesOrderDetailPage({
     select: { id: true, name: true },
   });
 
+  // Fetch the tenant-wide over-shipping policy once per page render —
+  // QtyShippedInput uses it to decide whether to save immediately,
+  // confirm-then-save, or refuse when qty > ordered. The setting falls
+  // back to 'CONFIRM' when the row is missing.
+  const overShippingPolicy = await getOverShippingPolicy(db);
+
   // computeSalesOrderTotal stays on qtyOrdered — it's the projected
   // commitment, used by credit-limit math for in-flight exposure.
   // For the displayed grand-total on a CLOSED order we want the
@@ -108,6 +115,7 @@ export default async function SalesOrderDetailPage({
           <SalesOrderLinesTable
             salesOrderId={so.id}
             status={so.status}
+            overShippingPolicy={overShippingPolicy}
             lines={so.lines.map((l) => ({
               id: l.id,
               sku: l.variant.sku,

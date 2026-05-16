@@ -4,6 +4,16 @@ import { useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertCircle, Check, Loader2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 type SaveState =
   | { kind: 'idle' }
@@ -11,10 +21,20 @@ type SaveState =
   | { kind: 'saved' }
   | { kind: 'error'; message: string };
 
+type OverShippingPolicy = 'ALLOW' | 'CONFIRM' | 'BLOCK';
+
 // Inline qtyShipped editor for the SO detail page's Qty shipped column.
 // Auto-saves on blur via PATCH /api/sales-orders/[id]/lines/[lineId]
 // when the field is editable (SO in CONFIRMED / DISPATCHED). Skips the
 // fetch when the value is unchanged from the persisted server value.
+//
+// Over-shipping (qtyShipped > qtyOrdered) is gated by the tenant-wide
+// overShippingPolicy setting — passed from the SO detail page server-
+// side render:
+//   BLOCK   → reject locally with an inline error.
+//   CONFIRM → pop an AlertDialog "Ship more than ordered?" before
+//             firing the PATCH. Operator can confirm or cancel.
+//   ALLOW   → save immediately, no prompt.
 //
 // Pre-fill chain: prior saved qtyShipped (when > 0) → qtyOrdered. Lets
 // the warehouse leave the default for full shipments and only type when
@@ -25,12 +45,14 @@ export function QtyShippedInput({
   qtyOrdered,
   qtyShipped,
   editable,
+  overShippingPolicy,
 }: {
   salesOrderId: string;
   lineId: string;
   qtyOrdered: string;
   qtyShipped: string;
   editable: boolean;
+  overShippingPolicy: OverShippingPolicy;
 }) {
   const router = useRouter();
   const initialValue =
@@ -43,6 +65,10 @@ export function QtyShippedInput({
   const [value, setValue] = useState(initialValue);
   const [state, setState] = useState<SaveState>({ kind: 'idle' });
   const [pending, startTransition] = useTransition();
+  // Over-ship pending value — set when blur triggers a CONFIRM dialog.
+  // The dialog uses this to render the "ordered X, shipping Y" copy
+  // and the confirm handler reads it back for the PATCH body.
+  const [confirmPending, setConfirmPending] = useState<string | null>(null);
 
   if (!editable) {
     return (
@@ -52,28 +78,9 @@ export function QtyShippedInput({
     );
   }
 
-  function onBlur() {
-    const trimmed = value.trim();
-    if (trimmed === savedRef.current) {
-      // No change. Don't burn a request; also clear any prior error /
-      // saved indicator from the previous attempt.
-      setState({ kind: 'idle' });
-      return;
-    }
-    // Loose client-side guard — server is the source of truth.
-    if (!/^\d+(\.\d+)?$/.test(trimmed)) {
-      setState({ kind: 'error', message: 'Must be a positive number' });
-      return;
-    }
-    const n = Number(trimmed);
-    if (!(n > 0)) {
-      setState({ kind: 'error', message: 'Must be > 0' });
-      return;
-    }
-    if (n > Number(qtyOrdered)) {
-      setState({ kind: 'error', message: `Max ${qtyOrdered}` });
-      return;
-    }
+  // Push the value to the server. Pulled out so both the direct-save
+  // path and the post-confirm path share one implementation.
+  function persist(trimmed: string) {
     setState({ kind: 'saving' });
     startTransition(async () => {
       try {
@@ -93,21 +100,70 @@ export function QtyShippedInput({
             kind: 'error',
             message: errBody.error ?? `Save failed (${res.status})`,
           });
+          // Revert the input back to the last-saved value so the
+          // operator's screen reflects the rejection.
+          setValue(savedRef.current);
           return;
         }
         savedRef.current = trimmed;
         setState({ kind: 'saved' });
-        // Refresh server-rendered totals (line total, totals card,
-        // reservation hint) so the rest of the page reflects the new
-        // value without a full reload.
         router.refresh();
       } catch (err) {
         setState({
           kind: 'error',
           message: err instanceof Error ? err.message : 'Network error',
         });
+        setValue(savedRef.current);
       }
     });
+  }
+
+  function onBlur() {
+    const trimmed = value.trim();
+    if (trimmed === savedRef.current) {
+      setState({ kind: 'idle' });
+      return;
+    }
+    // Loose client-side guard — server is the source of truth.
+    if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+      setState({ kind: 'error', message: 'Must be a positive number' });
+      return;
+    }
+    const n = Number(trimmed);
+    if (!(n > 0)) {
+      setState({ kind: 'error', message: 'Must be > 0' });
+      return;
+    }
+    const ordered = Number(qtyOrdered);
+    if (n > ordered) {
+      // Over-shipping path. Branch on tenant policy.
+      if (overShippingPolicy === 'BLOCK') {
+        setState({ kind: 'error', message: `Max ${qtyOrdered}` });
+        return;
+      }
+      if (overShippingPolicy === 'CONFIRM') {
+        // Open the confirm dialog; persist happens on confirm.
+        setConfirmPending(trimmed);
+        return;
+      }
+      // ALLOW — fall through to direct save.
+    }
+    persist(trimmed);
+  }
+
+  function onConfirmOverShip() {
+    if (confirmPending == null) return;
+    const t = confirmPending;
+    setConfirmPending(null);
+    persist(t);
+  }
+  function onCancelOverShip() {
+    setConfirmPending(null);
+    // Revert the input value back to the saved one so the warehouse
+    // can re-enter a different number without it looking like the
+    // over-ship value stuck.
+    setValue(savedRef.current);
+    setState({ kind: 'idle' });
   }
 
   return (
@@ -128,6 +184,30 @@ export function QtyShippedInput({
         aria-invalid={state.kind === 'error'}
       />
       <SaveIndicator state={state} />
+      <AlertDialog
+        open={confirmPending != null}
+        onOpenChange={(o) => {
+          if (!o) onCancelOverShip();
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Ship more than ordered?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Ordered: {qtyOrdered}. Shipping: {confirmPending ?? ''}. This
+              will be recorded as an over-shipment on the SO line.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={onCancelOverShip}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={onConfirmOverShip}>
+              Ship {confirmPending ?? ''}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

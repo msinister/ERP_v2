@@ -14,6 +14,8 @@ import { RestockingFeeForm } from './_components/restocking-fee-form';
 import { TierDiscountForm } from './_components/tier-discount-form';
 import { CommissionCycleForm } from './_components/commission-cycle-form';
 import { NegativeInventoryForm } from './_components/negative-inventory-form';
+import { OverShippingPolicyForm } from './_components/over-shipping-policy-form';
+import type { OverShippingPolicyValue } from '@/lib/validation/settings';
 
 export const revalidate = 0;
 
@@ -35,6 +37,7 @@ type CommissionCycleOnDisk = {
   anchorDay?: number;
 };
 type NegativeInventoryOnDisk = { allowed: boolean };
+type OverShippingPolicyOnDisk = { policy: OverShippingPolicyValue };
 
 export default async function AdminSettingsPage() {
   const me = await getCurrentUser();
@@ -62,6 +65,10 @@ export default async function AdminSettingsPage() {
   const negInv =
     (byKey.get(SETTING_KEYS.NEGATIVE_INVENTORY_ALLOWED) as
       | NegativeInventoryOnDisk
+      | undefined) ?? null;
+  const overShipping =
+    (byKey.get(SETTING_KEYS.OVER_SHIPPING_POLICY) as
+      | OverShippingPolicyOnDisk
       | undefined) ?? null;
 
   return (
@@ -128,6 +135,14 @@ export default async function AdminSettingsPage() {
             </CardHeader>
             <CardContent>
               <NegativeInventoryForm initial={negInv} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Over-shipping policy</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <OverShippingPolicyForm initial={overShipping} />
             </CardContent>
           </Card>
         </div>
