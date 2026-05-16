@@ -1,7 +1,7 @@
 'use client';
 
 import { Prisma } from '@/generated/tenant';
-import { MessageSquareText, Plus } from 'lucide-react';
+import { MessageSquareText } from 'lucide-react';
 import { formatCurrency } from '@/lib/format';
 import { InlineEditableCell } from './inline-editable-cell';
 
@@ -210,24 +210,19 @@ function SubscriptTextField({
 }) {
   const isEmpty = value == null || value.trim() === '';
 
-  // When empty + read-only we render nothing (current behavior). When
-  // empty + editable, render a "+ vendor" / "+ mpn" affordance — but
-  // hidden until the parent row is hovered or focused. Keeps the
-  // resting table calm; surfaces the edit target on demand.
-  if (isEmpty && !editable) return null;
+  // Empty fields render nothing — keeps the detail view uncluttered.
+  // To add a vendor SKU / MPN to a line that has none, operators use
+  // the Edit button on the PO. Existing values are click-to-edit
+  // when status allows.
+  if (isEmpty) return null;
 
-  const display = isEmpty ? (
-    <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-      <Plus className="size-3" aria-hidden />
-      {label}
-    </span>
-  ) : (
+  const display = (
     <span className="text-[10px] uppercase tracking-wide">
       {label}: {value}
     </span>
   );
 
-  const cell = (
+  return (
     <InlineEditableCell
       readOnly={!editable}
       displayValue={display}
@@ -246,18 +241,6 @@ function SubscriptTextField({
         return patchLineFields(purchaseOrderId, lineId, { [field]: next });
       }}
     />
-  );
-
-  // Relies on the parent row carrying `group` — see lines-table.tsx.
-  // group-focus-within keeps the affordance reachable via keyboard
-  // tab; opacity (not display:none) keeps the element clickable mid-
-  // hover so the operator can click straight into it.
-  return isEmpty ? (
-    <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-      {cell}
-    </span>
-  ) : (
-    cell
   );
 }
 
@@ -279,21 +262,19 @@ export function EditableLineNotesCell({
 }) {
   const isEmpty = notes == null || notes.trim() === '';
 
-  if (isEmpty && !editable) return null;
+  // Empty notes render nothing — keeps the description column from
+  // floating "+ Line note" over the product text. To add a note to
+  // a line that has none, operators use the Edit button on the PO.
+  if (isEmpty) return null;
 
-  const display = isEmpty ? (
-    <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-      <Plus className="size-3" aria-hidden />
-      Line note
-    </span>
-  ) : (
+  const display = (
     <span className="inline-flex items-baseline gap-1 text-xs italic text-muted-foreground">
       <MessageSquareText className="size-3 self-center not-italic" aria-hidden />
       “{notes}”
     </span>
   );
 
-  const cell = (
+  return (
     <InlineEditableCell
       readOnly={!editable}
       displayValue={display}
@@ -312,16 +293,6 @@ export function EditableLineNotesCell({
         return patchLineFields(purchaseOrderId, lineId, { notes: next });
       }}
     />
-  );
-
-  // Hide the "+ Line note" affordance until the parent row is
-  // hovered or focused — relies on the row carrying `group`.
-  return isEmpty ? (
-    <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-      {cell}
-    </span>
-  ) : (
-    cell
   );
 }
 

@@ -93,7 +93,7 @@ export function PurchaseOrderLinesTable({
         {lines.map((l) => (
           <div
             key={l.id}
-            className="group space-y-3 rounded-lg border border-border bg-card p-3"
+            className="space-y-3 rounded-lg border border-border bg-card p-3"
           >
             <div className="flex items-start gap-3">
               <div className="[.hide-product-images_&]:hidden">
@@ -104,21 +104,19 @@ export function PurchaseOrderLinesTable({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="font-mono text-xs text-muted-foreground">
-                  {l.sku}
-                  <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
-                    <EditableVendorSkuCell
-                      purchaseOrderId={purchaseOrderId}
-                      lineId={l.id}
-                      vendorSku={l.vendorSku}
-                      editable={editable}
-                    />
-                    <EditableMpnCell
-                      purchaseOrderId={purchaseOrderId}
-                      lineId={l.id}
-                      manufacturerPartNumber={l.manufacturerPartNumber}
-                      editable={editable}
-                    />
-                  </div>
+                  <div>{l.sku}</div>
+                  <EditableVendorSkuCell
+                    purchaseOrderId={purchaseOrderId}
+                    lineId={l.id}
+                    vendorSku={l.vendorSku}
+                    editable={editable}
+                  />
+                  <EditableMpnCell
+                    purchaseOrderId={purchaseOrderId}
+                    lineId={l.id}
+                    manufacturerPartNumber={l.manufacturerPartNumber}
+                    editable={editable}
+                  />
                 </div>
                 <div className="font-medium">{l.productName}</div>
                 {l.variantName ? (
@@ -196,7 +194,7 @@ export function PurchaseOrderLinesTable({
           </TableHeader>
           <TableBody>
             {lines.map((l) => (
-              <TableRow key={l.id} className="group">
+              <TableRow key={l.id}>
                 <TableCell className="[.hide-product-images_&]:hidden">
                   <ProductThumbnail
                     src={l.imageUrl}

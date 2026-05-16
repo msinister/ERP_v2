@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
-import { Lock, MessageSquareText, Plus } from 'lucide-react';
+import { Lock, MessageSquareText } from 'lucide-react';
 import { formatCurrency } from '@/lib/format';
 import { InlineEditableCell } from './inline-editable-cell';
 
@@ -228,22 +228,26 @@ export function EditableNotesBlock({
   internalNote: string | null;
   editable: boolean;
 }) {
-  // The internal note row is hidden by default when empty + read-only.
-  // When editable it stays visible (the "+ internal note" affordance)
-  // so operators don't need to discover an entry point.
-  const showInternal = editable || (internalNote != null && internalNote !== '');
+  // Notes-only block — existing values render and are click-to-edit
+  // (when status allows). Empty notes show nothing; to add a note to
+  // a line that has none, operators use the Edit button on the order.
+  const hasCustomer = customerNote != null && customerNote.trim() !== '';
+  const hasInternal = internalNote != null && internalNote.trim() !== '';
+  if (!hasCustomer && !hasInternal) return null;
 
   return (
     <div className="mt-1 space-y-1">
-      <NoteRow
-        salesOrderId={salesOrderId}
-        lineId={lineId}
-        field="customerNote"
-        value={customerNote}
-        editable={editable}
-        kind="customer"
-      />
-      {showInternal ? (
+      {hasCustomer ? (
+        <NoteRow
+          salesOrderId={salesOrderId}
+          lineId={lineId}
+          field="customerNote"
+          value={customerNote}
+          editable={editable}
+          kind="customer"
+        />
+      ) : null}
+      {hasInternal ? (
         <NoteRow
           salesOrderId={salesOrderId}
           lineId={lineId}
@@ -272,46 +276,26 @@ function NoteRow({
   editable: boolean;
   kind: 'customer' | 'internal';
 }) {
-  const isEmpty = value == null || value.trim() === '';
-
-  // Customer note prints on the SO and invoice — italic + quote
-  // styling. Internal note never prints; uses a "Internal" badge +
-  // lock icon so operators can tell at a glance which is which.
-  const display = isEmpty ? (
-    editable ? (
-      <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-        {kind === 'customer' ? (
-          <>
-            <Plus className="size-3" aria-hidden />
-            Customer note
-          </>
-        ) : (
-          <>
-            <Plus className="size-3" aria-hidden />
-            <Lock className="size-3" aria-hidden />
-            Internal note
-          </>
-        )}
+  // Caller already guarded against empty — render the existing value
+  // styled by kind. Customer note prints on the SO + invoice (italic
+  // quote); internal note never prints (lock + Internal badge).
+  const display =
+    kind === 'customer' ? (
+      <span className="inline-flex items-baseline gap-1 text-xs italic text-muted-foreground">
+        <MessageSquareText className="size-3 self-center not-italic" aria-hidden />
+        “{value}”
       </span>
-    ) : null
-  ) : kind === 'customer' ? (
-    <span className="inline-flex items-baseline gap-1 text-xs italic text-muted-foreground">
-      <MessageSquareText className="size-3 self-center not-italic" aria-hidden />
-      “{value}”
-    </span>
-  ) : (
-    <span className="inline-flex items-baseline gap-1.5 text-xs text-muted-foreground">
-      <Badge variant="outline" className="gap-1 px-1 py-0 text-[9px]">
-        <Lock className="size-2.5" aria-hidden />
-        Internal
-      </Badge>
-      {value}
-    </span>
-  );
+    ) : (
+      <span className="inline-flex items-baseline gap-1.5 text-xs text-muted-foreground">
+        <Badge variant="outline" className="gap-1 px-1 py-0 text-[9px]">
+          <Lock className="size-2.5" aria-hidden />
+          Internal
+        </Badge>
+        {value}
+      </span>
+    );
 
-  if (isEmpty && !editable) return null;
-
-  const cell = (
+  return (
     <InlineEditableCell
       readOnly={!editable}
       displayValue={display}
@@ -332,17 +316,6 @@ function NoteRow({
         return patchLineFields(salesOrderId, lineId, { [field]: next });
       }}
     />
-  );
-
-  // Hide the "+ Customer note" / "+ Internal note" empty affordance
-  // until the parent row is hovered or focused — relies on the row
-  // carrying `group`. Existing notes always render.
-  return isEmpty ? (
-    <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-      {cell}
-    </span>
-  ) : (
-    cell
   );
 }
 
