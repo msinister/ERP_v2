@@ -311,7 +311,7 @@ function NoteRow({
 
   if (isEmpty && !editable) return null;
 
-  return (
+  const cell = (
     <InlineEditableCell
       readOnly={!editable}
       displayValue={display}
@@ -332,6 +332,17 @@ function NoteRow({
         return patchLineFields(salesOrderId, lineId, { [field]: next });
       }}
     />
+  );
+
+  // Hide the "+ Customer note" / "+ Internal note" empty affordance
+  // until the parent row is hovered or focused — relies on the row
+  // carrying `group`. Existing notes always render.
+  return isEmpty ? (
+    <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+      {cell}
+    </span>
+  ) : (
+    cell
   );
 }
 

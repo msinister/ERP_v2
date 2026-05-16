@@ -211,7 +211,9 @@ function SubscriptTextField({
   const isEmpty = value == null || value.trim() === '';
 
   // When empty + read-only we render nothing (current behavior). When
-  // empty + editable, render a "+ vendor" / "+ mpn" affordance.
+  // empty + editable, render a "+ vendor" / "+ mpn" affordance — but
+  // hidden until the parent row is hovered or focused. Keeps the
+  // resting table calm; surfaces the edit target on demand.
   if (isEmpty && !editable) return null;
 
   const display = isEmpty ? (
@@ -225,7 +227,7 @@ function SubscriptTextField({
     </span>
   );
 
-  return (
+  const cell = (
     <InlineEditableCell
       readOnly={!editable}
       displayValue={display}
@@ -244,6 +246,18 @@ function SubscriptTextField({
         return patchLineFields(purchaseOrderId, lineId, { [field]: next });
       }}
     />
+  );
+
+  // Relies on the parent row carrying `group` — see lines-table.tsx.
+  // group-focus-within keeps the affordance reachable via keyboard
+  // tab; opacity (not display:none) keeps the element clickable mid-
+  // hover so the operator can click straight into it.
+  return isEmpty ? (
+    <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+      {cell}
+    </span>
+  ) : (
+    cell
   );
 }
 
@@ -279,7 +293,7 @@ export function EditableLineNotesCell({
     </span>
   );
 
-  return (
+  const cell = (
     <InlineEditableCell
       readOnly={!editable}
       displayValue={display}
@@ -298,6 +312,16 @@ export function EditableLineNotesCell({
         return patchLineFields(purchaseOrderId, lineId, { notes: next });
       }}
     />
+  );
+
+  // Hide the "+ Line note" affordance until the parent row is
+  // hovered or focused — relies on the row carrying `group`.
+  return isEmpty ? (
+    <span className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+      {cell}
+    </span>
+  ) : (
+    cell
   );
 }
 

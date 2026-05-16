@@ -115,7 +115,7 @@ export function SalesOrderLinesTable({
           </TableHeader>
           <TableBody>
             {lines.map((l) => (
-              <TableRow key={l.id}>
+              <TableRow key={l.id} className="group">
                 <TableCell className="[.hide-product-images_&]:hidden">
                   <ProductThumbnail
                     src={l.imageUrl}
@@ -213,7 +213,7 @@ function SalesOrderLineCard({
 }) {
   const hasDiscount = l.discountPercent != null || l.discountAmount != null;
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-card p-3">
+    <div className="group space-y-3 rounded-lg border border-border bg-card p-3">
       <div className="flex items-start gap-3">
         {/* Thumbnail at top-left, hides with the global toggle. */}
         <div className="[.hide-product-images_&]:hidden">

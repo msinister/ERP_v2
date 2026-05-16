@@ -93,7 +93,7 @@ export function PurchaseOrderLinesTable({
         {lines.map((l) => (
           <div
             key={l.id}
-            className="space-y-3 rounded-lg border border-border bg-card p-3"
+            className="group space-y-3 rounded-lg border border-border bg-card p-3"
           >
             <div className="flex items-start gap-3">
               <div className="[.hide-product-images_&]:hidden">
@@ -196,7 +196,7 @@ export function PurchaseOrderLinesTable({
           </TableHeader>
           <TableBody>
             {lines.map((l) => (
-              <TableRow key={l.id}>
+              <TableRow key={l.id} className="group">
                 <TableCell className="[.hide-product-images_&]:hidden">
                   <ProductThumbnail
                     src={l.imageUrl}
