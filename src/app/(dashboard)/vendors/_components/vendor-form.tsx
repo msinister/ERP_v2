@@ -26,6 +26,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { normalizeDecimalForSubmit } from '@/lib/decimal-input';
 
 // ===========================================================================
 // Form schema
@@ -43,17 +44,20 @@ const VENDOR_TYPES = [
 
 const vendorTypeEnum = z.enum(['STOCK', 'DROP_SHIP', 'SERVICE']);
 
+// Accept loose decimal input (".25" alongside "0.25"). Submit path
+// runs normalizeDecimalForSubmit before sending to the API so the
+// server's strict decimalString validator gets the canonical form.
 const optionalDecimal = z
   .union([
     z.literal(''),
-    z.string().regex(/^\d+(\.\d+)?$/, 'Must be a non-negative decimal'),
+    z.string().regex(/^(\d+(\.\d+)?|\.\d+)$/, 'Must be a non-negative decimal'),
   ])
   .optional();
 
 const optionalPercent = z
   .union([
     z.literal(''),
-    z.string().regex(/^\d+(\.\d+)?$/, 'Must be a number'),
+    z.string().regex(/^(\d+(\.\d+)?|\.\d+)$/, 'Must be a number'),
   ])
   .optional()
   .refine(
@@ -226,13 +230,17 @@ export function VendorForm({
               isDefault: true,
             }
           : undefined;
+      // Normalize loose decimal input (".25" → "0.25") so the server's
+      // strict decimalString validator accepts what the operator typed.
+      const minOrder = nullEmpty(values.minimumOrderAmount);
+      const costPct = nullEmpty(values.costChangeAlertPct);
       const payload: VendorCreateApiPayload = {
         name: values.name.trim(),
         type: values.type,
         paymentTermId: values.paymentTermId,
         defaultCurrency: nullEmpty(values.defaultCurrency)?.toUpperCase(),
-        minimumOrderAmount: nullEmpty(values.minimumOrderAmount),
-        costChangeAlertPct: nullEmpty(values.costChangeAlertPct),
+        minimumOrderAmount: minOrder ? normalizeDecimalForSubmit(minOrder) : minOrder,
+        costChangeAlertPct: costPct ? normalizeDecimalForSubmit(costPct) : costPct,
         notes: nullEmpty(values.notes),
         active: values.active,
         remitToAddress,

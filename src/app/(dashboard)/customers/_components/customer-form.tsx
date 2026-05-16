@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { normalizeDecimalForSubmit } from '@/lib/decimal-input';
 
 // ===========================================================================
 // Form schema
@@ -55,10 +56,12 @@ const customerTypeEnum = z.enum([
 const optionalEmail = z
   .union([z.literal(''), z.string().email().max(255)])
   .optional();
+// Accept loose decimal input (".25" alongside "0.25"). Submit path
+// runs normalizeDecimalForSubmit before posting.
 const optionalDecimal = z
   .union([
     z.literal(''),
-    z.string().regex(/^-?\d+(\.\d+)?$/, 'Must be a decimal'),
+    z.string().regex(/^-?(\d+(\.\d+)?|\.\d+)$/, 'Must be a decimal'),
   ])
   .optional();
 const optionalIntStr = z
@@ -244,7 +247,12 @@ export function CustomerForm({
         paymentTermId: values.paymentTermId,
         primaryPhone: nullEmpty(values.primaryPhone),
         primaryEmail: nullEmpty(values.primaryEmail),
-        creditLimit: nullEmpty(values.creditLimit),
+        creditLimit: (() => {
+          const v = nullEmpty(values.creditLimit);
+          // Normalize ".25" → "0.25" so the server's strict
+          // decimalString accepts what the operator typed.
+          return v ? normalizeDecimalForSubmit(v) : v;
+        })(),
         arHoldDays:
           values.arHoldDays && values.arHoldDays.trim() !== ''
             ? Number(values.arHoldDays)

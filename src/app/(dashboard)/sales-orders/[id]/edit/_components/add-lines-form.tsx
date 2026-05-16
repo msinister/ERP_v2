@@ -29,6 +29,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatCurrency } from '@/lib/format';
+import {
+  isNonNegativeDecimalInput,
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 // =============================================================================
 // CONFIRMED-status edit surface — add-only on lines. Existing lines render
@@ -97,8 +102,6 @@ type ArHoldErrorBody = {
 
 type Block = CreditErrorBody | ArHoldErrorBody | null;
 
-const DECIMAL_RE = /^\d+(\.\d+)?$/;
-
 export function AddLinesForm({
   salesOrderId,
   salesOrderNumber,
@@ -151,15 +154,12 @@ export function AddLinesForm({
         nextErrors[i].variantId = 'Pick a product';
         hasError = true;
       }
-      const qty = d.qtyOrdered.trim();
-      if (!qty || !DECIMAL_RE.test(qty) || Number(qty) <= 0) {
+      if (!isPositiveDecimalInput(d.qtyOrdered.trim())) {
         nextErrors[i].qtyOrdered = 'Must be > 0';
         hasError = true;
       }
-      if (
-        d.manualUnitPrice.trim() !== '' &&
-        !DECIMAL_RE.test(d.manualUnitPrice.trim())
-      ) {
+      const priceRaw = d.manualUnitPrice.trim();
+      if (priceRaw !== '' && !isNonNegativeDecimalInput(priceRaw)) {
         nextErrors[i].manualUnitPrice = 'Must be a non-negative number';
         hasError = true;
       }
@@ -173,6 +173,8 @@ export function AddLinesForm({
 
     startTransition(async () => {
       try {
+        // Normalize loose-form input (".25" → "0.25") so the server's
+        // strict decimalString validator accepts what the operator typed.
         const payload = {
           lines: drafts.map((d) => ({
             variantId: d.variantId,
@@ -180,9 +182,13 @@ export function AddLinesForm({
             // SOs aren't supported in pilot — addSalesOrderLines's schema
             // expects per-line warehouseId for forward-compat.
             warehouseId,
-            qtyOrdered: d.qtyOrdered.trim(),
+            qtyOrdered: normalizeDecimalForSubmit(d.qtyOrdered.trim()),
             ...(d.manualUnitPrice.trim() !== ''
-              ? { manualUnitPrice: d.manualUnitPrice.trim() }
+              ? {
+                  manualUnitPrice: normalizeDecimalForSubmit(
+                    d.manualUnitPrice.trim(),
+                  ),
+                }
               : {}),
             ...(d.customerNote.trim() !== ''
               ? { customerNote: d.customerNote.trim() }

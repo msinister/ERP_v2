@@ -25,6 +25,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatCurrency } from '@/lib/format';
+import {
+  isNonNegativeDecimalInput,
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 // =============================================================================
 // PO add-lines form. Mirrors the SO add-lines pattern at
@@ -89,8 +94,6 @@ function emptyDraft(defaultWarehouseId: string): DraftLine {
     notes: '',
   };
 }
-
-const DECIMAL_RE = /^\d+(\.\d+)?$/;
 
 export function AddLinesForm({
   purchaseOrderId,
@@ -166,13 +169,11 @@ export function AddLinesForm({
         nextErrors[i].warehouseId = 'Pick a warehouse';
         hasError = true;
       }
-      const qty = d.qtyOrdered.trim();
-      if (!qty || !DECIMAL_RE.test(qty) || Number(qty) <= 0) {
+      if (!isPositiveDecimalInput(d.qtyOrdered.trim())) {
         nextErrors[i].qtyOrdered = 'Must be > 0';
         hasError = true;
       }
-      const cost = d.unitCost.trim();
-      if (!cost || !DECIMAL_RE.test(cost) || Number(cost) < 0) {
+      if (!isNonNegativeDecimalInput(d.unitCost.trim())) {
         nextErrors[i].unitCost = 'Must be a non-negative number';
         hasError = true;
       }
@@ -182,12 +183,14 @@ export function AddLinesForm({
 
     startTransition(async () => {
       try {
+        // Normalize loose-form input (".25" → "0.25") so the server's
+        // strict decimalString validator accepts what the operator typed.
         const payload = {
           lines: filled.map((d) => ({
             variantId: d.variantId,
             warehouseId: d.warehouseId,
-            qtyOrdered: d.qtyOrdered.trim(),
-            unitCost: d.unitCost.trim(),
+            qtyOrdered: normalizeDecimalForSubmit(d.qtyOrdered.trim()),
+            unitCost: normalizeDecimalForSubmit(d.unitCost.trim()),
             ...(d.vendorSku.trim() !== ''
               ? { vendorSku: d.vendorSku.trim() }
               : {}),

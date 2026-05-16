@@ -13,6 +13,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  isNonNegativeDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 type Mode = 'none' | 'percent' | 'flat';
 
@@ -37,13 +41,12 @@ export function RestockingFeeForm({
   function submit() {
     const next: Partial<Record<string, string>> = {};
     if (mode === 'percent') {
-      if (!/^\d+(\.\d+)?$/.test(percent)) next.percent = 'Must be a number';
-      else if (Number(percent) < 0 || Number(percent) > 100)
+      if (!isNonNegativeDecimalInput(percent)) next.percent = 'Must be a number';
+      else if (Number(percent) > 100)
         next.percent = 'Must be between 0 and 100';
     }
     if (mode === 'flat') {
-      if (!/^\d+(\.\d+)?$/.test(flat)) next.flat = 'Must be a number';
-      else if (Number(flat) < 0) next.flat = 'Must be >= 0';
+      if (!isNonNegativeDecimalInput(flat)) next.flat = 'Must be a number';
     }
     if (Object.keys(next).length > 0) {
       setErrors(next);
@@ -51,12 +54,13 @@ export function RestockingFeeForm({
     }
     setErrors({});
     // On-disk shape: { percent: string|null, flat: string|null }.
-    // Exactly one is non-null (or both null for "no default").
+    // Exactly one is non-null (or both null for "no default"). Normalize
+    // loose decimal input (".25" → "0.25") for the strict server schema.
     const body =
       mode === 'percent'
-        ? { percent, flat: null }
+        ? { percent: normalizeDecimalForSubmit(percent), flat: null }
         : mode === 'flat'
-          ? { percent: null, flat }
+          ? { percent: null, flat: normalizeDecimalForSubmit(flat) }
           : { percent: null, flat: null };
     startTransition(async () => {
       try {

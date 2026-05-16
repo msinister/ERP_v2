@@ -6,6 +6,10 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Field, FieldError, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import {
+  isNonNegativeDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 type Tiers = {
   WHOLESALE_REGULAR: string;
@@ -48,8 +52,8 @@ export function TierDiscountForm({ initial }: { initial: Tiers | null }) {
     const next: Partial<Record<keyof Tiers, string>> = {};
     for (const t of TIER_LABELS) {
       const v = values[t.key];
-      if (!/^\d+(\.\d+)?$/.test(v)) next[t.key] = 'Must be a number';
-      else if (Number(v) < 0 || Number(v) > 100)
+      if (!isNonNegativeDecimalInput(v)) next[t.key] = 'Must be a number';
+      else if (Number(v) > 100)
         next[t.key] = 'Must be between 0 and 100';
     }
     if (Object.keys(next).length > 0) {
@@ -57,6 +61,11 @@ export function TierDiscountForm({ initial }: { initial: Tiers | null }) {
       return;
     }
     setErrors({});
+    // Normalize loose decimal input (".25" → "0.25") so the server's
+    // strict decimalString validator accepts the value.
+    const normalized = Object.fromEntries(
+      TIER_LABELS.map((t) => [t.key, normalizeDecimalForSubmit(values[t.key])]),
+    ) as Tiers;
     startTransition(async () => {
       try {
         const res = await fetch(
@@ -64,7 +73,7 @@ export function TierDiscountForm({ initial }: { initial: Tiers | null }) {
           {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(values),
+            body: JSON.stringify(normalized),
           },
         );
         if (!res.ok) {

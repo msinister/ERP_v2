@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { normalizeDecimalForSubmit } from '@/lib/decimal-input';
 
 export type VariantOption = {
   id: string;
@@ -62,7 +63,10 @@ async function readApiError(res: Response): Promise<string> {
   }
 }
 
-const POSITIVE_DECIMAL_RE = /^\d+(\.\d+)?$/;
+// Permissive shape — accept ".25" alongside "0.25". The submit path
+// normalizes via normalizeDecimalForSubmit before the fetch so the
+// server's strict decimalString validator gets the canonical form.
+const POSITIVE_DECIMAL_RE = /^(\d+(\.\d+)?|\.\d+)$/;
 
 // Shared add + edit dialog for the vendor product catalog. Variant is
 // fixed on edit — changing it would mean deleting one row and creating
@@ -143,11 +147,15 @@ export function ProductFormDialog({
     }
     setErrors({});
     // Create requires variantId; edit doesn't accept it (immutable).
+    // Normalize loose decimal input (".25" → "0.25") so the server's
+    // strict validator accepts the value.
+    const trimmedCost = latestCost.trim();
+    const trimmedPack = packSize.trim();
     const createPayload = {
       variantId,
       vendorSku: vendorSku.trim() || undefined,
-      latestCost: latestCost.trim() || undefined,
-      packSize: packSize.trim() || undefined,
+      latestCost: trimmedCost ? normalizeDecimalForSubmit(trimmedCost) : undefined,
+      packSize: trimmedPack ? normalizeDecimalForSubmit(trimmedPack) : undefined,
       isPrimary,
       active,
       notes: notes.trim() || undefined,

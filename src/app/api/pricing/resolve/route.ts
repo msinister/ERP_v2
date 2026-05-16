@@ -14,7 +14,10 @@ import { authErrorResponse } from '@/lib/auth/errors';
 // Read-only. Wraps resolvePrice in db.$transaction because the resolver
 // signature requires a Prisma.TransactionClient.
 
-const DECIMAL_RE = /^\d+(\.\d+)?$/;
+// Accept loose decimal input (".25" alongside "0.25"). Prisma.Decimal
+// accepts both shapes natively, so passing the value straight through
+// after this regex is safe.
+const DECIMAL_RE = /^(\d+(\.\d+)?|\.\d+)$/;
 
 export async function GET(req: Request) {
   try {
