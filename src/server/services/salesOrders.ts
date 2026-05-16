@@ -824,10 +824,18 @@ export async function reopenSalesOrder(
       );
     }
 
-    // 4. Per-line cleanup. Zero qtyShipped, drop the consume-movement
-    // back-pointer. Restore reservation when re-opening to a status
-    // that still holds inventory (CONFIRMED / DISPATCHED); CANCELLED
-    // releases reservation outright.
+    // 4. Per-line cleanup. Drop the consume-movement back-pointer
+    // (the prior CONSUME has been reversed) and restore reservation
+    // when re-opening to a status that still holds inventory
+    // (CONFIRMED / DISPATCHED); CANCELLED releases reservation
+    // outright. qtyShipped is PRESERVED — the operator is reopening
+    // to make corrections, not to lose their shipping data. Without
+    // preservation, the warehouse-captured shipped count gets
+    // silently rewritten on reopen (and over-shipments looked like
+    // they "snapped back" to qtyOrdered because the QtyShippedInput
+    // pre-fill chain hides the zero). If the operator wants to
+    // revise the shipped count, they edit it inline via the
+    // QtyShippedInput on the reopened SO.
     const restoreReservation =
       data.targetStatus === 'CONFIRMED' || data.targetStatus === 'DISPATCHED';
     const bins = uniqueBins(before.lines);
@@ -839,7 +847,6 @@ export async function reopenSalesOrder(
         where: { id: line.id },
         data: {
           inventoryMovementId: null,
-          qtyShipped: new Prisma.Decimal(0),
           qtyReserved: restoreReservation
             ? line.qtyOrdered
             : new Prisma.Decimal(0),

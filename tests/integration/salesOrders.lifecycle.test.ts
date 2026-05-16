@@ -615,7 +615,7 @@ suite('SalesOrder lifecycle', () => {
     );
   });
 
-  it('reopenSalesOrder (no payments) → CONFIRMED: invoice detached, inventory restored, qtyShipped zeroed', async () => {
+  it('reopenSalesOrder (no payments) → CONFIRMED: invoice detached, inventory restored, qtyShipped preserved', async () => {
     await stockBin('20');
     const so = await createSalesOrder(db, createInput('5'));
     await confirmSalesOrder(db, so.id);
@@ -631,7 +631,13 @@ suite('SalesOrder lifecycle', () => {
     });
     expect(reopened.status).toBe(SalesOrderStatus.CONFIRMED);
     expect(reopened.closedAt).toBeNull();
-    expect(reopened.lines[0].qtyShipped.toString()).toBe('0');
+    // qtyShipped is preserved across reopen — the close persisted it
+    // (no override here, so the full qtyOrdered=5 became the shipped
+    // value), and reopen leaves it alone so the operator's correction
+    // workflow starts from the actual data.
+    expect(reopened.lines[0].qtyShipped.toString()).toBe(
+      new Prisma.Decimal('5').toString(),
+    );
     expect(reopened.lines[0].qtyReserved.toString()).toBe(
       new Prisma.Decimal('5').toString(),
     );
@@ -650,6 +656,34 @@ suite('SalesOrder lifecycle', () => {
     });
     expect(inv!.onHand.toString()).toBe(new Prisma.Decimal('20').toString());
     expect(inv!.reserved.toString()).toBe(new Prisma.Decimal('5').toString());
+  });
+
+  it('reopenSalesOrder preserves an operator-edited qtyShipped (regression: was resetting to 0)', async () => {
+    // Operator inline-edits qtyShipped to a short value (7 of 10),
+    // closes the SO, then reopens → DISPATCHED to make a correction.
+    // Reopen MUST keep qtyShipped at 7 — the bug reset it to 0, which
+    // the QtyShippedInput pre-fill chain masked by showing qtyOrdered
+    // (10), making it look like the warehouse's data had been lost.
+    await stockBin('20');
+    const so = await createSalesOrder(db, createInput('10'));
+    await confirmSalesOrder(db, so.id);
+    await updateSalesOrderLineQtyShipped(db, so.id, so.lines[0].id, {
+      qtyShipped: '7',
+    });
+    const closed = await closeSalesOrder(db, so.id, undefined);
+    expect(closed.lines[0].qtyShipped.toString()).toBe(
+      new Prisma.Decimal('7').toString(),
+    );
+
+    const reopened = await reopenSalesOrder(db, so.id, {
+      targetStatus: 'DISPATCHED',
+      paymentDecision: 'none',
+    });
+    // The bug: qtyShipped was reset to 0 here. The fix: preserve it.
+    expect(reopened.lines[0].qtyShipped.toString()).toBe(
+      new Prisma.Decimal('7').toString(),
+    );
+    expect(reopened.lines[0].inventoryMovementId).toBeNull();
   });
 
   it('reopenSalesOrder → CANCELLED zeroes reservation and stamps cancelledAt', async () => {
