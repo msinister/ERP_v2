@@ -37,6 +37,7 @@ import { Textarea } from '@/components/ui/textarea';
 
 const PRODUCT_TYPES = [
   { value: 'SIMPLE', label: 'Simple' },
+  { value: 'ASSEMBLED', label: 'Assembled' },
   { value: 'DROP_SHIP', label: 'Drop-ship' },
   { value: 'SERVICE', label: 'Service' },
 ] as const;
@@ -44,7 +45,7 @@ const PRODUCT_TYPES = [
 const WEIGHT_UNITS = ['oz', 'lb', 'kg', 'g'] as const;
 const DIMENSION_UNITS = ['in', 'mm', 'cm'] as const;
 
-const productTypeEnum = z.enum(['SIMPLE', 'DROP_SHIP', 'SERVICE']);
+const productTypeEnum = z.enum(['SIMPLE', 'ASSEMBLED', 'DROP_SHIP', 'SERVICE']);
 const weightUnitEnum = z.enum(WEIGHT_UNITS);
 const dimensionUnitEnum = z.enum(DIMENSION_UNITS);
 

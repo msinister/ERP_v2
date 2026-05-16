@@ -20,7 +20,7 @@ export const productCreateSchema = z.object({
   longDescription: z.string().optional(),
   brand: z.string().max(120).optional(),
   category: z.string().max(120).optional(),
-  type: z.enum(['SIMPLE', 'DROP_SHIP', 'SERVICE']).default('SIMPLE'),
+  type: z.enum(['SIMPLE', 'DROP_SHIP', 'SERVICE', 'ASSEMBLED']).default('SIMPLE'),
   tracksInventory: z.boolean().default(true),
   basePrice: decimalString.optional(),
   weight: decimalString.optional(),
@@ -61,9 +61,32 @@ export const warehouseCreateSchema = z.object({
 
 export const warehouseUpdateSchema = warehouseCreateSchema.partial();
 
+const positiveDecimal = decimalString.refine(
+  (v) => Number(v) > 0,
+  'Must be greater than 0',
+);
+
+// BOM (Bill of Materials) — defines the components required to build
+// one finished unit of a parent product. Used by `setProductBom` to
+// wholesale-replace the BOM lines and labor cost. `laborCost` is
+// nullable: explicit null clears any existing labor cost.
+export const bomLineInputSchema = z.object({
+  componentVariantId: z.string().min(1),
+  qtyRequired: positiveDecimal,
+  sortOrder: z.number().int().min(0).optional(),
+  notes: z.string().max(2000).optional(),
+});
+
+export const setProductBomInputSchema = z.object({
+  lines: z.array(bomLineInputSchema),
+  laborCost: decimalString.nullable().optional(),
+});
+
 export type ProductCreateInput = z.infer<typeof productCreateSchema>;
 export type ProductUpdateInput = z.infer<typeof productUpdateSchema>;
 export type VariantCreateInput = z.infer<typeof variantCreateSchema>;
 export type VariantUpdateInput = z.infer<typeof variantUpdateSchema>;
 export type WarehouseCreateInput = z.infer<typeof warehouseCreateSchema>;
 export type WarehouseUpdateInput = z.infer<typeof warehouseUpdateSchema>;
+export type BomLineInput = z.infer<typeof bomLineInputSchema>;
+export type SetProductBomInput = z.infer<typeof setProductBomInputSchema>;

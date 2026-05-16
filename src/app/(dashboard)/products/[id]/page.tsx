@@ -24,6 +24,11 @@ import {
   type ProductImageRow,
   type VariantImageRow,
 } from './_components/images-tab';
+import {
+  BomTab,
+  type BomComponentOption,
+  type BomTabExistingLine,
+} from './_components/bom-tab';
 
 // Always live — inventory + movements change with every PO receive,
 // SO close, and manual adjustment. revalidate=0 matches the other
@@ -185,6 +190,70 @@ export default async function ProductDetailPage({
     negativeAllocation: m.negativeAllocation,
   }));
 
+  // BOM data only loaded when the tab is shown (SIMPLE + ASSEMBLED).
+  // For other types (DROP_SHIP / SERVICE) the tab is hidden entirely.
+  const bomEligible =
+    product.type === 'SIMPLE' || product.type === 'ASSEMBLED';
+
+  // BOM lines for the read view: pre-joined component variant + parent
+  // product names so the table renders without a second lookup.
+  const bomLineRows: BomTabExistingLine[] = bomEligible
+    ? (
+        await db.bomLine.findMany({
+          where: { parentProductId: product.id, deletedAt: null },
+          include: {
+            componentVariant: {
+              select: {
+                sku: true,
+                name: true,
+                product: { select: { name: true } },
+              },
+            },
+          },
+          orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        })
+      ).map((l) => ({
+        id: l.id,
+        componentVariantId: l.componentVariantId,
+        qtyRequired: l.qtyRequired.toString(),
+        sortOrder: l.sortOrder,
+        notes: l.notes,
+        componentVariantSku: l.componentVariant.sku,
+        componentVariantName: l.componentVariant.name,
+        componentProductName: l.componentVariant.product.name,
+      }))
+    : [];
+
+  // Component picker options for the BOM editor — every active variant
+  // EXCEPT the parent product's own variants (the service rejects
+  // self-reference and the UI shouldn't surface the option).
+  const bomComponentOptions: BomComponentOption[] = bomEligible
+    ? (
+        await db.productVariant.findMany({
+          where: {
+            active: true,
+            deletedAt: null,
+            productId: { not: product.id },
+            product: { active: true, deletedAt: null },
+          },
+          select: {
+            id: true,
+            sku: true,
+            name: true,
+            product: { select: { name: true, sku: true } },
+          },
+          orderBy: { sku: 'asc' },
+          take: 1000,
+        })
+      ).map((v) => ({
+        variantId: v.id,
+        variantSku: v.sku,
+        variantName: v.name,
+        productName: v.product.name,
+        productSku: v.product.sku,
+      }))
+    : [];
+
   return (
     <div className="space-y-6">
       <ProductHeader product={product} />
@@ -209,6 +278,16 @@ export default async function ProductDetailPage({
             ) : null}
           </TabsTrigger>
           <TabsTrigger value="inventory">Inventory</TabsTrigger>
+          {bomEligible ? (
+            <TabsTrigger value="bom">
+              BOM
+              {bomLineRows.length > 0 ? (
+                <span className="ml-1 text-xs text-muted-foreground">
+                  ({bomLineRows.length})
+                </span>
+              ) : null}
+            </TabsTrigger>
+          ) : null}
           <TabsTrigger value="movements">
             Movements
             {movementRows.length > 0 ? (
@@ -239,6 +318,17 @@ export default async function ProductDetailPage({
         <TabsContent value="inventory">
           <InventoryTab rows={inventoryRows} />
         </TabsContent>
+        {bomEligible ? (
+          <TabsContent value="bom">
+            <BomTab
+              productId={product.id}
+              productType={product.type}
+              laborCost={product.bomLaborCost?.toString() ?? null}
+              existingLines={bomLineRows}
+              componentOptions={bomComponentOptions}
+            />
+          </TabsContent>
+        ) : null}
         <TabsContent value="movements">
           <MovementsTab rows={movementRows} />
         </TabsContent>
