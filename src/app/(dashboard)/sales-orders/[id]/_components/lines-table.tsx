@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { formatCurrency } from '@/lib/format';
 import { ProductThumbnail } from '@/components/shared/product-thumbnail';
 import { ProductImageToggle } from '@/components/shared/product-image-toggle';
+import { StockContextToggle } from '@/components/shared/stock-context-toggle';
 import { QtyShippedInput } from './qty-shipped-input';
 import {
   EditableDiscountCell,
@@ -39,6 +40,14 @@ export type SalesOrderLineRow = {
   bundleGroupId: string | null;
   bundleSourceSku: string | null;
   bundleSourceName: string | null;
+  // Internal-only stock + cost reference for staff. Null when no
+  // InventoryItem row exists for the (variant, warehouse) pair —
+  // typically a variant that has never had a movement. Hidden on
+  // customer-facing documents regardless of value.
+  onHand: Prisma.Decimal | null;
+  available: Prisma.Decimal | null;
+  wac: Prisma.Decimal | null;
+  lastCost: Prisma.Decimal | null;
 };
 
 export function SalesOrderLinesTable({
@@ -112,11 +121,12 @@ export function SalesOrderLinesTable({
 
   return (
     <div className="space-y-3">
-      {/* Toggle sits above both views — toggles the global
-          .hide-product-images class via the hook, which the image
-          cells below respond to. One toggle for both desktop +
-          mobile (same global state). */}
-      <div className="flex justify-end">
+      {/* Toggles sit above both views — each toggles a global class
+          on <html> via its hook, which the matching cells below
+          respond to. One pair of toggles for both desktop + mobile
+          (same global state). Stock info is staff-only context. */}
+      <div className="flex justify-end gap-2">
+        <StockContextToggle />
         <ProductImageToggle />
       </div>
 
@@ -193,19 +203,22 @@ export function SalesOrderLinesTable({
                   </TableCell>
                   <TableCell
                     className={
-                      'font-mono text-xs text-muted-foreground ' +
+                      'font-mono text-sm font-semibold ' +
                       (inBundle ? 'pl-6' : '')
                     }
                   >
                     {l.sku}
                   </TableCell>
                   <TableCell>
-                    <div className="font-medium">{l.productName}</div>
+                    <div className="text-sm text-muted-foreground">
+                      {l.productName}
+                    </div>
                     {l.variantName ? (
                       <div className="text-xs text-muted-foreground">
                         {l.variantName}
                       </div>
                     ) : null}
+                    <StockAndCostBlock line={l} />
                     <EditableNotesBlock
                       salesOrderId={salesOrderId}
                       lineId={l.id}
@@ -298,11 +311,12 @@ function SalesOrderLineCard({
           <ProductThumbnail src={l.imageUrl} productName={l.productName} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="font-mono text-xs text-muted-foreground">{l.sku}</div>
-          <div className="font-medium">{l.productName}</div>
+          <div className="font-mono text-sm font-semibold">{l.sku}</div>
+          <div className="text-sm text-muted-foreground">{l.productName}</div>
           {l.variantName ? (
             <div className="text-xs text-muted-foreground">{l.variantName}</div>
           ) : null}
+          <StockAndCostBlock line={l} />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3 text-sm">
@@ -463,6 +477,57 @@ function computeLineTotal(
   }
   if (lineTotal.lessThan(0)) lineTotal = new Prisma.Decimal(0);
   return lineTotal;
+}
+
+// Internal-only stock + cost reference for a line. Wrapped in the
+// `.hide-stock-context` gate so the operator can collapse it via the
+// Stock-info toggle. Never rendered on customer-facing documents —
+// the lines table lives on the SO detail page only, and invoice /
+// packing-slip templates don't import it.
+//
+// onHand + available come from the InventoryItem row for the line's
+// (variant, warehouse); null when the row doesn't exist (variant has
+// never had a movement at this warehouse). WAC + last cost come from
+// the FifoLayer ledger via lib/server/services/wac.
+function StockAndCostBlock({ line: l }: { line: SalesOrderLineRow }) {
+  const hasStock = l.onHand != null || l.available != null;
+  const hasCost = l.wac != null || l.lastCost != null;
+  if (!hasStock && !hasCost) return null;
+  return (
+    <div className="mt-1 space-y-0.5 text-xs text-muted-foreground [.hide-stock-context_&]:hidden">
+      {hasStock ? (
+        <div className="tabular-nums">
+          <span>QOH: </span>
+          <span>{l.onHand != null ? formatQty(l.onHand) : '—'}</span>
+          <span className="mx-2 text-muted-foreground/60">·</span>
+          <span>Available: </span>
+          <span className={availableTone(l.available)}>
+            {l.available != null ? formatQty(l.available) : '—'}
+          </span>
+        </div>
+      ) : null}
+      {hasCost ? (
+        <div className="tabular-nums">
+          <span>WAC: </span>
+          <span>{l.wac != null ? formatCurrency(l.wac) : '—'}</span>
+          <span className="mx-2 text-muted-foreground/60">·</span>
+          <span>Last: </span>
+          <span>{l.lastCost != null ? formatCurrency(l.lastCost) : '—'}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function availableTone(available: Prisma.Decimal | null): string {
+  if (available == null) return '';
+  if (available.lessThan(0)) {
+    return 'font-medium text-red-600 dark:text-red-500';
+  }
+  if (available.equals(0)) {
+    return 'font-medium text-amber-600 dark:text-amber-500';
+  }
+  return '';
 }
 
 function ReservationHint({

@@ -7,6 +7,7 @@ import {
   resolveLineImageUrl,
 } from '@/lib/products/lineItemImage';
 import { getOverShippingPolicy } from '@/server/services/overShipping';
+import { computeWac, getLastPurchaseCost } from '@/server/services/wac';
 import { SalesOrderHeader } from './_components/header';
 import { SalesOrderLinesTable } from './_components/lines-table';
 import { SalesOrderTotalsCard } from './_components/totals-card';
@@ -83,6 +84,72 @@ export default async function SalesOrderDetailPage({
   // back to 'CONFIRM' when the row is missing.
   const overShippingPolicy = await getOverShippingPolicy(db);
 
+  // Stock context + cost reference for each line — internal-only,
+  // hidden from customer-facing documents and toggleable via the
+  // Stock-info toggle. Batched: one InventoryItem query for all
+  // (variantId, warehouseId) pairs on the order, then parallel
+  // computeWac + getLastPurchaseCost per unique pair (typical order
+  // is <20 lines, dedup keeps WAC work modest even for bundle
+  // explodes that repeat the same variant).
+  const stockKey = (variantId: string, warehouseId: string) =>
+    `${variantId}::${warehouseId}`;
+  const uniquePairs = Array.from(
+    new Map(
+      so.lines.map((l) => [
+        stockKey(l.variantId, l.warehouseId),
+        { variantId: l.variantId, warehouseId: l.warehouseId },
+      ]),
+    ).values(),
+  );
+
+  const [inventoryRows, costResults] = await Promise.all([
+    uniquePairs.length === 0
+      ? Promise.resolve([])
+      : db.inventoryItem.findMany({
+          where: {
+            OR: uniquePairs.map((p) => ({
+              variantId: p.variantId,
+              warehouseId: p.warehouseId,
+            })),
+          },
+          select: {
+            variantId: true,
+            warehouseId: true,
+            onHand: true,
+            reserved: true,
+          },
+        }),
+    Promise.all(
+      uniquePairs.map((p) =>
+        Promise.all([
+          computeWac(db, p.variantId, p.warehouseId),
+          getLastPurchaseCost(db, p.variantId, p.warehouseId),
+        ]),
+      ),
+    ),
+  ]);
+
+  const inventoryByKey = new Map<
+    string,
+    { onHand: Prisma.Decimal; reserved: Prisma.Decimal }
+  >();
+  for (const row of inventoryRows) {
+    inventoryByKey.set(stockKey(row.variantId, row.warehouseId), {
+      onHand: row.onHand,
+      reserved: row.reserved,
+    });
+  }
+  const costByKey = new Map<
+    string,
+    { wac: Prisma.Decimal | null; lastCost: Prisma.Decimal | null }
+  >();
+  uniquePairs.forEach((p, i) => {
+    costByKey.set(stockKey(p.variantId, p.warehouseId), {
+      wac: costResults[i][0],
+      lastCost: costResults[i][1],
+    });
+  });
+
   // computeSalesOrderTotal stays on qtyOrdered — it's the projected
   // commitment, used by credit-limit math for in-flight exposure.
   // For the displayed grand-total on a CLOSED order we want the
@@ -124,26 +191,40 @@ export default async function SalesOrderDetailPage({
             salesOrderId={so.id}
             status={so.status}
             overShippingPolicy={overShippingPolicy}
-            lines={so.lines.map((l) => ({
-              id: l.id,
-              sku: l.variant.sku,
-              productName: l.variant.product.name,
-              variantName: l.variant.name,
-              warehouseCode: l.warehouse.code,
-              qtyOrdered: l.qtyOrdered,
-              qtyReserved: l.qtyReserved,
-              qtyShipped: l.qtyShipped,
-              unitPrice: l.unitPrice,
-              priceRule: l.priceRule,
-              discountPercent: l.discountPercent,
-              discountAmount: l.discountAmount,
-              customerNote: l.customerNote,
-              internalNote: l.internalNote,
-              imageUrl: resolveLineImageUrl(l.variant),
-              bundleGroupId: l.bundleGroupId,
-              bundleSourceSku: l.bundleSourceProduct?.sku ?? null,
-              bundleSourceName: l.bundleSourceProduct?.name ?? null,
-            }))}
+            lines={so.lines.map((l) => {
+              const key = stockKey(l.variantId, l.warehouseId);
+              const inv = inventoryByKey.get(key);
+              const cost = costByKey.get(key);
+              return {
+                id: l.id,
+                sku: l.variant.sku,
+                productName: l.variant.product.name,
+                variantName: l.variant.name,
+                warehouseCode: l.warehouse.code,
+                qtyOrdered: l.qtyOrdered,
+                qtyReserved: l.qtyReserved,
+                qtyShipped: l.qtyShipped,
+                unitPrice: l.unitPrice,
+                priceRule: l.priceRule,
+                discountPercent: l.discountPercent,
+                discountAmount: l.discountAmount,
+                customerNote: l.customerNote,
+                internalNote: l.internalNote,
+                imageUrl: resolveLineImageUrl(l.variant),
+                bundleGroupId: l.bundleGroupId,
+                bundleSourceSku: l.bundleSourceProduct?.sku ?? null,
+                bundleSourceName: l.bundleSourceProduct?.name ?? null,
+                onHand: inv?.onHand ?? null,
+                // Available = onHand - reserved. Kept signed (no
+                // clamp to zero) so the lines table can flag
+                // oversold positions in red, matching how operators
+                // think about commitment vs. stock.
+                available:
+                  inv == null ? null : inv.onHand.minus(inv.reserved),
+                wac: cost?.wac ?? null,
+                lastCost: cost?.lastCost ?? null,
+              };
+            })}
           />
 
           <SalesOrderInfoCard

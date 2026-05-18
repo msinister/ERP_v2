@@ -10,16 +10,19 @@ export const metadata = {
   description: 'Custom multi-instance ERP',
 };
 
-// Blocking script that reads the product-image toggle preference from
-// localStorage and writes the `hide-product-images` class to <html>
-// before React hydrates. Without this, users with the column hidden
-// would see thumbnails flash visible during initial paint, then
-// disappear after the toggle hook's useEffect runs. Keep the script
-// tiny + side-effect-free beyond the class toggle.
-const PRODUCT_IMAGE_FLICKER_SCRIPT = `
+// Blocking script that reads line-item-table toggle preferences from
+// localStorage and writes hide-* classes to <html> before React
+// hydrates. Without this, users with a column hidden would see the
+// hidden content flash visible during initial paint, then disappear
+// after the toggle hook's useEffect runs. Keep the script tiny +
+// side-effect-free beyond the class toggle.
+const TABLE_TOGGLE_FLICKER_SCRIPT = `
 try {
   if (localStorage.getItem('showProductImages') === 'false') {
     document.documentElement.classList.add('hide-product-images');
+  }
+  if (localStorage.getItem('showStockContext') === 'false') {
+    document.documentElement.classList.add('hide-stock-context');
   }
 } catch (_) {}
 `;
@@ -32,7 +35,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           // suppressHydrationWarning here is unnecessary — this script
           // mutates <html>, not the children React owns; nothing the
           // server renders inside <body> depends on the class.
-          dangerouslySetInnerHTML={{ __html: PRODUCT_IMAGE_FLICKER_SCRIPT }}
+          dangerouslySetInnerHTML={{ __html: TABLE_TOGGLE_FLICKER_SCRIPT }}
         />
       </head>
       <body className="bg-background text-foreground antialiased">
