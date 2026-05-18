@@ -15,7 +15,10 @@ import { getNextSequence } from '@/lib/sequences/sequences';
 import { resolvePrice } from '@/lib/pricing/resolve';
 import { lockBin } from '@/server/services/locks';
 import { consumeInventoryTx } from '@/server/services/movements';
-import { generateInvoiceForClosedSOTx } from '@/server/services/invoices';
+import {
+  generateInvoiceForClosedSOTx,
+  voidInvoiceTx,
+} from '@/server/services/invoices';
 import { postCogsForInvoiceTx } from '@/server/services/cogsPosting';
 import { arBalanceForCustomer, agingForCustomer } from '@/server/services/ar';
 import {
@@ -686,18 +689,25 @@ export async function closeSalesOrder(
  *   4. Per line: clear inventoryMovementId, zero qtyShipped. Restore
  *      qtyReserved = qtyOrdered when target ∈ {CONFIRMED, DISPATCHED};
  *      leave at 0 for CANCELLED.
- *   5. Unlink the invoice (Invoice.salesOrderId → null). Invoice
- *      itself is unchanged: its AR/Revenue JE stays in effect, its
- *      lines, applications, and commission accruals are untouched.
- *      Operator decides what to do with the orphan separately.
- *   6. Update SO: status → target, clear closedAt, set/clear
+ *   5. Void the invoice via voidInvoiceTx. Flips status → VOIDED,
+ *      posts the offsetting AR/Revenue/Shipping/Handling JE, and
+ *      calls reverseCogsForInvoiceTx (idempotent — step 3 already
+ *      did this, second call is a no-op via cogsReversed=true).
+ *      Without this step the orphaned invoice's AR posting stays on
+ *      the books and a subsequent re-close double-counts AR.
+ *   6. Unlink the invoice (Invoice.salesOrderId → null). Voided +
+ *      unlinked together ensures the next close's idempotency probe
+ *      (findFirst where salesOrderId=, deletedAt: null) doesn't
+ *      return the voided row and skip generation.
+ *   7. Update SO: status → target, clear closedAt, set/clear
  *      dispatchedAt + cancelledAt to match the target.
- *   7. Recompute reserved per bin so the denormalized counter
+ *   8. Recompute reserved per bin so the denormalized counter
  *      reflects the new state.
  *
- * The invoice's AR exposure does NOT change. A subsequent close on
- * this SO will generate a fresh invoice (the unique constraint on
- * Invoice.salesOrderId is partial across nulls, so no collision).
+ * The invoice's AR exposure IS reversed in step 5. A subsequent
+ * close on this SO will generate a fresh invoice with an -R{n}
+ * suffix (per generateInvoiceForClosedSOTx's numbering rule), and
+ * that fresh invoice's AR posting is the only one live in the GL.
  */
 export async function reopenSalesOrder(
   db: PrismaClient,
@@ -862,14 +872,29 @@ export async function reopenSalesOrder(
       });
     }
 
-    // 5. Unlink invoice. NULL the FK so the SO surface no longer points
-    // at it; the invoice row itself is untouched.
+    // 5. Void the invoice. Composes voidInvoiceTx inside this tx so
+    // AR/Revenue reversal commits atomically with the SO status flip.
+    // voidInvoiceTx re-invokes reverseCogsForInvoiceTx but that path
+    // short-circuits when cogsReversed=true (set by step 3 above), so
+    // there's no double-COGS reversal. The CM-with-reversed-COGS
+    // guard inside voidInvoiceTx now also blocks reopen — that's
+    // intentional: composing partial-CM-reversal with a full void
+    // would double-restore the CM's lines. Operator must resolve via
+    // the CM flow first in that edge case.
+    const voidReason = `SO ${before.number} reopened by operator → ${data.targetStatus}`;
+    await voidInvoiceTx(tx, invoice.id, voidReason, ctx);
+
+    // 6. Unlink invoice. NULL the FK so the next close's idempotency
+    // probe (findFirst where salesOrderId=, deletedAt: null) sees no
+    // existing row and generates a fresh invoice. Without this, the
+    // probe would return the voided row and short-circuit, leaving
+    // the SO without a live invoice after re-close.
     await tx.invoice.update({
       where: { id: invoice.id },
       data: { salesOrderId: null },
     });
 
-    // 6. Status flip + timestamp surgery. closedAt is always cleared;
+    // 7. Status flip + timestamp surgery. closedAt is always cleared;
     // dispatchedAt + cancelledAt are set/cleared per target.
     const now = new Date();
     const targetStatus = SalesOrderStatus[data.targetStatus];
@@ -902,7 +927,7 @@ export async function reopenSalesOrder(
       include: { lines: true },
     });
 
-    // 7. Recompute reserved per bin so the InventoryItem.reserved
+    // 8. Recompute reserved per bin so the InventoryItem.reserved
     // counter reflects the new SO state. Done AFTER the status flip
     // so the new status drives the roll-up filter inside
     // recomputeReservedForBin.
@@ -920,6 +945,7 @@ export async function reopenSalesOrder(
         targetStatus: data.targetStatus,
         invoiceId: invoice.id,
         invoiceNumber: invoice.number,
+        invoiceVoided: true,
         invoiceUnlinked: true,
         paymentsUnapplied: data.paymentDecision === 'unapply',
       },

@@ -314,8 +314,17 @@ export async function recomputeAmountPaidForInvoice(
 // voidInvoice
 // ---------------------------------------------------------------------------
 
-export async function voidInvoice(
-  db: PrismaClient,
+/**
+ * Tx-context core of voidInvoice. Extracted so reopenSalesOrder can
+ * compose the void + AR/Revenue reversal inside its own transaction
+ * without nesting db.$transaction (which would deadlock). Same
+ * guarantees as voidInvoice — see that wrapper for the public API
+ * docs. All preconditions throw; on success the invoice is flipped
+ * to VOIDED, the offsetting JE is posted, COGS is reversed (no-op
+ * when already reversed), and an audit row is written.
+ */
+export async function voidInvoiceTx(
+  tx: Prisma.TransactionClient,
   invoiceId: string,
   reason: string,
   ctx?: AuditContext,
@@ -323,119 +332,126 @@ export async function voidInvoice(
   if (!reason || reason.trim().length === 0) {
     throw new Error('voidInvoice requires a non-empty reason');
   }
-  return db.$transaction(async (tx) => {
-    const before = await tx.invoice.findUnique({
-      where: { id: invoiceId },
-      include: { lines: { where: { deletedAt: null } } },
+  const before = await tx.invoice.findUnique({
+    where: { id: invoiceId },
+    include: { lines: { where: { deletedAt: null } } },
+  });
+  if (!before) throw new Error(`Invoice not found: ${invoiceId}`);
+  if (before.deletedAt) throw new Error('Invoice is soft-deleted');
+  if (before.status === InvoiceStatus.VOIDED) {
+    throw new Error('Invoice is already VOIDED');
+  }
+
+  // Refuse if any non-reversed CreditApplication exists. The caller
+  // must reverse the applied payments first.
+  const liveApps = await tx.creditApplication.count({
+    where: { invoiceId, reversedAt: null },
+  });
+  if (liveApps > 0) {
+    throw new Error(
+      'Cannot void invoice with applied payments. Reverse the applied payments first, then void.',
+    );
+  }
+
+  // Part 3.5: refuse if any CreditMemo against this invoice has had its
+  // COGS reversed. Composing a partial-CM-reversal with a full-invoice
+  // void would double-reverse the COGS for the lines the CM touched
+  // (CM's reversal already restored them; voidInvoice's full-reversal
+  // would restore them again). Operator must reverse the CM first OR
+  // continue resolving via the CM flow rather than voiding.
+  const cmsWithReversedCogs = await tx.creditMemo.findMany({
+    where: { invoiceId, cogsReversed: true, deletedAt: null },
+    select: { number: true },
+  });
+  if (cmsWithReversedCogs.length > 0) {
+    const cmNumbers = cmsWithReversedCogs.map((c) => c.number).join(', ');
+    throw new Error(
+      `Cannot void invoice: credit memo ${cmNumbers} has already had its COGS reversed. Reverse that CM first or use a credit memo flow instead.`,
+    );
+  }
+
+  const after = await tx.invoice.update({
+    where: { id: invoiceId },
+    data: {
+      status: InvoiceStatus.VOIDED,
+      voidedAt: new Date(),
+      voidReason: reason,
+    },
+    include: { lines: { where: { deletedAt: null } } },
+  });
+
+  // Offsetting JE — debit/credit swap of the original AR JE. We do
+  // NOT mark the original JE.reversedAt; we post a separate, visible
+  // event so the GL retains both rows. Skip zero-amount legs.
+  const netRevenue = before.subtotal.minus(before.orderDiscount);
+  const reverseLines: Array<{
+    accountCode: string;
+    debit?: Prisma.Decimal;
+    credit?: Prisma.Decimal;
+    memo?: string;
+  }> = [];
+  if (netRevenue.greaterThan(0)) {
+    reverseLines.push({
+      accountCode: SALES_REVENUE_ACCOUNT,
+      debit: netRevenue,
+      memo: 'Reverse sales revenue (void)',
     });
-    if (!before) throw new Error(`Invoice not found: ${invoiceId}`);
-    if (before.deletedAt) throw new Error('Invoice is soft-deleted');
-    if (before.status === InvoiceStatus.VOIDED) {
-      throw new Error('Invoice is already VOIDED');
-    }
-
-    // Refuse if any non-reversed CreditApplication exists. The caller
-    // must reverse the applied payments first.
-    const liveApps = await tx.creditApplication.count({
-      where: { invoiceId, reversedAt: null },
+  }
+  if (before.shippingAmount.greaterThan(0)) {
+    reverseLines.push({
+      accountCode: SHIPPING_INCOME_ACCOUNT,
+      debit: before.shippingAmount,
+      memo: 'Reverse shipping (void)',
     });
-    if (liveApps > 0) {
-      throw new Error(
-        'Cannot void invoice with applied payments. Reverse the applied payments first, then void.',
-      );
-    }
-
-    // Part 3.5: refuse if any CreditMemo against this invoice has had its
-    // COGS reversed. Composing a partial-CM-reversal with a full-invoice
-    // void would double-reverse the COGS for the lines the CM touched
-    // (CM's reversal already restored them; voidInvoice's full-reversal
-    // would restore them again). Operator must reverse the CM first OR
-    // continue resolving via the CM flow rather than voiding.
-    const cmsWithReversedCogs = await tx.creditMemo.findMany({
-      where: { invoiceId, cogsReversed: true, deletedAt: null },
-      select: { number: true },
+  }
+  if (before.handlingAmount.greaterThan(0)) {
+    reverseLines.push({
+      accountCode: HANDLING_INCOME_ACCOUNT,
+      debit: before.handlingAmount,
+      memo: 'Reverse handling (void)',
     });
-    if (cmsWithReversedCogs.length > 0) {
-      const cmNumbers = cmsWithReversedCogs.map((c) => c.number).join(', ');
-      throw new Error(
-        `Cannot void invoice: credit memo ${cmNumbers} has already had its COGS reversed. Reverse that CM first or use a credit memo flow instead.`,
-      );
-    }
-
-    const after = await tx.invoice.update({
-      where: { id: invoiceId },
-      data: {
-        status: InvoiceStatus.VOIDED,
-        voidedAt: new Date(),
-        voidReason: reason,
-      },
-      include: { lines: { where: { deletedAt: null } } },
+  }
+  if (before.total.greaterThan(0)) {
+    reverseLines.push({
+      accountCode: AR_ACCOUNT,
+      credit: before.total,
+      memo: 'Reverse AR (void)',
     });
-
-    // Offsetting JE — debit/credit swap of the original AR JE. We do
-    // NOT mark the original JE.reversedAt; we post a separate, visible
-    // event so the GL retains both rows. Skip zero-amount legs.
-    const netRevenue = before.subtotal.minus(before.orderDiscount);
-    const reverseLines: Array<{
-      accountCode: string;
-      debit?: Prisma.Decimal;
-      credit?: Prisma.Decimal;
-      memo?: string;
-    }> = [];
-    if (netRevenue.greaterThan(0)) {
-      reverseLines.push({
-        accountCode: SALES_REVENUE_ACCOUNT,
-        debit: netRevenue,
-        memo: 'Reverse sales revenue (void)',
-      });
-    }
-    if (before.shippingAmount.greaterThan(0)) {
-      reverseLines.push({
-        accountCode: SHIPPING_INCOME_ACCOUNT,
-        debit: before.shippingAmount,
-        memo: 'Reverse shipping (void)',
-      });
-    }
-    if (before.handlingAmount.greaterThan(0)) {
-      reverseLines.push({
-        accountCode: HANDLING_INCOME_ACCOUNT,
-        debit: before.handlingAmount,
-        memo: 'Reverse handling (void)',
-      });
-    }
-    if (before.total.greaterThan(0)) {
-      reverseLines.push({
-        accountCode: AR_ACCOUNT,
-        credit: before.total,
-        memo: 'Reverse AR (void)',
-      });
-    }
-    if (reverseLines.length > 0) {
-      await post(tx, {
-        entityType: 'Invoice',
-        entityId: invoiceId,
-        description: `Void of invoice ${before.number}: ${reason}`,
-        lines: reverseLines,
-      });
-    }
-
-    // Part 3.5: COGS reversal. Self-checking — if the invoice never had
-    // COGS posted (zero-COGS path) OR was already reversed, the call is
-    // a no-op. Inside the same tx so AR void + COGS reversal commit
-    // atomically.
-    await reverseCogsForInvoiceTx(tx, invoiceId, ctx);
-
-    await audit(tx, {
-      action: AuditAction.STATUS_CHANGE,
+  }
+  if (reverseLines.length > 0) {
+    await post(tx, {
       entityType: 'Invoice',
       entityId: invoiceId,
-      before: { status: before.status },
-      after: { status: after.status, voidedAt: after.voidedAt, voidReason: after.voidReason },
-      ctx: { ...ctx, reason },
+      description: `Void of invoice ${before.number}: ${reason}`,
+      lines: reverseLines,
     });
+  }
 
-    return after;
+  // Part 3.5: COGS reversal. Self-checking — if the invoice never had
+  // COGS posted (zero-COGS path) OR was already reversed, the call is
+  // a no-op. Inside the same tx so AR void + COGS reversal commit
+  // atomically.
+  await reverseCogsForInvoiceTx(tx, invoiceId, ctx);
+
+  await audit(tx, {
+    action: AuditAction.STATUS_CHANGE,
+    entityType: 'Invoice',
+    entityId: invoiceId,
+    before: { status: before.status },
+    after: { status: after.status, voidedAt: after.voidedAt, voidReason: after.voidReason },
+    ctx: { ...ctx, reason },
   });
+
+  return after;
+}
+
+export async function voidInvoice(
+  db: PrismaClient,
+  invoiceId: string,
+  reason: string,
+  ctx?: AuditContext,
+): Promise<InvoiceWithLines> {
+  return db.$transaction((tx) => voidInvoiceTx(tx, invoiceId, reason, ctx));
 }
 
 // ---------------------------------------------------------------------------

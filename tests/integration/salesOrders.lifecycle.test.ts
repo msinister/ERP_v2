@@ -19,6 +19,7 @@ import {
   updateSalesOrderLineQtyShipped,
 } from '@/server/services/salesOrders';
 import { recordPayment } from '@/server/services/payments';
+import { arBalanceForCustomer } from '@/server/services/ar';
 import { SalesOrderReopenBlockedError } from '@/lib/errors/credit';
 import { receiveInventory } from '@/server/services/movements';
 import { setSetting } from '@/server/services/settings';
@@ -687,12 +688,17 @@ suite('SalesOrder lifecycle', () => {
     );
     expect(reopened.lines[0].inventoryMovementId).toBeNull();
 
-    // Invoice still exists; SO link is NULL.
+    // Invoice still exists; SO link is NULL; status flipped to VOIDED
+    // with the offsetting AR/Revenue JE posted by voidInvoiceTx (called
+    // inside the reopen tx).
     const invoiceAfter = await db.invoice.findUniqueOrThrow({
       where: { id: invoiceBefore.id },
     });
     expect(invoiceAfter.salesOrderId).toBeNull();
     expect(invoiceAfter.cogsReversed).toBe(true);
+    expect(invoiceAfter.status).toBe('VOIDED');
+    expect(invoiceAfter.voidedAt).not.toBeNull();
+    expect(invoiceAfter.voidReason).toMatch(/reopened/i);
 
     // Inventory: onHand restored to seed (20), reserved equals qtyOrdered (5).
     const inv = await db.inventoryItem.findUnique({
@@ -796,7 +802,12 @@ suite('SalesOrder lifecycle', () => {
     expect(inv!.reserved.toString()).toBe('0');
   });
 
-  it('reopenSalesOrder followed by re-close generates a fresh invoice (no @unique collision)', async () => {
+  it('reopenSalesOrder followed by re-close generates a fresh invoice; prior invoice is VOIDED so AR balance reflects only the latest revision', async () => {
+    // Regression test for the duplicate-open-invoice bug: pre-fix, the
+    // prior invoice was left OPEN after reopen, so a re-close left two
+    // OPEN invoices contributing to AR. Post-fix, reopen voids the
+    // prior invoice and posts the offsetting AR/Revenue JE, so only
+    // the latest revision's total counts.
     await stockBin('20');
     const so = await createSalesOrder(db, createInput('3'));
     await confirmSalesOrder(db, so.id);
@@ -816,9 +827,19 @@ suite('SalesOrder lifecycle', () => {
 
     expect(inv1.id).not.toBe(inv2.id);
     expect(inv2.salesOrderId).toBe(so.id);
-    // Old invoice now orphaned.
+    expect(inv2.status).toBe('OPEN');
+
+    // Old invoice now orphaned AND voided. Voided status excludes it
+    // from arBalanceForCustomer's OPEN/PARTIAL filter.
     const orphan = await db.invoice.findUniqueOrThrow({ where: { id: inv1.id } });
     expect(orphan.salesOrderId).toBeNull();
+    expect(orphan.status).toBe('VOIDED');
+    expect(orphan.voidedAt).not.toBeNull();
+
+    // Net AR check: should equal inv2.total alone — NOT inv1.total + inv2.total.
+    const { arBalance } = await arBalanceForCustomer(db, customerId);
+    expect(arBalance.toString()).toBe(inv2.total.toString());
+
     void closed1;
     void closed2;
   });
