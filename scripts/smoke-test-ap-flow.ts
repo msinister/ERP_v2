@@ -394,8 +394,8 @@ async function main(): Promise<void> {
   });
   ok(`vendor ${vendor.code}, warehouse ${wh.code}, variant ${variant.sku}`);
 
-  // -------- PO + Receipt → auto-draft bill --------
-  stage('PO + RECEIPT — postReceipt should auto-draft a bill (slice C hook)');
+  // -------- PO + Receipt → auto-confirmed bill --------
+  stage('PO + RECEIPT — postReceipt should auto-create AND auto-confirm a bill (slice C hook)');
   const po = await createPurchaseOrder(db, {
     vendorId: vendor.id,
     lines: [
@@ -434,35 +434,35 @@ async function main(): Promise<void> {
   const billLink = await db.billReceipt.findFirstOrThrow({
     where: { receiptId: posted.id },
   });
-  const draftBill = await db.bill.findUniqueOrThrow({
+  const confirmed = await db.bill.findUniqueOrThrow({
     where: { id: billLink.billId },
     include: { lines: true, receipts: true, purchaseOrders: true },
   });
-  if (draftBill.status !== BillStatus.DRAFT) {
-    fail(`auto-bill not in DRAFT: ${draftBill.status}`);
-  }
-  if (draftBill.subtotal.toString() !== '50') {
-    fail(`auto-bill subtotal mismatch: ${draftBill.subtotal.toString()} (expected 50)`);
-  }
-  if (draftBill.receipts.length !== 1) {
-    fail(`auto-bill not linked to receipt`);
-  }
-  if (draftBill.purchaseOrders.length !== 1) {
-    fail(`auto-bill not linked to PO`);
-  }
-  ok(`auto-drafted ${draftBill.number} (DRAFT, $50, linked to RCPT + PO)`);
-
-  // -------- Confirm bill --------
-  stage('CONFIRM BILL — JE DR 2020 / CR 2010 balanced');
-  const confirmed = await confirmBill(db, draftBill.id);
+  // Auto-confirm runs inside postReceipt's tx, so the bill skips
+  // DRAFT entirely. The DR 2020 / CR 2010 JE has already posted.
   if (confirmed.status !== BillStatus.CONFIRMED) {
-    fail(`bill not CONFIRMED: ${confirmed.status}`);
+    fail(`auto-bill not in CONFIRMED: ${confirmed.status}`);
+  }
+  if (confirmed.confirmedAt === null) {
+    fail(`auto-bill confirmedAt not stamped`);
   }
   if (confirmed.dueDate === null) {
-    fail(`dueDate not computed at confirm`);
+    fail(`auto-bill dueDate not computed at auto-confirm`);
   }
-  await assertJeBalanced('Bill', confirmed.id, 'Bill confirm', 1);
-  ok(`bill ${confirmed.number} CONFIRMED, dueDate=${confirmed.dueDate?.toISOString().slice(0, 10)}`);
+  if (confirmed.subtotal.toString() !== '50') {
+    fail(`auto-bill subtotal mismatch: ${confirmed.subtotal.toString()} (expected 50)`);
+  }
+  if (confirmed.receipts.length !== 1) {
+    fail(`auto-bill not linked to receipt`);
+  }
+  if (confirmed.purchaseOrders.length !== 1) {
+    fail(`auto-bill not linked to PO`);
+  }
+  await assertJeBalanced('Bill', confirmed.id, 'Bill auto-confirm', 1);
+  ok(
+    `auto-created ${confirmed.number} (CONFIRMED, $50, linked to RCPT + PO, ` +
+      `dueDate=${confirmed.dueDate?.toISOString().slice(0, 10)})`,
+  );
 
   // -------- Partial payment --------
   stage('PARTIAL PAYMENT — bill flips to PARTIAL');

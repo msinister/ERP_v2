@@ -10,7 +10,24 @@ import {
   createDraftReceipt,
   postReceipt,
 } from '@/server/services/receipts';
+import { cancelBill } from '@/server/services/bills';
 import { hasTenantDb, makeClient } from '../helpers/db';
+
+// postReceipt auto-confirms the draft bill (auto-confirm feature,
+// 2026-05-17). cancelReceipt refuses while any CONFIRMED bill is
+// linked — tests that exercise cancel must clear the bill first.
+async function cancelLinkedBills(
+  db: PrismaClient,
+  receiptId: string,
+): Promise<void> {
+  const links = await db.billReceipt.findMany({
+    where: { receiptId, bill: { status: { not: 'CANCELLED' }, deletedAt: null } },
+    select: { billId: true },
+  });
+  for (const { billId } of links) {
+    await cancelBill(db, billId, 'test setup: clear bill so cancelReceipt can run');
+  }
+}
 import { upsertTestWarehouse } from '../helpers/warehouseStub';
 import { wipeBillArtifactsForVendors } from '../helpers/wipeBillArtifacts';
 
@@ -306,6 +323,7 @@ suite('postReceipt + cancelReceipt GL counterpart leg (Modules 07 + 08)', () => 
     // Subtotal = 28.
 
     const beforeCancelMs = Date.now();
+    await cancelLinkedBills(db, posted.id);
     await cancelReceipt(db, posted.id, { reason: 'Wrong shipment' });
     const afterCancelMs = Date.now();
 

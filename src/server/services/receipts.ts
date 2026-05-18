@@ -30,6 +30,7 @@ import {
 import { createFifoLayerOnReceiveTx } from '@/server/services/fifoLayers';
 import {
   cancelDraftBillsForReceiptTx,
+  confirmBillTx,
   createDraftBillFromReceiptTx,
   hasConfirmedBillForReceiptTx,
 } from '@/server/services/bills';
@@ -379,13 +380,29 @@ export async function postReceipt(
       await applyComputedPoStatus(tx, poId, ctx);
     }
 
-    // AP slice: auto-create a DRAFT bill matching this receipt. AP staff
-    // cross-references the vendor's actual invoice when it arrives,
-    // edits the bill if needed, and confirms (which posts the AP JE).
-    // The auto-create is idempotent (skips if a non-cancelled bill
-    // already references this receipt) and writes a DRAFT_BILL_GENERATED
-    // audit row distinct from a manual-entry CREATE.
-    await createDraftBillFromReceiptTx(tx, id, ctx);
+    // AP slice: auto-create AND auto-confirm a bill matching this
+    // receipt in one shot. The draft is created by
+    // createDraftBillFromReceiptTx (idempotent — returns null when a
+    // non-cancelled bill already references this receipt, or when
+    // every receipt line has qtyReceived = 0). When a draft is
+    // produced, confirmBillTx is called against it in the same tx so
+    // the AP JE (DR 2020 Accrued Receipts / CR 2010 AP) posts
+    // immediately and the bill appears CONFIRMED on the vendor AP
+    // tab without operator intervention. The freshly-created bill
+    // satisfies every confirmBillTx precondition (DRAFT status,
+    // lineSum === subtotal invariant set at create time, lines
+    // present), so this composition is safe.
+    //
+    // Operator workflow change: when the vendor's actual invoice
+    // arrives and differs from the receipt, the operator edits the
+    // confirmed bill (updateBill handles the re-posting), or cancels
+    // it and re-enters from scratch. cancelReceipt now refuses
+    // whenever any auto-confirmed bill is still live — the operator
+    // must cancelBill first.
+    const draftBill = await createDraftBillFromReceiptTx(tx, id, ctx);
+    if (draftBill != null) {
+      await confirmBillTx(tx, draftBill.id, ctx);
+    }
 
     // Re-read with linked movements for the response.
     const final = (await tx.receipt.findUnique({

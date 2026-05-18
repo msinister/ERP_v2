@@ -9,8 +9,8 @@
  * Stages:
  *   1.  Sweep prior-run stragglers.
  *   2.  Setup: vendor + customer + warehouse + product/variant.
- *   3.  Receive inventory (creates FIFO layer + GL Inventory leg + auto-draft bill).
- *   4.  Confirm + pay the auto-draft bill (DR Inventory cleared, AP up + paid).
+ *   3.  Receive inventory (creates FIFO layer + GL Inventory leg + auto-confirmed bill).
+ *   4.  Pay the auto-confirmed bill (DR Inventory cleared on confirm + AP paid).
  *   5.  Sell inventory: SO → confirm → close → invoice generated.
  *   6.  Receive customer payment.
  *   7.  Run financial reports (TB, BS, IS, GL detail, journal).
@@ -41,10 +41,7 @@ import {
   createDraftReceipt,
   postReceipt,
 } from '../src/server/services/receipts';
-import {
-  confirmBill,
-  cancelBill,
-} from '../src/server/services/bills';
+import { cancelBill } from '../src/server/services/bills';
 import {
   recordBillPayment,
 } from '../src/server/services/billPayments';
@@ -447,7 +444,7 @@ async function main(): Promise<void> {
   ok(`vendor ${vendor.code}, customer ${customer.code}, warehouse ${wh.code}, variant ${variant.sku}`);
 
   // -------- Receive inventory --------
-  stage('RECEIVE inventory (PO → receipt → auto-draft bill + GL Inventory leg)');
+  stage('RECEIVE inventory (PO → receipt → auto-confirmed bill + GL Inventory leg)');
   const po = await createPurchaseOrder(db, {
     vendorId: vendor.id,
     lines: [
@@ -481,8 +478,10 @@ async function main(): Promise<void> {
   ok(`receipt ${posted.number} POSTED — qty ${RECEIVE_QTY} @ $${RECEIVE_UNIT_COST}`);
 
   const billLink = await db.billReceipt.findFirstOrThrow({ where: { receiptId: posted.id } });
-  await confirmBill(db, billLink.billId);
-  ok(`auto-draft bill confirmed`);
+  // postReceipt auto-confirms the draft bill in the same tx, so the
+  // bill is already CONFIRMED with its AP JE posted. No manual
+  // confirmBill needed before recordBillPayment.
+  ok(`auto-confirmed bill linked to ${posted.number}`);
 
   await recordBillPayment(db, {
     billId: billLink.billId,

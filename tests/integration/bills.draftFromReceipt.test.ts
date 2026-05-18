@@ -23,10 +23,7 @@ import {
   createDraftReceipt,
   postReceipt,
 } from '@/server/services/receipts';
-import {
-  cancelBill,
-  confirmBill,
-} from '@/server/services/bills';
+import { cancelBill } from '@/server/services/bills';
 import { hasTenantDb, makeClient } from '../helpers/db';
 import { upsertTestWarehouse } from '../helpers/warehouseStub';
 import { upsertTestVendor } from '../helpers/vendorStub';
@@ -129,7 +126,7 @@ suite('Bill auto-draft from receipt (slice C)', () => {
 
   // ---------- Auto-create on postReceipt ----------
 
-  it('postReceipt auto-creates a DRAFT bill matching the receipt with PRODUCT source', async () => {
+  it('postReceipt auto-creates AND auto-confirms a bill matching the receipt with PRODUCT source', async () => {
     const { receiptId, receiptNumber } = await makePoAndPostReceipt({
       lines: [
         { variant: variantA, qty: '10', unitCost: '5' },
@@ -142,7 +139,12 @@ suite('Bill auto-draft from receipt (slice C)', () => {
       where: { id: link.billId },
       include: { lines: true, receipts: true, purchaseOrders: true },
     });
-    expect(bill.status).toBe(BillStatus.DRAFT);
+    // Auto-confirm: postReceipt composes confirmBillTx in its own tx
+    // so the bill skips DRAFT and lands on CONFIRMED, with confirmedAt
+    // stamped. The vendor's actual invoice is reconciled later via
+    // updateBill rather than the prior draft → confirm dance.
+    expect(bill.status).toBe(BillStatus.CONFIRMED);
+    expect(bill.confirmedAt).not.toBeNull();
     expect(bill.source).toBe(BillSource.PRODUCT);
     expect(bill.vendorId).toBe(vendor.id);
     expect(bill.subtotal.toString()).toBe(new Prisma.Decimal('78').toString());
@@ -165,7 +167,7 @@ suite('Bill auto-draft from receipt (slice C)', () => {
     expect(poLinks[0].purchaseOrderId).toBe(poId);
   });
 
-  it('auto-create writes DRAFT_BILL_GENERATED audit (not CREATE) for system origin', async () => {
+  it('auto-create writes DRAFT_BILL_GENERATED audit (not CREATE) and a STATUS_CHANGE from the auto-confirm', async () => {
     const { receiptId } = await makePoAndPostReceipt({
       lines: [{ variant: variantA, qty: '2', unitCost: '5' }],
     });
@@ -173,19 +175,34 @@ suite('Bill auto-draft from receipt (slice C)', () => {
     const audits = await db.auditLog.findMany({
       where: { entityType: 'Bill', entityId: link.billId },
     });
-    expect(audits).toHaveLength(1);
-    expect(audits[0].action).toBe(AuditAction.DRAFT_BILL_GENERATED);
+    // Two rows now: DRAFT_BILL_GENERATED (system-origin create) +
+    // BILL_CONFIRMED (the AP confirm event, distinct from a generic
+    // STATUS_CHANGE so AP reporting can filter the GL-posting moment).
+    // Assert by membership rather than order — both land in the same
+    // tx so createdAt sub-microsecond collisions can flip their order.
+    const actions = audits.map((a) => a.action);
+    expect(actions).toContain(AuditAction.DRAFT_BILL_GENERATED);
+    expect(actions).toContain(AuditAction.BILL_CONFIRMED);
+    expect(audits).toHaveLength(2);
   });
 
-  it('auto-create posts NO journal entry — DRAFT bills have no GL effect', async () => {
+  it('auto-confirm posts the PRODUCT AP JE (DR 2020 Accrued Receipts / CR 2010 AP) automatically', async () => {
+    // Pre-fix this test asserted the opposite — that no JE posted —
+    // because the bill stayed in DRAFT. With auto-confirm wired into
+    // postReceipt, the AP JE lands as part of the same tx, so the
+    // vendor's AP balance reflects the receipt immediately.
     const { receiptId } = await makePoAndPostReceipt({
       lines: [{ variant: variantA, qty: '3', unitCost: '5' }],
     });
     const link = await db.billReceipt.findFirstOrThrow({ where: { receiptId } });
-    const jes = await db.journalEntry.findMany({
+    const je = await db.journalEntry.findFirstOrThrow({
       where: { entityType: 'Bill', entityId: link.billId },
+      include: { lines: { include: { account: true } } },
     });
-    expect(jes).toHaveLength(0);
+    const dr = je.lines.find((l) => l.account.code === '2020');
+    const cr = je.lines.find((l) => l.account.code === '2010');
+    expect(dr?.debit.toString()).toBe(new Prisma.Decimal('15').toString());
+    expect(cr?.credit.toString()).toBe(new Prisma.Decimal('15').toString());
   });
 
   it('auto-create is idempotent: re-running postReceipt logic does not duplicate the bill (singleton check via BillReceipt)', async () => {
@@ -207,43 +224,24 @@ suite('Bill auto-draft from receipt (slice C)', () => {
   });
 
   // ---------- Cancel-receipt cascade ----------
+  //
+  // Pre-fix the cascade-cancel path also handled the common case
+  // (auto-drafted bill in DRAFT → cancelReceipt flipped it to
+  // CANCELLED). Post-auto-confirm that common case is gone: every
+  // auto-bill is CONFIRMED, so cancelReceipt always refuses upfront
+  // and the operator must cancelBill first. The cascade code path
+  // is still wired (for the rare case of an operator-created DRAFT
+  // bill linked to the receipt after the auto-confirmed one was
+  // cancelled) — exercised by the "already cancelled" test below.
 
-  it('cancelReceipt cascades: linked DRAFT bill flips to CANCELLED with descriptive reason', async () => {
-    const { receiptId, receiptNumber } = await makePoAndPostReceipt({
-      lines: [{ variant: variantA, qty: '5', unitCost: '10' }],
-    });
-    const linkBefore = await db.billReceipt.findFirstOrThrow({
-      where: { receiptId },
-    });
-
-    await cancelReceipt(db, receiptId, { reason: 'wrong vendor' });
-
-    const billAfter = await db.bill.findUniqueOrThrow({
-      where: { id: linkBefore.billId },
-    });
-    expect(billAfter.status).toBe(BillStatus.CANCELLED);
-    expect(billAfter.cancelledAt).not.toBeNull();
-    expect(billAfter.cancelReason).toMatch(
-      new RegExp(`Source receipt ${receiptNumber} cancelled.*wrong vendor`),
-    );
-
-    // Receipt itself still cancellable (guard fired only against
-    // CONFIRMED bills, and ours was DRAFT).
-    const receiptAfter = await db.receipt.findUniqueOrThrow({
-      where: { id: receiptId },
-    });
-    expect(receiptAfter.status).toBe(ReceiptStatus.CANCELLED);
-  });
-
-  it('cancelReceipt REFUSES when a CONFIRMED bill links to it; bill must be cancelled first', async () => {
+  it('cancelReceipt REFUSES because the auto-confirmed bill links to it; bill must be cancelled first', async () => {
     const { receiptId } = await makePoAndPostReceipt({
       lines: [{ variant: variantA, qty: '5', unitCost: '10' }],
     });
     const link = await db.billReceipt.findFirstOrThrow({ where: { receiptId } });
 
-    // Confirm the auto-drafted bill, then try to cancel the receipt.
-    await confirmBill(db, link.billId);
-
+    // Bill is already CONFIRMED by postReceipt — no manual confirmBill
+    // needed. cancelReceipt should refuse immediately.
     await expect(
       cancelReceipt(db, receiptId, { reason: 'oops' }),
     ).rejects.toThrow(/confirmed bill .* is linked. Cancel the bill first/);
@@ -263,42 +261,25 @@ suite('Bill auto-draft from receipt (slice C)', () => {
     expect(finalReceipt.status).toBe(ReceiptStatus.CANCELLED);
   });
 
-  it('cancel-cascade does NOT touch a DRAFT bill that was already cancelled (idempotency)', async () => {
+  it('cancel-cascade does not overwrite a bill that was already cancelled by the operator', async () => {
     const { receiptId } = await makePoAndPostReceipt({
       lines: [{ variant: variantA, qty: '2', unitCost: '5' }],
     });
     const link = await db.billReceipt.findFirstOrThrow({ where: { receiptId } });
+    // Operator cancels the auto-confirmed bill (cancelBill posts the
+    // reversal JE since the bill is in CONFIRMED status). Then the
+    // receipt becomes cancellable.
     await cancelBill(db, link.billId, 'manual cancel before receipt cancel');
 
-    // Receipt cancel should still succeed; cascade just finds no DRAFT
-    // bills to flip (the only linked bill is already CANCELLED).
     await cancelReceipt(db, receiptId, { reason: 'test cascade safety' });
 
     const billAfter = await db.bill.findUniqueOrThrow({
       where: { id: link.billId },
     });
-    // cancelReason should still match the manual cancel — cascade
-    // didn't overwrite a non-DRAFT bill.
+    // cancelReason should still match the manual cancel — the receipt
+    // cancel cascade only targets DRAFT bills, so the already-cancelled
+    // bill is left intact.
     expect(billAfter.cancelReason).toBe('manual cancel before receipt cancel');
-  });
-
-  // ---------- Confirm path on auto-drafted bill ----------
-
-  it('auto-drafted bill: confirmBill posts the standard PRODUCT JE (DR 2020 / CR 2010)', async () => {
-    const { receiptId } = await makePoAndPostReceipt({
-      lines: [{ variant: variantA, qty: '4', unitCost: '25' }],
-    });
-    const link = await db.billReceipt.findFirstOrThrow({ where: { receiptId } });
-    const confirmed = await confirmBill(db, link.billId);
-    expect(confirmed.status).toBe(BillStatus.CONFIRMED);
-    const je = await db.journalEntry.findFirstOrThrow({
-      where: { entityType: 'Bill', entityId: link.billId },
-      include: { lines: { include: { account: true } } },
-    });
-    const dr = je.lines.find((l) => l.account.code === '2020');
-    const cr = je.lines.find((l) => l.account.code === '2010');
-    expect(dr?.debit.toString()).toBe(new Prisma.Decimal('100').toString());
-    expect(cr?.credit.toString()).toBe(new Prisma.Decimal('100').toString());
   });
 });
 

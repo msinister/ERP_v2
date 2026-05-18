@@ -15,7 +15,26 @@ import {
   createDraftReceipt,
   postReceipt,
 } from '@/server/services/receipts';
+import { cancelBill } from '@/server/services/bills';
 import { hasTenantDb, makeClient } from '../helpers/db';
+
+// postReceipt auto-confirms the draft bill in the same tx (auto-
+// confirm feature, 2026-05-17). cancelReceipt refuses while any
+// CONFIRMED bill is linked, so tests that want to exercise the
+// receipt-cancel path must cancel the bill first. This helper finds
+// and cancels any non-CANCELLED bill linked to the receipt.
+async function cancelLinkedBills(
+  db: PrismaClient,
+  receiptId: string,
+): Promise<void> {
+  const links = await db.billReceipt.findMany({
+    where: { receiptId, bill: { status: { not: 'CANCELLED' }, deletedAt: null } },
+    select: { billId: true },
+  });
+  for (const { billId } of links) {
+    await cancelBill(db, billId, 'test setup: clear bill so cancelReceipt can run');
+  }
+}
 import { upsertTestWarehouse } from '../helpers/warehouseStub';
 import { wipeBillArtifactsForVendors } from '../helpers/wipeBillArtifacts';
 
@@ -316,6 +335,7 @@ suite('Receipt service', () => {
     });
     expect(invBefore!.onHand.toString()).toBe(new Prisma.Decimal('4').toString());
 
+    await cancelLinkedBills(db, posted.id);
     await cancelReceipt(db, posted.id, { reason: 'wrong items shipped' });
 
     // Inventory restored.
@@ -358,6 +378,7 @@ suite('Receipt service', () => {
     expect(poAtClose!.closedAt).not.toBeNull();
 
     // Cancel the only receipt.
+    await cancelLinkedBills(db, posted.id);
     await cancelReceipt(db, posted.id, {});
 
     const poAfter = await db.purchaseOrder.findUnique({ where: { id: po.id } });
@@ -381,6 +402,7 @@ suite('Receipt service', () => {
     await expect(cancelReceipt(db, draft.id, {})).rejects.toThrow(/Cannot cancel Receipt/);
 
     const posted = await postReceipt(db, draft.id);
+    await cancelLinkedBills(db, posted.id);
     await cancelReceipt(db, posted.id, {});
     await expect(cancelReceipt(db, posted.id, {})).rejects.toThrow(/Cannot cancel Receipt/);
   });
@@ -494,6 +516,7 @@ suite('Receipt service', () => {
     expect(layersBefore).toHaveLength(2);
     expect(layersBefore.every((l) => l.deletedAt === null)).toBe(true);
 
+    await cancelLinkedBills(db, posted.id);
     await cancelReceipt(db, posted.id, {});
 
     const layersAfter = await db.fifoLayer.findMany({
@@ -527,6 +550,7 @@ suite('Receipt service', () => {
       },
     });
 
+    await cancelLinkedBills(db, posted.id);
     await expect(cancelReceipt(db, posted.id, {})).rejects.toThrow(
       /Cannot cancel receipt: receipt has consumed inventory layers\. Use inventory adjustment instead\./,
     );
@@ -570,6 +594,7 @@ suite('Receipt service', () => {
       },
     });
 
+    await cancelLinkedBills(db, r1Draft.id);
     await cancelReceipt(db, r1Draft.id, {});
 
     const r1After = await db.fifoLayer.findUniqueOrThrow({ where: { id: r1Layer.id } });
