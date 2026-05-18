@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { db } from '@/lib/db';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -109,7 +110,20 @@ export async function ArTab({ customerId }: { customerId: string }) {
                   return (
                     <TableRow key={row.invoiceId}>
                       <TableCell className="font-mono text-xs">
-                        {row.number}
+                        {row.salesOrderId ? (
+                          <Link
+                            href={`/sales-orders/${row.salesOrderId}`}
+                            className="text-primary hover:underline"
+                          >
+                            {row.number}
+                          </Link>
+                        ) : (
+                          // Orphaned invoice (no live SO link) —
+                          // render as plain text. Common shape for
+                          // historical revisions left behind before
+                          // the void-on-reopen fix landed.
+                          <span>{row.number}</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {row.invoiceDate.toLocaleDateString('en-US', {

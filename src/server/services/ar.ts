@@ -53,6 +53,10 @@ export type AgingBuckets = Record<AgingBucketKey, Prisma.Decimal>;
 
 export type AgingInvoiceRow = {
   invoiceId: string;
+  // Nullable: orphaned invoices (post-reopen + post-void) have no
+  // live SO link. Surfaced so UI tables can link the invoice number
+  // to its parent SO when present and render plain text otherwise.
+  salesOrderId: string | null;
   number: string;
   invoiceDate: Date;
   dueDate: Date;
@@ -223,6 +227,7 @@ export async function agingForCustomer(
       },
       select: {
         id: true,
+        salesOrderId: true,
         number: true,
         invoiceDate: true,
         total: true,
@@ -242,6 +247,7 @@ export async function agingForCustomer(
     buckets[bucket] = buckets[bucket].plus(balance);
     return {
       invoiceId: inv.id,
+      salesOrderId: inv.salesOrderId,
       number: inv.number,
       invoiceDate: inv.invoiceDate,
       dueDate,
