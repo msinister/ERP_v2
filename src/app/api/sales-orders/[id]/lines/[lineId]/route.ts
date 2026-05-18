@@ -5,6 +5,7 @@ import {
   updateSalesOrderLineQtyShippedInputSchema,
 } from '@/lib/validation/sales';
 import {
+  removeSalesOrderLine,
   updateSalesOrderLineFields,
   updateSalesOrderLineQtyShipped,
 } from '@/server/services/salesOrders';
@@ -146,6 +147,44 @@ export async function PATCH(
         { status: 409 },
       );
     }
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : 'internal' },
+      { status: 400 },
+    );
+  }
+}
+
+// DELETE removes one line (default) or the entire bundle group the
+// line belongs to (?bundle=true). DRAFT + CONFIRMED only — service
+// throws otherwise and we surface 400 with the message.
+export async function DELETE(
+  req: Request,
+  ctx: { params: Promise<{ id: string; lineId: string }> },
+) {
+  try {
+    const user = await requireAuth(req);
+    const auditCtx = auditCtxFromRequest(req, user);
+    const { id, lineId } = await ctx.params;
+
+    // bundle=true expands the remove to every sibling line sharing
+    // this line's bundleGroupId. Default false = single-line remove.
+    const url = new URL(req.url);
+    const removeBundleGroup = url.searchParams.get('bundle') === 'true';
+
+    const so = await removeSalesOrderLine(
+      db,
+      id,
+      lineId,
+      { removeBundleGroup },
+      auditCtx,
+    );
+    return NextResponse.json({
+      id: so.id,
+      lineCount: so.lines.length,
+    });
+  } catch (e) {
+    const authResp = authErrorResponse(e);
+    if (authResp) return authResp;
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'internal' },
       { status: 400 },

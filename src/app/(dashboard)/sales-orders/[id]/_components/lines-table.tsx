@@ -14,6 +14,8 @@ import { ProductThumbnail } from '@/components/shared/product-thumbnail';
 import { ProductImageToggle } from '@/components/shared/product-image-toggle';
 import { StockContextToggle } from '@/components/shared/stock-context-toggle';
 import { QtyShippedInput } from './qty-shipped-input';
+import { RemoveLineButton } from './remove-line-button';
+import { RemoveBundleButton } from './remove-bundle-button';
 import {
   EditableDiscountCell,
   EditableNotesBlock,
@@ -70,15 +72,31 @@ export function SalesOrderLinesTable({
   }
 
   const isClosed = status === 'CLOSED';
-  // Bundle group totals — used by the synthetic header rows. Bundle
-  // header rows aren't real SalesOrderLines; they're derived from
-  // consecutive lines sharing a bundleGroupId.
-  const groupTotals = new Map<string, Prisma.Decimal>();
+  // Bundle group rollup — total, line count, and a representative
+  // line id (the first component) used by the header row's remove
+  // button. The header itself isn't a real SalesOrderLine, so
+  // "remove bundle" targets any component line with ?bundle=true and
+  // the service expands to the whole group via bundleGroupId.
+  type GroupMeta = {
+    total: Prisma.Decimal;
+    lineCount: number;
+    representativeLineId: string;
+  };
+  const groupMeta = new Map<string, GroupMeta>();
   for (const l of lines) {
     if (l.bundleGroupId == null) continue;
     const lt = computeLineTotal(l, isClosed);
-    const acc = groupTotals.get(l.bundleGroupId) ?? new Prisma.Decimal(0);
-    groupTotals.set(l.bundleGroupId, acc.plus(lt));
+    const prev = groupMeta.get(l.bundleGroupId);
+    if (prev) {
+      prev.total = prev.total.plus(lt);
+      prev.lineCount += 1;
+    } else {
+      groupMeta.set(l.bundleGroupId, {
+        total: lt,
+        lineCount: 1,
+        representativeLineId: l.id,
+      });
+    }
   }
   // displayItems interleaves bundle header rows with regular line
   // items, in the original order. Walks lines once; emits a header
@@ -90,18 +108,23 @@ export function SalesOrderLinesTable({
         bundleSku: string | null;
         bundleName: string | null;
         total: Prisma.Decimal;
+        lineCount: number;
+        representativeLineId: string;
       }
     | { kind: 'line'; line: SalesOrderLineRow };
   const displayItems: DisplayItem[] = [];
   let lastGroupId: string | null = null;
   for (const l of lines) {
     if (l.bundleGroupId != null && l.bundleGroupId !== lastGroupId) {
+      const meta = groupMeta.get(l.bundleGroupId)!;
       displayItems.push({
         kind: 'header',
         groupId: l.bundleGroupId,
         bundleSku: l.bundleSourceSku,
         bundleName: l.bundleSourceName,
-        total: groupTotals.get(l.bundleGroupId) ?? new Prisma.Decimal(0),
+        total: meta.total,
+        lineCount: meta.lineCount,
+        representativeLineId: meta.representativeLineId,
       });
     }
     lastGroupId = l.bundleGroupId;
@@ -142,6 +165,10 @@ export function SalesOrderLinesTable({
                 bundleSku={item.bundleSku}
                 bundleName={item.bundleName}
                 total={item.total}
+                salesOrderId={salesOrderId}
+                representativeLineId={item.representativeLineId}
+                lineCount={item.lineCount}
+                fieldsEditable={fieldsEditable}
               />
             );
           }
@@ -151,6 +178,7 @@ export function SalesOrderLinesTable({
               line={item.line}
               isClosed={isClosed}
               isEditable={isEditable}
+              fieldsEditable={fieldsEditable}
               salesOrderId={salesOrderId}
               overShippingPolicy={overShippingPolicy}
             />
@@ -177,6 +205,12 @@ export function SalesOrderLinesTable({
               <TableHead className="text-right">Unit price</TableHead>
               <TableHead className="text-right">Discount</TableHead>
               <TableHead className="text-right">Line total</TableHead>
+              {/* Actions column — narrow; hosts the hover-only remove
+                  button on DRAFT / CONFIRMED orders. Header label is
+                  visually hidden to keep the column unobtrusive. */}
+              <TableHead className="w-[40px]">
+                <span className="sr-only">Actions</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -188,13 +222,20 @@ export function SalesOrderLinesTable({
                     bundleSku={item.bundleSku}
                     bundleName={item.bundleName}
                     total={item.total}
+                    salesOrderId={salesOrderId}
+                    representativeLineId={item.representativeLineId}
+                    lineCount={item.lineCount}
+                    fieldsEditable={fieldsEditable}
                   />
                 );
               }
               const l = item.line;
               const inBundle = l.bundleGroupId != null;
               return (
-                <TableRow key={l.id}>
+                // `group` lets the per-row hover affordances
+                // (Add note pills, Remove button) reveal via
+                // group-hover. Removed from BundleHeaderRow.
+                <TableRow key={l.id} className="group">
                   <TableCell className="[.hide-product-images_&]:hidden">
                     <ProductThumbnail
                       src={l.imageUrl}
@@ -273,6 +314,17 @@ export function SalesOrderLinesTable({
                   <TableCell className="text-right tabular-nums font-medium">
                     {formatCurrency(computeLineTotal(l, isClosed))}
                   </TableCell>
+                  <TableCell className="text-right">
+                    {fieldsEditable ? (
+                      <RemoveLineButton
+                        salesOrderId={salesOrderId}
+                        lineId={l.id}
+                        sku={l.sku}
+                        qty={formatQty(l.qtyOrdered)}
+                        bundleSku={l.bundleSourceSku}
+                      />
+                    ) : null}
+                  </TableCell>
                 </TableRow>
               );
             })}
@@ -293,18 +345,24 @@ function SalesOrderLineCard({
   line: l,
   isClosed,
   isEditable,
+  fieldsEditable,
   salesOrderId,
   overShippingPolicy,
 }: {
   line: SalesOrderLineRow;
   isClosed: boolean;
   isEditable: boolean;
+  fieldsEditable: boolean;
   salesOrderId: string;
   overShippingPolicy: 'ALLOW' | 'CONFIRM' | 'BLOCK';
 }) {
   const hasDiscount = l.discountPercent != null || l.discountAmount != null;
   return (
-    <div className="space-y-3 rounded-lg border border-border bg-card p-3">
+    // `group` parallels the desktop TableRow — Add note affordances
+    // inside reveal on hover. On touch devices hover is unreliable,
+    // so the Remove button uses its inline-card variant (always
+    // visible) instead of the hover variant.
+    <div className="group space-y-3 rounded-lg border border-border bg-card p-3">
       <div className="flex items-start gap-3">
         {/* Thumbnail at top-left, hides with the global toggle. */}
         <div className="[.hide-product-images_&]:hidden">
@@ -318,6 +376,16 @@ function SalesOrderLineCard({
           ) : null}
           <StockAndCostBlock line={l} />
         </div>
+        {fieldsEditable ? (
+          <RemoveLineButton
+            salesOrderId={salesOrderId}
+            lineId={l.id}
+            sku={l.sku}
+            qty={formatQty(l.qtyOrdered)}
+            bundleSku={l.bundleSourceSku}
+            variant="inline-card"
+          />
+        ) : null}
       </div>
       <div className="grid grid-cols-2 gap-3 text-sm">
         <Stat label="Ordered">
@@ -360,11 +428,13 @@ function SalesOrderLineCard({
           </span>
         </div>
       ) : null}
-      {l.customerNote ? (
-        <div className="text-xs italic text-muted-foreground">
-          “{l.customerNote}”
-        </div>
-      ) : null}
+      <EditableNotesBlock
+        salesOrderId={salesOrderId}
+        lineId={l.id}
+        customerNote={l.customerNote}
+        internalNote={l.internalNote}
+        editable={fieldsEditable}
+      />
     </div>
   );
 }
@@ -596,13 +666,23 @@ function BundleHeaderRow({
   bundleSku,
   bundleName,
   total,
+  salesOrderId,
+  representativeLineId,
+  lineCount,
+  fieldsEditable,
 }: {
   bundleSku: string | null;
   bundleName: string | null;
   total: Prisma.Decimal;
+  salesOrderId: string;
+  representativeLineId: string;
+  lineCount: number;
+  fieldsEditable: boolean;
 }) {
   return (
-    <TableRow className="bg-amber-50/50 hover:bg-amber-50/70 dark:bg-amber-950/20 dark:hover:bg-amber-950/30">
+    // `group` enables the hover-only reveal on the bundle-remove
+    // button in the actions cell, matching the per-line rows.
+    <TableRow className="group bg-amber-50/50 hover:bg-amber-50/70 dark:bg-amber-950/20 dark:hover:bg-amber-950/30">
       <TableCell className="[.hide-product-images_&]:hidden" />
       <TableCell className="font-mono text-xs font-medium">
         <span className="rounded bg-amber-200/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-amber-900 dark:bg-amber-800/40 dark:text-amber-200">
@@ -618,6 +698,16 @@ function BundleHeaderRow({
       <TableCell className="text-right tabular-nums font-semibold">
         {formatCurrency(total)}
       </TableCell>
+      <TableCell className="text-right">
+        {fieldsEditable ? (
+          <RemoveBundleButton
+            salesOrderId={salesOrderId}
+            representativeLineId={representativeLineId}
+            bundleSku={bundleSku}
+            lineCount={lineCount}
+          />
+        ) : null}
+      </TableCell>
     </TableRow>
   );
 }
@@ -628,10 +718,18 @@ function BundleHeaderCard({
   bundleSku,
   bundleName,
   total,
+  salesOrderId,
+  representativeLineId,
+  lineCount,
+  fieldsEditable,
 }: {
   bundleSku: string | null;
   bundleName: string | null;
   total: Prisma.Decimal;
+  salesOrderId: string;
+  representativeLineId: string;
+  lineCount: number;
+  fieldsEditable: boolean;
 }) {
   return (
     <div className="rounded-lg border border-amber-300/60 bg-amber-50/50 p-3 dark:border-amber-700/40 dark:bg-amber-950/20">
@@ -643,7 +741,20 @@ function BundleHeaderCard({
           <div className="font-mono text-xs">{bundleSku ?? '—'}</div>
           <div className="text-sm font-medium">{bundleName ?? '—'}</div>
         </div>
-        <div className="tabular-nums font-semibold">{formatCurrency(total)}</div>
+        <div className="flex items-center gap-2">
+          <div className="tabular-nums font-semibold">
+            {formatCurrency(total)}
+          </div>
+          {fieldsEditable ? (
+            <RemoveBundleButton
+              salesOrderId={salesOrderId}
+              representativeLineId={representativeLineId}
+              bundleSku={bundleSku}
+              lineCount={lineCount}
+              variant="inline-card"
+            />
+          ) : null}
+        </div>
       </div>
     </div>
   );

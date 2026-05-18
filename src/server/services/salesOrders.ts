@@ -38,6 +38,7 @@ import {
   cancelSalesOrderInputSchema,
   closeSalesOrderInputSchema,
   createSalesOrderInputSchema,
+  removeSalesOrderLineInputSchema,
   reopenSalesOrderInputSchema,
   updateSalesOrderInputSchema,
   updateSalesOrderLineFieldsInputSchema,
@@ -46,6 +47,7 @@ import {
   type CancelSalesOrderInput,
   type CloseSalesOrderInput,
   type CreateSalesOrderInput,
+  type RemoveSalesOrderLineInput,
   type ReopenSalesOrderInput,
   type UpdateSalesOrderInput,
   type UpdateSalesOrderLineFieldsInput,
@@ -1324,6 +1326,140 @@ export async function updateSalesOrderLineFields(
     });
 
     return after;
+  });
+}
+
+/**
+ * Soft-delete one SalesOrderLine (or a whole bundle group) from a
+ * DRAFT or CONFIRMED order. Mirrors the lifecycle gates the inline
+ * field-edit path uses (DRAFT + CONFIRMED only), since both flows
+ * mutate the order's commitment basis.
+ *
+ * Reservation:
+ *   - DRAFT — qtyReserved is already 0, nothing to release. Bin
+ *     reserved counter is unaffected.
+ *   - CONFIRMED — clear qtyReserved → 0 on each removed line, lock
+ *     every touched bin BEFORE the writes, then recompute
+ *     InventoryItem.reserved per bin afterward. Same shape as
+ *     cancelSalesOrder's release path.
+ *
+ * Bundle handling: when `removeBundleGroup` is true and the targeted
+ * line belongs to a bundle (bundleGroupId != null), every sibling
+ * line sharing that bundleGroupId on this SO is removed in the same
+ * transaction. When false (default), only the single targeted line
+ * is removed — useful when the customer drops one item from a bundle
+ * without scrapping the whole group. The flag is a no-op when the
+ * line isn't part of a bundle.
+ *
+ * Credit-limit / AR-hold: removing a line can only LOWER the order
+ * total, so the gate is intentionally not re-run — there's no way
+ * the smaller projection breaks a limit the original passed.
+ *
+ * Audit: one DELETE row per soft-deleted line. The lines-table render
+ * (which filters deletedAt: null) drops the rows on the next refresh.
+ */
+export async function removeSalesOrderLine(
+  db: PrismaClient,
+  salesOrderId: string,
+  lineId: string,
+  input: RemoveSalesOrderLineInput,
+  ctx?: AuditContext,
+): Promise<SalesOrderWithLines> {
+  const data = removeSalesOrderLineInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    const targetLine = await tx.salesOrderLine.findUnique({
+      where: { id: lineId },
+      include: { salesOrder: { select: { id: true, status: true } } },
+    });
+    if (!targetLine || targetLine.deletedAt != null) {
+      throw new Error(`SalesOrderLine not found: ${lineId}`);
+    }
+    if (targetLine.salesOrder.id !== salesOrderId) {
+      throw new Error(
+        `Line ${lineId} does not belong to SalesOrder ${salesOrderId}`,
+      );
+    }
+    const status = targetLine.salesOrder.status;
+    if (
+      status !== SalesOrderStatus.DRAFT &&
+      status !== SalesOrderStatus.CONFIRMED
+    ) {
+      throw new Error(
+        `Cannot remove line while SalesOrder is in status ${status} — only DRAFT and CONFIRMED orders support inline line removal`,
+      );
+    }
+
+    // Collect every line we're removing in this call. When the flag
+    // is set and the targeted line has a bundleGroupId, expand to all
+    // live siblings. Otherwise it's just the one targeted line.
+    let linesToRemove = [targetLine];
+    if (data.removeBundleGroup && targetLine.bundleGroupId != null) {
+      const siblings = await tx.salesOrderLine.findMany({
+        where: {
+          salesOrderId,
+          bundleGroupId: targetLine.bundleGroupId,
+          deletedAt: null,
+        },
+        include: { salesOrder: { select: { id: true, status: true } } },
+      });
+      linesToRemove = siblings;
+    }
+
+    // Bin locking + reservation release only matters on CONFIRMED.
+    // Sort via uniqueBins so concurrent reservation-touching ops on
+    // overlapping bins acquire locks in the same canonical order.
+    const bins = uniqueBins(
+      linesToRemove.map((l) => ({
+        variantId: l.variantId,
+        warehouseId: l.warehouseId,
+      })),
+    );
+    if (status === SalesOrderStatus.CONFIRMED) {
+      for (const b of bins) {
+        await lockBin(tx, b.variantId, b.warehouseId);
+      }
+    }
+
+    const now = new Date();
+    for (const l of linesToRemove) {
+      await tx.salesOrderLine.update({
+        where: { id: l.id },
+        data: {
+          deletedAt: now,
+          // Clear qtyReserved so the reservation roll-up's
+          // deletedAt: null filter is belt-and-braces with the
+          // counter. Mirrors cancelSalesOrder's release.
+          qtyReserved: new Prisma.Decimal(0),
+        },
+      });
+      await audit(tx, {
+        action: AuditAction.DELETE,
+        entityType: 'SalesOrderLine',
+        entityId: l.id,
+        before: {
+          salesOrderId: l.salesOrderId,
+          variantId: l.variantId,
+          warehouseId: l.warehouseId,
+          qtyOrdered: l.qtyOrdered,
+          qtyReserved: l.qtyReserved,
+          unitPrice: l.unitPrice,
+          bundleGroupId: l.bundleGroupId,
+        },
+        after: { deletedAt: now },
+        ctx,
+      });
+    }
+
+    if (status === SalesOrderStatus.CONFIRMED) {
+      for (const b of bins) {
+        await recomputeReservedForBin(tx, b.variantId, b.warehouseId);
+      }
+    }
+
+    return tx.salesOrder.findUniqueOrThrow({
+      where: { id: salesOrderId },
+      include: { lines: { where: { deletedAt: null } } },
+    });
   });
 }
 

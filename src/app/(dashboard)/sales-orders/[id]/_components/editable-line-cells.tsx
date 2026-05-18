@@ -1,9 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
-import { Lock, MessageSquareText } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Lock, MessageSquareText, Plus } from 'lucide-react';
 import { formatCurrency } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { InlineEditableCell } from './inline-editable-cell';
 
 // =============================================================================
@@ -228,12 +232,20 @@ export function EditableNotesBlock({
   internalNote: string | null;
   editable: boolean;
 }) {
-  // Notes-only block — existing values render and are click-to-edit
-  // (when status allows). Empty notes show nothing; to add a note to
-  // a line that has none, operators use the Edit button on the order.
+  // Notes block. When a note exists it renders click-to-edit (same as
+  // before). When a side is empty AND the line is editable, a
+  // hover-only "+ Customer note" / "+ Internal note" pill shows so
+  // operators can add a note inline without going through the order
+  // edit form. The pill uses opacity transitions so the row stays
+  // clean at rest — the parent TableRow / mobile card carries the
+  // `group` class so `group-hover` triggers visibility.
+  //
+  // When the SO isn't editable (DISPATCHED / CLOSED / CANCELLED) and
+  // both notes are empty, the block renders nothing — no affordance
+  // because nothing can be added.
   const hasCustomer = customerNote != null && customerNote.trim() !== '';
   const hasInternal = internalNote != null && internalNote.trim() !== '';
-  if (!hasCustomer && !hasInternal) return null;
+  if (!hasCustomer && !hasInternal && !editable) return null;
 
   return (
     <div className="mt-1 space-y-1">
@@ -246,6 +258,13 @@ export function EditableNotesBlock({
           editable={editable}
           kind="customer"
         />
+      ) : editable ? (
+        <AddNoteAffordance
+          salesOrderId={salesOrderId}
+          lineId={lineId}
+          field="customerNote"
+          kind="customer"
+        />
       ) : null}
       {hasInternal ? (
         <NoteRow
@@ -256,7 +275,150 @@ export function EditableNotesBlock({
           editable={editable}
           kind="internal"
         />
+      ) : editable ? (
+        <AddNoteAffordance
+          salesOrderId={salesOrderId}
+          lineId={lineId}
+          field="internalNote"
+          kind="internal"
+        />
       ) : null}
+    </div>
+  );
+}
+
+// Hover-only "+ Customer note" / "+ Internal note" affordance.
+// Lives at rest as a tiny opacity-0 pill that becomes visible when
+// the enclosing .group (the TableRow on desktop, the card on mobile)
+// is hovered or any of its children focused. Click expands an inline
+// text input — Enter / blur saves via the same PATCH endpoint the
+// NoteRow editor uses, Escape cancels. After save, the server
+// refresh pulls the new value and the NoteRow renderer takes over.
+function AddNoteAffordance({
+  salesOrderId,
+  lineId,
+  field,
+  kind,
+}: {
+  salesOrderId: string;
+  lineId: string;
+  field: 'customerNote' | 'internalNote';
+  kind: 'customer' | 'internal';
+}) {
+  const router = useRouter();
+  const [mode, setMode] = useState<'idle' | 'editing' | 'saving'>('idle');
+  const [raw, setRaw] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (mode === 'editing') {
+      inputRef.current?.focus();
+    }
+  }, [mode]);
+
+  async function commit() {
+    if (mode !== 'editing') return;
+    const trimmed = raw.trim();
+    if (trimmed === '') {
+      // Empty input = abandon. Nothing to persist; return to idle so
+      // the affordance hides again on next mouse-out.
+      setMode('idle');
+      setRaw('');
+      return;
+    }
+    if (trimmed.length > 2000) {
+      toast.error('Note is too long (2000 char max)');
+      setMode('idle');
+      setRaw('');
+      return;
+    }
+    setMode('saving');
+    try {
+      const result = await patchLineFields(salesOrderId, lineId, {
+        [field]: trimmed,
+      });
+      if (!result.ok) {
+        toast.error(result.error);
+        setMode('idle');
+        setRaw('');
+        return;
+      }
+      // Stay collapsed on success — router.refresh re-renders the
+      // parent and the new value falls through to NoteRow.
+      setMode('idle');
+      setRaw('');
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Network error');
+      setMode('idle');
+      setRaw('');
+    }
+  }
+
+  if (mode === 'idle') {
+    return (
+      <button
+        type="button"
+        onClick={() => setMode('editing')}
+        // opacity hidden at rest; revealed when any ancestor with
+        // `group` is hovered, or when this button is keyboard-focused
+        // (so tab-traversal can still reach + activate it).
+        className={cn(
+          'inline-flex items-center gap-1 rounded-sm px-1 py-0.5 text-[11px] text-muted-foreground/80',
+          'opacity-0 transition-opacity hover:bg-muted/50 hover:text-foreground',
+          'group-hover:opacity-100 focus-visible:opacity-100',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        )}
+        aria-label={
+          kind === 'customer' ? 'Add customer note' : 'Add internal note'
+        }
+      >
+        <Plus className="size-3" aria-hidden />
+        {kind === 'customer' ? 'Customer note' : 'Internal note'}
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      {kind === 'internal' ? (
+        <Badge variant="outline" className="gap-1 px-1 py-0 text-[9px]">
+          <Lock className="size-2.5" aria-hidden />
+          Internal
+        </Badge>
+      ) : (
+        <MessageSquareText
+          className="size-3 text-muted-foreground"
+          aria-hidden
+        />
+      )}
+      <Input
+        ref={inputRef}
+        type="text"
+        value={raw}
+        onChange={(e) => setRaw(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            void commit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setMode('idle');
+            setRaw('');
+          }
+        }}
+        disabled={mode === 'saving'}
+        placeholder={
+          kind === 'customer'
+            ? 'Note shown on documents'
+            : 'Internal note (staff only)'
+        }
+        className="h-7 max-w-md px-1.5 py-0.5 text-xs"
+        aria-label={
+          kind === 'customer' ? 'Customer note' : 'Internal note'
+        }
+      />
     </div>
   );
 }

@@ -192,6 +192,15 @@ export const closeSalesOrderInputSchema = z.object({
   lines: z.array(closeSalesOrderLineInputSchema).optional(),
 });
 
+// Per-line remove on DRAFT / CONFIRMED. `removeBundleGroup` opt-in
+// removes every line that shares the targeted line's bundleGroupId
+// (the operator chose "Remove bundle" in the confirm dialog); the
+// default removes just the one line, leaving sibling component lines
+// in place — useful when a customer drops one item from a bundle.
+export const removeSalesOrderLineInputSchema = z.object({
+  removeBundleGroup: z.boolean().optional().default(false),
+});
+
 export type SalesOrderLineInput = z.infer<typeof salesOrderLineInputSchema>;
 export type CreateSalesOrderInput = z.infer<typeof createSalesOrderInputSchema>;
 export type UpdateSalesOrderInput = z.infer<typeof updateSalesOrderInputSchema>;
@@ -211,6 +220,9 @@ export type ReopenSalesOrderInput = z.infer<
 >;
 export type AddSalesOrderLinesInput = z.infer<
   typeof addSalesOrderLinesInputSchema
+>;
+export type RemoveSalesOrderLineInput = z.infer<
+  typeof removeSalesOrderLineInputSchema
 >;
 // Customer stub validation moved to src/lib/validation/customers.ts as
 // part of the Customer master expansion slice — see that file for the
