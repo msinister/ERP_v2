@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { VariantPicker } from '@/components/shared/variant-picker';
 import {
   Table,
   TableBody,
@@ -56,6 +57,7 @@ export type AddLinesVariant = {
   sku: string;
   productName: string;
   variantName: string | null;
+  shortDescription: string | null;
   basePrice: string | null;
 };
 
@@ -357,54 +359,19 @@ function DraftRow({
         <div className="col-span-12 md:col-span-5">
           <Field>
             <FieldLabel htmlFor={`variant-${draft.key}`}>Variant</FieldLabel>
-            <Select
-              // Keep the Select consistently controlled — pass the
-              // string directly. draft.variantId is always a string
-              // ('' initially, an id after picking). '' doesn't match
-              // any SelectItem, so the placeholder shows.
-              value={draft.variantId}
+            <VariantPicker
+              id={`variant-${draft.key}`}
+              value={draft.variantId || null}
               onValueChange={(v) => onChange({ variantId: v ?? '' })}
-            >
-              <SelectTrigger
-                id={`variant-${draft.key}`}
-                className="w-full"
-                aria-invalid={!!errors.variantId}
-              >
-                <SelectValue placeholder="Pick a product…">
-                  {(v) => {
-                    if (!v) return null;
-                    const variant = variants.find((x) => x.id === v);
-                    if (!variant) return v;
-                    return (
-                      <>
-                        <span className="font-mono text-xs text-muted-foreground">
-                          {variant.sku}
-                        </span>{' '}
-                        {variant.productName}
-                        {variant.variantName ? ` — ${variant.variantName}` : ''}
-                      </>
-                    );
-                  }}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {variants.length === 0 ? (
-                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                    No active variants.
-                  </div>
-                ) : (
-                  variants.map((v) => (
-                    <SelectItem key={v.id} value={v.id}>
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {v.sku}
-                      </span>{' '}
-                      {v.productName}
-                      {v.variantName ? ` — ${v.variantName}` : ''}
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
+              variants={variants}
+              ariaInvalid={!!errors.variantId}
+              placeholder="Pick a product…"
+              emptyMessage={
+                variants.length === 0
+                  ? 'No active variants.'
+                  : 'No matching products.'
+              }
+            />
             {errors.variantId ? (
               <FieldError errors={[{ message: errors.variantId }]} />
             ) : null}

@@ -17,7 +17,14 @@ export default async function NewSalesOrderPage() {
     db.productVariant.findMany({
       where: { active: true, deletedAt: null, product: { active: true, deletedAt: null } },
       include: {
-        product: { select: { name: true, basePrice: true, sku: true } },
+        product: {
+          select: {
+            name: true,
+            basePrice: true,
+            sku: true,
+            shortDescription: true,
+          },
+        },
       },
       orderBy: { sku: 'asc' },
       take: 1000,
@@ -89,6 +96,7 @@ export default async function NewSalesOrderPage() {
           sku: v.sku,
           variantName: v.name,
           productName: v.product.name,
+          shortDescription: v.product.shortDescription,
           basePrice: v.product.basePrice?.toString() ?? null,
           inventoryByWarehouse: stockByVariant.get(v.id) ?? {},
         }))}

@@ -82,7 +82,14 @@ export default async function EditSalesOrderPage({
         ],
       },
       include: {
-        product: { select: { name: true, basePrice: true, sku: true } },
+        product: {
+          select: {
+            name: true,
+            basePrice: true,
+            sku: true,
+            shortDescription: true,
+          },
+        },
       },
       orderBy: { sku: 'asc' },
       take: 1000,
@@ -181,6 +188,7 @@ export default async function EditSalesOrderPage({
           sku: v.sku,
           variantName: v.name,
           productName: v.product.name,
+          shortDescription: v.product.shortDescription,
           basePrice: v.product.basePrice?.toString() ?? null,
           inventoryByWarehouse: stockByVariant.get(v.id) ?? {},
         }))}
@@ -211,7 +219,11 @@ async function ConfirmedEditView({
       deletedAt: null,
       product: { active: true, deletedAt: null },
     },
-    include: { product: { select: { name: true, basePrice: true } } },
+    include: {
+      product: {
+        select: { name: true, basePrice: true, shortDescription: true },
+      },
+    },
     orderBy: { sku: 'asc' },
     take: 1000,
   });
@@ -257,6 +269,7 @@ async function ConfirmedEditView({
           sku: v.sku,
           productName: v.product.name,
           variantName: v.name,
+          shortDescription: v.product.shortDescription,
           basePrice: v.product.basePrice?.toString() ?? null,
         }))}
       />

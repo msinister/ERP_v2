@@ -27,7 +27,9 @@ export default async function NewPurchaseOrderPage() {
         deletedAt: null,
         product: { active: true, deletedAt: null },
       },
-      include: { product: { select: { name: true } } },
+      include: {
+        product: { select: { name: true, shortDescription: true } },
+      },
       orderBy: { sku: 'asc' },
       take: 1000,
     }),
@@ -63,6 +65,7 @@ export default async function NewPurchaseOrderPage() {
     sku: v.sku,
     variantName: v.name,
     productName: v.product.name,
+    shortDescription: v.product.shortDescription,
   }));
   const catalogHints: CatalogHint[] = catalogRows.map((r) => ({
     vendorId: r.vendorId,

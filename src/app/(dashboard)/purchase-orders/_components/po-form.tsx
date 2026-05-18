@@ -31,7 +31,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { Badge } from '@/components/ui/badge';
+import {
+  InCatalogBadge,
+  VariantPicker,
+  type VariantPickerCatalogHint,
+  type VariantPickerOption,
+} from '@/components/shared/variant-picker';
 import { formatCurrency } from '@/lib/format';
 import {
   isNonNegativeDecimalInput,
@@ -56,6 +61,7 @@ export type VariantOption = {
   sku: string;
   variantName: string | null;
   productName: string;
+  shortDescription: string | null;
 };
 // Per-vendor catalog hint. Keyed by `${vendorId}:${variantId}` so a
 // quick map lookup in the line row pre-fills the SKU + cost.
@@ -636,19 +642,42 @@ function LineRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hint]);
 
-  // Variants the selected vendor stocks come first so the picker
-  // surfaces the "right" choice for that vendor's catalog. Non-catalog
-  // variants remain selectable (spec line 36 — one-off purchases
-  // allowed).
-  const sortedVariants = useMemo(() => {
-    if (!vendorId) return variants;
-    return [...variants].sort((a, b) => {
-      const ah = catalogByKey.has(`${vendorId}:${a.id}`) ? 0 : 1;
-      const bh = catalogByKey.has(`${vendorId}:${b.id}`) ? 0 : 1;
+  // Per-variant hint map, scoped to the current vendor. Slotted into
+  // VariantPicker.catalogHints so vendorSku enters the search corpus
+  // and surfaces on each result row alongside latestCost. The form's
+  // existing useEffect above still owns the auto-fill of the vendorSku
+  // + unitCost FIELDS (catalogByKey lookup) — the picker doesn't
+  // duplicate that logic (PO has dedicated vendorSku + unitCost
+  // inputs, distinct from the Bill form where unitCost auto-fills
+  // happen on select).
+  const vendorCatalogByVariant = useMemo(() => {
+    const map = new Map<string, VariantPickerCatalogHint>();
+    if (!vendorId) return map;
+    for (const [key, h] of catalogByKey) {
+      if (!key.startsWith(`${vendorId}:`)) continue;
+      map.set(h.variantId, {
+        vendorSku: h.vendorSku,
+        latestCost: h.latestCost,
+      });
+    }
+    return map;
+  }, [vendorId, catalogByKey]);
+
+  // In-catalog-first sort, applied inside the picker AFTER its own
+  // filter. SKU substring matches stay relevant either way; the sort
+  // just biases ties.
+  const sortByInCatalog = useMemo(() => {
+    if (!vendorId) return undefined;
+    return (
+      a: VariantPickerOption,
+      b: VariantPickerOption,
+    ): number => {
+      const ah = vendorCatalogByVariant.has(a.id) ? 0 : 1;
+      const bh = vendorCatalogByVariant.has(b.id) ? 0 : 1;
       if (ah !== bh) return ah - bh;
       return a.sku.localeCompare(b.sku);
-    });
-  }, [vendorId, variants, catalogByKey]);
+    };
+  }, [vendorId, vendorCatalogByVariant]);
 
   return (
     <div className="rounded-md border border-border p-3">
@@ -660,65 +689,26 @@ function LineRow({
               control={control}
               name={`lines.${index}.variantId`}
               render={({ field }) => (
-                <Select
-                  value={field.value}
-                  onValueChange={field.onChange}
-                >
-                  <SelectTrigger
-                    id={`lines.${index}.variantId`}
-                    className="w-full"
-                    aria-invalid={!!lineErrors?.variantId}
-                  >
-                    <SelectValue placeholder="Pick a product…">
-                      {(value) => {
-                        if (!value) return null;
-                        const variant = variants.find((x) => x.id === value);
-                        if (!variant) return value;
-                        return (
-                          <>
-                            <span className="font-mono text-xs text-muted-foreground">
-                              {variant.sku}
-                            </span>{' '}
-                            {variant.productName}
-                            {variant.variantName
-                              ? ` — ${variant.variantName}`
-                              : ''}
-                          </>
-                        );
-                      }}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sortedVariants.length === 0 ? (
-                      <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                        No active variants.
-                      </div>
-                    ) : (
-                      sortedVariants.map((v) => {
-                        const inCatalog = catalogByKey.has(
-                          `${vendorId}:${v.id}`,
-                        );
-                        return (
-                          <SelectItem key={v.id} value={v.id}>
-                            <span className="font-mono text-xs text-muted-foreground">
-                              {v.sku}
-                            </span>{' '}
-                            {v.productName}
-                            {v.variantName ? ` — ${v.variantName}` : ''}
-                            {inCatalog ? (
-                              <Badge
-                                variant="secondary"
-                                className="ml-2 text-[10px]"
-                              >
-                                In catalog
-                              </Badge>
-                            ) : null}
-                          </SelectItem>
-                        );
-                      })
-                    )}
-                  </SelectContent>
-                </Select>
+                <VariantPicker
+                  id={`lines.${index}.variantId`}
+                  value={field.value || null}
+                  onValueChange={(v) => field.onChange(v ?? '')}
+                  variants={variants}
+                  catalogHints={vendorCatalogByVariant}
+                  sortVariants={sortByInCatalog}
+                  ariaInvalid={!!lineErrors?.variantId}
+                  placeholder="Pick a product…"
+                  emptyMessage={
+                    variants.length === 0
+                      ? 'No active variants.'
+                      : 'No matching products.'
+                  }
+                  renderItemMeta={(v) =>
+                    vendorCatalogByVariant.has(v.id) ? (
+                      <InCatalogBadge />
+                    ) : null
+                  }
+                />
               )}
             />
             <FieldError errors={[lineErrors?.variantId]} />

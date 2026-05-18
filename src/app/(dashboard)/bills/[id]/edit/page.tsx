@@ -9,6 +9,7 @@ import { listAccounts } from '@/server/services/glAccounts';
 import {
   BillForm,
   type BillFormValues,
+  type CatalogHint,
   type VendorOption,
   type VariantOption,
   type ExpenseAccountOption,
@@ -22,7 +23,7 @@ export default async function EditBillPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [bill, vendors, variants, allAccounts] = await Promise.all([
+  const [bill, vendors, variants, allAccounts, catalogRows] = await Promise.all([
     getBill(db, id),
     listVendors(db, { active: true, take: 1000 }),
     db.productVariant.findMany({
@@ -31,11 +32,23 @@ export default async function EditBillPage({
         deletedAt: null,
         product: { active: true, deletedAt: null },
       },
-      include: { product: { select: { name: true } } },
+      include: {
+        product: { select: { name: true, shortDescription: true } },
+      },
       orderBy: { sku: 'asc' },
       take: 1000,
     }),
     listAccounts(db, { active: true, take: 500 }),
+    db.vendorProduct.findMany({
+      where: { deletedAt: null },
+      select: {
+        vendorId: true,
+        variantId: true,
+        vendorSku: true,
+        latestCost: true,
+      },
+      take: 5000,
+    }),
   ]);
   if (!bill) notFound();
 
@@ -70,6 +83,13 @@ export default async function EditBillPage({
     sku: v.sku,
     variantName: v.name,
     productName: v.product.name,
+    shortDescription: v.product.shortDescription,
+  }));
+  const catalogHints: CatalogHint[] = catalogRows.map((r) => ({
+    vendorId: r.vendorId,
+    variantId: r.variantId,
+    vendorSku: r.vendorSku,
+    latestCost: r.latestCost?.toString() ?? null,
   }));
   const expenseAccountOptions: ExpenseAccountOption[] = allAccounts
     .filter((a) => a.type === AccountType.EXPENSE)
@@ -115,6 +135,7 @@ export default async function EditBillPage({
         mode={{ kind: 'edit', billId: bill.id }}
         vendors={vendorOptions}
         variants={variantOptions}
+        catalogHints={catalogHints}
         expenseAccounts={expenseAccountOptions}
         defaultValues={defaults}
       />

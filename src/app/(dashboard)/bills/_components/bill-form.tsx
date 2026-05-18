@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -17,15 +17,9 @@ import { Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
-  Combobox,
-  ComboboxContent,
-  ComboboxInput,
-  ComboboxInputGroup,
-  ComboboxItem,
-  ComboboxList,
-  ComboboxSeparator,
-  ComboboxTrigger,
-} from '@/components/ui/combobox';
+  VariantPicker,
+  type VariantPickerCatalogHint,
+} from '@/components/shared/variant-picker';
 import {
   Field,
   FieldError,
@@ -64,6 +58,19 @@ export type VariantOption = {
   sku: string;
   variantName: string | null;
   productName: string;
+  shortDescription: string | null;
+};
+
+// Per-vendor catalog hint — same shape as the PO form's. Bill form
+// uses these for two things: extending the variant-picker's search
+// corpus with the vendor's vendorSku, and auto-filling the line's
+// unitCost from latestCost on select. Keyed (vendorId, variantId)
+// at the page-level fetch; the form dedupes into a Map per render.
+export type CatalogHint = {
+  vendorId: string;
+  variantId: string;
+  vendorSku: string | null;
+  latestCost: string | null;
 };
 export type ExpenseAccountOption = {
   id: string;
@@ -213,12 +220,14 @@ export function BillForm({
   mode,
   vendors,
   variants,
+  catalogHints,
   expenseAccounts,
   defaultValues,
 }: {
   mode: BillFormMode;
   vendors: VendorOption[];
   variants: VariantOption[];
+  catalogHints: CatalogHint[];
   expenseAccounts: ExpenseAccountOption[];
   defaultValues?: Partial<BillFormValues>;
 }) {
@@ -261,6 +270,23 @@ export function BillForm({
     () => vendors.find((v) => v.id === vendorId) ?? null,
     [vendors, vendorId],
   );
+  // Catalog map scoped to the currently-selected vendor. Keyed by
+  // variantId so the picker's catalogHints prop slots in directly.
+  // Empty when no vendor is picked yet (PO uses the same shape but
+  // keys by `vendor:variant`; here we already know the vendor at
+  // the form scope, so the simpler shape is correct).
+  const vendorCatalogByVariant = useMemo(() => {
+    const map = new Map<string, VariantPickerCatalogHint>();
+    if (!vendorId) return map;
+    for (const h of catalogHints) {
+      if (h.vendorId !== vendorId) continue;
+      map.set(h.variantId, {
+        vendorSku: h.vendorSku,
+        latestCost: h.latestCost,
+      });
+    }
+    return map;
+  }, [catalogHints, vendorId]);
 
   function onSourceChange(next: 'PRODUCT' | 'EXPENSE') {
     if (next === source) return;
@@ -467,6 +493,7 @@ export function BillForm({
                   index={index}
                   source={source}
                   variants={variantsState}
+                  catalogHints={vendorCatalogByVariant}
                   expenseAccounts={expenseAccounts}
                   canRemove={fields.length > 1}
                   onRemove={() => remove(index)}
@@ -593,29 +620,12 @@ export function BillForm({
   );
 }
 
-function variantLabel(v: VariantOption): string {
-  return `${v.sku} ${v.productName}${v.variantName ? ` — ${v.variantName}` : ''}`;
-}
-
-function filterVariants(
-  variants: VariantOption[],
-  query: string,
-): VariantOption[] {
-  const q = query.trim().toLowerCase();
-  if (q === '') return variants;
-  return variants.filter(
-    (v) =>
-      v.sku.toLowerCase().includes(q) ||
-      v.productName.toLowerCase().includes(q) ||
-      (v.variantName?.toLowerCase().includes(q) ?? false),
-  );
-}
-
 function LineRow({
   form,
   index,
   source,
   variants,
+  catalogHints,
   expenseAccounts,
   canRemove,
   onRemove,
@@ -625,6 +635,7 @@ function LineRow({
   index: number;
   source: 'PRODUCT' | 'EXPENSE';
   variants: VariantOption[];
+  catalogHints: Map<string, VariantPickerCatalogHint>;
   expenseAccounts: ExpenseAccountOption[];
   canRemove: boolean;
   onRemove: () => void;
@@ -633,45 +644,12 @@ function LineRow({
   const {
     register,
     control,
+    setValue,
+    getValues,
     formState: { errors },
   } = form;
 
   const lineErrors = errors.lines?.[index];
-
-  // Initial input fill in edit mode: if a variant is already selected,
-  // show its label. Otherwise blank. The Combobox is fully controlled
-  // (value + inputValue) so we own both the picker state and the
-  // display string the operator sees.
-  const initialVariantId = form.getValues(`lines.${index}.variantId`) ?? '';
-  const initialVariant = variants.find((v) => v.id === initialVariantId);
-  const [variantQuery, setVariantQuery] = useState<string>(
-    initialVariant ? variantLabel(initialVariant) : '',
-  );
-  const filteredVariants = useMemo(
-    () => filterVariants(variants, variantQuery),
-    [variants, variantQuery],
-  );
-
-  // When the variantId changes from outside the combobox (the quick-create
-  // dialog appends a new variant and setValues this line's variantId),
-  // sync the displayed input value to that variant's label. The user's
-  // own typing changes variantQuery first → watchedVariantId doesn't
-  // shift → this effect stays out of the way.
-  const watchedVariantId = form.watch(`lines.${index}.variantId`);
-  const prevVariantIdRef = useRef(watchedVariantId);
-  useEffect(() => {
-    if (prevVariantIdRef.current === watchedVariantId) return;
-    prevVariantIdRef.current = watchedVariantId;
-    if (!watchedVariantId) return;
-    const v = variants.find((x) => x.id === watchedVariantId);
-    if (v) setVariantQuery(variantLabel(v));
-  }, [watchedVariantId, variants]);
-  // "+ Create product" appears only when the typed query has no match —
-  // matches the brief. When the variants list is fully empty (no
-  // products in the system yet), also surface it as the only path.
-  const showCreateCta =
-    (filteredVariants.length === 0 && variantQuery.trim() !== '') ||
-    variants.length === 0;
 
   return (
     <div className="rounded-md border border-border p-3">
@@ -686,69 +664,47 @@ function LineRow({
                 control={control}
                 name={`lines.${index}.variantId`}
                 render={({ field }) => (
-                  <Combobox<string>
+                  <VariantPicker
+                    id={`lines.${index}.discriminator`}
                     value={field.value || null}
                     onValueChange={(v) => {
                       field.onChange(v ?? '');
-                      // Keep the input in sync with the chosen item so
-                      // re-opening the dropdown later doesn't show a
-                      // stale typed query.
-                      const picked = variants.find((x) => x.id === v);
-                      setVariantQuery(picked ? variantLabel(picked) : '');
+                      // Auto-fill the line's unitCost from the
+                      // vendor's catalog row when one exists AND the
+                      // operator hasn't typed a cost yet. Never
+                      // clobber operator input.
+                      if (!v) return;
+                      const hint = catalogHints.get(v);
+                      if (!hint?.latestCost) return;
+                      const current = getValues(`lines.${index}.unitCost`);
+                      if (current && current.trim() !== '') return;
+                      setValue(
+                        `lines.${index}.unitCost`,
+                        hint.latestCost,
+                        { shouldDirty: false },
+                      );
                     }}
-                    inputValue={variantQuery}
-                    onInputValueChange={(v) => setVariantQuery(v)}
-                    itemToStringLabel={(id) => {
-                      const v = variants.find((x) => x.id === id);
-                      return v ? variantLabel(v) : '';
-                    }}
-                  >
-                    <ComboboxInputGroup
-                      aria-invalid={!!lineErrors?.variantId}
-                    >
-                      <ComboboxInput
-                        id={`lines.${index}.discriminator`}
-                        placeholder="Search SKU or name…"
-                      />
-                      <ComboboxTrigger />
-                    </ComboboxInputGroup>
-                    <ComboboxContent>
-                      <ComboboxList>
-                        {filteredVariants.map((v) => (
-                          <ComboboxItem key={v.id} value={v.id}>
-                            <span className="font-mono text-xs text-muted-foreground">
-                              {v.sku}
-                            </span>{' '}
-                            {v.productName}
-                            {v.variantName ? ` — ${v.variantName}` : ''}
-                          </ComboboxItem>
-                        ))}
-                      </ComboboxList>
-                      {showCreateCta ? (
-                        <>
-                          {filteredVariants.length > 0 ? (
-                            <ComboboxSeparator />
-                          ) : null}
-                          <button
-                            type="button"
-                            className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm text-primary outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
-                            onClick={() =>
-                              onRequestQuickCreate(variantQuery)
-                            }
-                          >
-                            <Plus className="size-3.5" />
-                            Create product
-                            {variantQuery.trim() !== '' ? (
-                              <span className="font-mono text-xs text-muted-foreground">
-                                {' '}
-                                “{variantQuery.trim()}”
-                              </span>
-                            ) : null}
-                          </button>
-                        </>
-                      ) : null}
-                    </ComboboxContent>
-                  </Combobox>
+                    variants={variants}
+                    catalogHints={catalogHints}
+                    ariaInvalid={!!lineErrors?.variantId}
+                    placeholder="Search SKU, product name, description…"
+                    renderEmptyAction={(query) => (
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm text-primary outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                        onClick={() => onRequestQuickCreate(query)}
+                      >
+                        <Plus className="size-3.5" />
+                        Create product
+                        {query.trim() !== '' ? (
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {' '}
+                            “{query.trim()}”
+                          </span>
+                        ) : null}
+                      </button>
+                    )}
+                  />
                 )}
               />
             ) : (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -16,6 +16,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  VariantPicker,
+  type VariantPickerCatalogHint,
+} from '@/components/shared/variant-picker';
 import {
   Table,
   TableBody,
@@ -60,6 +64,15 @@ export type AddPoLinesVariant = {
   sku: string;
   productName: string;
   variantName: string | null;
+  shortDescription: string | null;
+};
+
+// Pre-scoped to the PO's vendor at the page level so the form
+// doesn't have to re-key per-vendor (single-vendor surface).
+export type AddPoLinesCatalogHint = {
+  variantId: string;
+  vendorSku: string | null;
+  latestCost: string | null;
 };
 
 export type AddPoLinesWarehouse = {
@@ -101,6 +114,7 @@ export function AddLinesForm({
   defaultWarehouseId,
   existingLines,
   variants,
+  catalogHints,
   warehouses,
   currency,
 }: {
@@ -109,6 +123,7 @@ export function AddLinesForm({
   defaultWarehouseId: string;
   existingLines: ExistingPoLineRow[];
   variants: AddPoLinesVariant[];
+  catalogHints: AddPoLinesCatalogHint[];
   warehouses: AddPoLinesWarehouse[];
   currency: string;
 }) {
@@ -120,6 +135,22 @@ export function AddLinesForm({
   const [errors, setErrors] = useState<
     Array<Partial<Record<keyof DraftLine, string>>>
   >([]);
+
+  // Catalog hints keyed by variantId — already pre-filtered to this
+  // PO's vendor at the page level. Used by VariantPicker to extend
+  // the search corpus with vendorSku AND to auto-fill the draft's
+  // vendorSku + unitCost on select (only when blank — never clobber
+  // operator input).
+  const hintByVariant = useMemo(() => {
+    const map = new Map<string, VariantPickerCatalogHint>();
+    for (const h of catalogHints) {
+      map.set(h.variantId, {
+        vendorSku: h.vendorSku,
+        latestCost: h.latestCost,
+      });
+    }
+    return map;
+  }, [catalogHints]);
 
   function patch(key: string, partial: Partial<DraftLine>) {
     setDrafts((ds) =>
@@ -307,6 +338,7 @@ export function AddLinesForm({
                 draft={d}
                 errors={errors[i] ?? {}}
                 variants={variants}
+                hintByVariant={hintByVariant}
                 warehouses={warehouses}
                 currency={currency}
                 onChange={(p) => patch(d.key, p)}
@@ -344,6 +376,7 @@ function DraftRow({
   draft,
   errors,
   variants,
+  hintByVariant,
   warehouses,
   currency,
   onChange,
@@ -352,6 +385,7 @@ function DraftRow({
   draft: DraftLine;
   errors: Partial<Record<keyof DraftLine, string>>;
   variants: AddPoLinesVariant[];
+  hintByVariant: Map<string, VariantPickerCatalogHint>;
   warehouses: AddPoLinesWarehouse[];
   currency: string;
   onChange: (patch: Partial<DraftLine>) => void;
@@ -363,50 +397,38 @@ function DraftRow({
         <div className="col-span-12 md:col-span-5">
           <Field>
             <FieldLabel htmlFor={`variant-${draft.key}`}>Variant</FieldLabel>
-            <Select
-              value={draft.variantId}
-              onValueChange={(v) => onChange({ variantId: v ?? '' })}
-            >
-              <SelectTrigger
-                id={`variant-${draft.key}`}
-                className="w-full"
-                aria-invalid={!!errors.variantId}
-              >
-                <SelectValue placeholder="Pick a product…">
-                  {(v) => {
-                    if (!v) return null;
-                    const variant = variants.find((x) => x.id === v);
-                    if (!variant) return v;
-                    return (
-                      <>
-                        <span className="font-mono text-xs text-muted-foreground">
-                          {variant.sku}
-                        </span>{' '}
-                        {variant.productName}
-                        {variant.variantName ? ` — ${variant.variantName}` : ''}
-                      </>
-                    );
-                  }}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {variants.length === 0 ? (
-                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                    No active variants.
-                  </div>
-                ) : (
-                  variants.map((v) => (
-                    <SelectItem key={v.id} value={v.id}>
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {v.sku}
-                      </span>{' '}
-                      {v.productName}
-                      {v.variantName ? ` — ${v.variantName}` : ''}
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
+            <VariantPicker
+              id={`variant-${draft.key}`}
+              value={draft.variantId || null}
+              onValueChange={(v) => {
+                // Build the patch in one go so blank-field guards
+                // can still see the draft's *current* values (the
+                // outer setState only takes the diff). Auto-fill
+                // vendorSku + unitCost on select when a catalog
+                // hint exists AND the field is blank — never
+                // clobber.
+                const patch: Partial<DraftLine> = { variantId: v ?? '' };
+                if (v) {
+                  const hint = hintByVariant.get(v);
+                  if (hint?.vendorSku && draft.vendorSku.trim() === '') {
+                    patch.vendorSku = hint.vendorSku;
+                  }
+                  if (hint?.latestCost && draft.unitCost.trim() === '') {
+                    patch.unitCost = hint.latestCost;
+                  }
+                }
+                onChange(patch);
+              }}
+              variants={variants}
+              catalogHints={hintByVariant}
+              ariaInvalid={!!errors.variantId}
+              placeholder="Pick a product…"
+              emptyMessage={
+                variants.length === 0
+                  ? 'No active variants.'
+                  : 'No matching products.'
+              }
+            />
             {errors.variantId ? (
               <FieldError errors={[{ message: errors.variantId }]} />
             ) : null}

@@ -160,6 +160,10 @@ export function QuickCreateProductDialog({
           sku: created.defaultVariant.sku,
           variantName: created.defaultVariant.name,
           productName: created.name,
+          // Quick-create doesn't capture a shortDescription — passes
+          // null so the variant appears in the picker immediately.
+          // Operator can edit the product later to add one.
+          shortDescription: null,
         });
         onOpenChange(false);
       } catch (err) {

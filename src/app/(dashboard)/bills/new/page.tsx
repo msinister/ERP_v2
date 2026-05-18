@@ -6,6 +6,7 @@ import { listVendors } from '@/server/services/vendors';
 import { listAccounts } from '@/server/services/glAccounts';
 import {
   BillForm,
+  type CatalogHint,
   type VendorOption,
   type VariantOption,
   type ExpenseAccountOption,
@@ -16,8 +17,9 @@ export const revalidate = 0;
 export default async function NewBillPage() {
   // Pilot scale: a few dozen vendors, a few dozen variants, a few
   // dozen GL accounts. Fetch all active in one go — no per-line API
-  // search.
-  const [vendors, variants, allAccounts] = await Promise.all([
+  // search. Vendor catalog rows (VendorProduct) provide the picker's
+  // vendorSku search corpus + the latestCost auto-fill on select.
+  const [vendors, variants, allAccounts, catalogRows] = await Promise.all([
     listVendors(db, { active: true, take: 1000 }),
     db.productVariant.findMany({
       where: {
@@ -25,11 +27,23 @@ export default async function NewBillPage() {
         deletedAt: null,
         product: { active: true, deletedAt: null },
       },
-      include: { product: { select: { name: true } } },
+      include: {
+        product: { select: { name: true, shortDescription: true } },
+      },
       orderBy: { sku: 'asc' },
       take: 1000,
     }),
     listAccounts(db, { active: true, take: 500 }),
+    db.vendorProduct.findMany({
+      where: { deletedAt: null },
+      select: {
+        vendorId: true,
+        variantId: true,
+        vendorSku: true,
+        latestCost: true,
+      },
+      take: 5000,
+    }),
   ]);
 
   const vendorOptions: VendorOption[] = vendors.map((v) => ({
@@ -43,6 +57,13 @@ export default async function NewBillPage() {
     sku: v.sku,
     variantName: v.name,
     productName: v.product.name,
+    shortDescription: v.product.shortDescription,
+  }));
+  const catalogHints: CatalogHint[] = catalogRows.map((r) => ({
+    vendorId: r.vendorId,
+    variantId: r.variantId,
+    vendorSku: r.vendorSku,
+    latestCost: r.latestCost?.toString() ?? null,
   }));
   // listAccounts doesn't accept a type filter, so we narrow here. The
   // form needs only EXPENSE accounts for the line picker; the cash
@@ -74,6 +95,7 @@ export default async function NewBillPage() {
         mode={{ kind: 'create' }}
         vendors={vendorOptions}
         variants={variantOptions}
+        catalogHints={catalogHints}
         expenseAccounts={expenseAccountOptions}
       />
     </div>

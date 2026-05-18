@@ -1,0 +1,304 @@
+'use client';
+
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { Badge } from '@/components/ui/badge';
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxInput,
+  ComboboxInputGroup,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxSeparator,
+  ComboboxTrigger,
+} from '@/components/ui/combobox';
+import { cn } from '@/lib/utils';
+import {
+  highlightSegments,
+  variantMatches,
+} from '@/lib/variant-search';
+
+// Shared variant picker. Wraps the base-ui Combobox with the multi-
+// field client-side filter described in the spec (matches against
+// SKU, product name, variant name, shortDescription, and per-vendor
+// vendorSku from catalogHints). Highlights matching text in results.
+// Keyboard nav (arrows / Enter / Escape) is provided by base-ui.
+//
+// Two extensibility seams for the form-specific work:
+//   - `catalogHints` (per-vendor map keyed by variantId) wires the
+//     vendorSku into the search corpus AND surfaces a "Vendor SKU"
+//     hint in the rendered row. Auto-filling unitCost on select is
+//     CALLER's job (different forms have different field names) —
+//     read `hint.latestCost` from the same map in your onValueChange.
+//   - `renderItemMeta` is rendered on the right of each row — used
+//     by the SO form to show per-warehouse QOH/Available, and by the
+//     PO form to show the "In catalog" badge for the selected vendor.
+//   - `renderEmptyAction` is rendered below the (possibly-empty)
+//     result list — used by the Bill form to surface a "Create
+//     product" CTA when no match is found.
+
+export type VariantPickerOption = {
+  id: string;
+  sku: string;
+  productName: string;
+  variantName?: string | null;
+  shortDescription?: string | null;
+};
+
+export type VariantPickerCatalogHint = {
+  vendorSku: string | null;
+  latestCost: string | null;
+};
+
+export type VariantPickerProps = {
+  value: string | null;
+  onValueChange: (id: string | null) => void;
+  variants: VariantPickerOption[];
+  /** Per-variant vendor metadata (keyed by variant id). Adds vendorSku
+   * to the search corpus and surfaces it in the rendered row. */
+  catalogHints?: Map<string, VariantPickerCatalogHint>;
+  /** Optional pre-sort function (e.g. PO form puts in-catalog
+   * variants first). Applied to the FULL list, then filtered. */
+  sortVariants?: (a: VariantPickerOption, b: VariantPickerOption) => number;
+  placeholder?: string;
+  ariaInvalid?: boolean;
+  id?: string;
+  disabled?: boolean;
+  /** Right-side cell content for each result row. */
+  renderItemMeta?: (variant: VariantPickerOption) => ReactNode;
+  /** Optional CTA rendered below the list (e.g. "Create product"). */
+  renderEmptyAction?: (query: string) => ReactNode;
+  /** Override the default "No matching products." copy. */
+  emptyMessage?: string;
+};
+
+export function VariantPicker({
+  value,
+  onValueChange,
+  variants,
+  catalogHints,
+  sortVariants,
+  placeholder = 'Search SKU, product name, or description…',
+  ariaInvalid,
+  id,
+  disabled,
+  renderItemMeta,
+  renderEmptyAction,
+  emptyMessage = 'No matching products.',
+}: VariantPickerProps) {
+  // Format used both for the input's display string and for matching
+  // a selected value back to a label.
+  const labelFor = (v: VariantPickerOption): string =>
+    `${v.sku} ${v.productName}${v.variantName ? ` — ${v.variantName}` : ''}`;
+
+  // Initial input string: when value is preselected, display its
+  // label. Otherwise blank.
+  const initialVariant = useMemo(
+    () => (value ? variants.find((v) => v.id === value) ?? null : null),
+    // Run only on first render; subsequent external value changes are
+    // handled by the watch-effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const [query, setQuery] = useState<string>(
+    initialVariant ? labelFor(initialVariant) : '',
+  );
+
+  // Keep the displayed string in sync with externally-driven value
+  // changes (e.g. parent setValue() after a quick-create dialog).
+  // Skip when the change came from the user typing — the user is
+  // mid-edit and we shouldn't trample their input.
+  const prevValueRef = useRef(value);
+  useEffect(() => {
+    if (prevValueRef.current === value) return;
+    prevValueRef.current = value;
+    if (!value) {
+      setQuery('');
+      return;
+    }
+    const v = variants.find((x) => x.id === value);
+    if (v) setQuery(labelFor(v));
+  }, [value, variants]);
+
+  const sorted = useMemo(() => {
+    if (!sortVariants) return variants;
+    return [...variants].sort(sortVariants);
+  }, [variants, sortVariants]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim();
+    if (q === '') return sorted;
+    return sorted.filter((v) => {
+      const hint = catalogHints?.get(v.id);
+      return variantMatches(
+        {
+          sku: v.sku,
+          productName: v.productName,
+          variantName: v.variantName ?? null,
+          shortDescription: v.shortDescription ?? null,
+          vendorSku: hint?.vendorSku ?? null,
+        },
+        q,
+      );
+    });
+  }, [sorted, query, catalogHints]);
+
+  return (
+    <Combobox<string>
+      value={value || null}
+      onValueChange={(v) => {
+        onValueChange(v ?? null);
+        const picked = v ? variants.find((x) => x.id === v) : null;
+        setQuery(picked ? labelFor(picked) : '');
+      }}
+      inputValue={query}
+      onInputValueChange={setQuery}
+      itemToStringLabel={(idValue) => {
+        const v = variants.find((x) => x.id === idValue);
+        return v ? labelFor(v) : '';
+      }}
+      disabled={disabled}
+    >
+      <ComboboxInputGroup aria-invalid={ariaInvalid}>
+        <ComboboxInput id={id} placeholder={placeholder} />
+        <ComboboxTrigger />
+      </ComboboxInputGroup>
+      <ComboboxContent>
+        <ComboboxList>
+          {filtered.length === 0 ? (
+            <div className="px-2 py-1.5 text-xs text-muted-foreground">
+              {emptyMessage}
+            </div>
+          ) : (
+            filtered.map((v) => {
+              const hint = catalogHints?.get(v.id);
+              return (
+                <ComboboxItem key={v.id} value={v.id}>
+                  <div className="flex w-full items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-mono text-xs font-medium">
+                        <Highlight text={v.sku} query={query} />
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        <Highlight text={v.productName} query={query} />
+                        {v.variantName ? (
+                          <>
+                            {' — '}
+                            <Highlight
+                              text={v.variantName}
+                              query={query}
+                            />
+                          </>
+                        ) : null}
+                      </div>
+                      {v.shortDescription &&
+                      isMatchingExclusiveOf(
+                        query,
+                        v.shortDescription,
+                        v.sku,
+                        v.productName,
+                        v.variantName,
+                        hint?.vendorSku,
+                      ) ? (
+                        <div className="line-clamp-1 text-[11px] text-muted-foreground/80">
+                          <Highlight
+                            text={v.shortDescription}
+                            query={query}
+                          />
+                        </div>
+                      ) : null}
+                      {hint?.vendorSku ? (
+                        <div className="text-[11px] text-muted-foreground">
+                          Vendor SKU:{' '}
+                          <span className="font-mono">
+                            <Highlight
+                              text={hint.vendorSku}
+                              query={query}
+                            />
+                          </span>
+                          {hint.latestCost ? (
+                            <span className="ml-2">
+                              · Last cost ${hint.latestCost}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                    {renderItemMeta ? (
+                      <div className="shrink-0 text-right text-xs text-muted-foreground">
+                        {renderItemMeta(v)}
+                      </div>
+                    ) : null}
+                  </div>
+                </ComboboxItem>
+              );
+            })
+          )}
+        </ComboboxList>
+        {renderEmptyAction ? (
+          <>
+            {filtered.length > 0 ? <ComboboxSeparator /> : null}
+            {renderEmptyAction(query)}
+          </>
+        ) : null}
+      </ComboboxContent>
+    </Combobox>
+  );
+}
+
+// Avoid showing the shortDescription line when the match came from
+// any of the always-rendered fields — keeps the row compact for the
+// common case (typing a SKU prefix) and only expands when the
+// description is the field that actually matched.
+function isMatchingExclusiveOf(
+  query: string,
+  description: string,
+  ...alreadyShown: ReadonlyArray<string | null | undefined>
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (q === '') return false;
+  if (!description.toLowerCase().includes(q)) return false;
+  for (const s of alreadyShown) {
+    if (s && s.toLowerCase().includes(q)) return false;
+  }
+  return true;
+}
+
+function Highlight({ text, query }: { text: string; query: string }) {
+  const segments = highlightSegments(text, query);
+  return (
+    <>
+      {segments.map((seg, i) =>
+        seg.match ? (
+          <mark
+            key={i}
+            className={cn(
+              'rounded-sm bg-yellow-200/70 px-0.5 text-foreground',
+              'dark:bg-yellow-500/30 dark:text-foreground',
+            )}
+          >
+            {seg.text}
+          </mark>
+        ) : (
+          <span key={i}>{seg.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+// Convenience badge for the "In catalog" hint — exposed so call
+// sites can reuse the same chip in renderItemMeta or elsewhere.
+export function InCatalogBadge() {
+  return (
+    <Badge variant="secondary" className="text-[10px]">
+      In catalog
+    </Badge>
+  );
+}

@@ -39,6 +39,7 @@ export default async function AddPoLinesPage({
         },
         orderBy: { createdAt: 'asc' },
       },
+      vendor: { select: { id: true } },
     },
   });
   if (!po) notFound();
@@ -64,7 +65,7 @@ export default async function AddPoLinesPage({
   // remain, fall back to the first active warehouse.
   const existingWarehouseId = po.lines[0]?.warehouseId ?? null;
 
-  const [warehouses, variants] = await Promise.all([
+  const [warehouses, variants, vendorCatalog] = await Promise.all([
     listWarehouses(db),
     db.productVariant.findMany({
       where: {
@@ -72,9 +73,18 @@ export default async function AddPoLinesPage({
         deletedAt: null,
         product: { active: true, deletedAt: null },
       },
-      include: { product: { select: { name: true } } },
+      include: {
+        product: { select: { name: true, shortDescription: true } },
+      },
       orderBy: { sku: 'asc' },
       take: 1000,
+    }),
+    // Pre-filter to THIS PO's vendor — the form is single-vendor, so
+    // there's no benefit to shipping every vendor's catalog rows.
+    db.vendorProduct.findMany({
+      where: { vendorId: po.vendorId, deletedAt: null },
+      select: { variantId: true, vendorSku: true, latestCost: true },
+      take: 5000,
     }),
   ]);
 
@@ -121,6 +131,12 @@ export default async function AddPoLinesPage({
           sku: v.sku,
           productName: v.product.name,
           variantName: v.name,
+          shortDescription: v.product.shortDescription,
+        }))}
+        catalogHints={vendorCatalog.map((r) => ({
+          variantId: r.variantId,
+          vendorSku: r.vendorSku,
+          latestCost: r.latestCost?.toString() ?? null,
         }))}
         warehouses={warehouses.map((w) => ({
           id: w.id,

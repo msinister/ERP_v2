@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { VariantPicker } from '@/components/shared/variant-picker';
 import { formatCurrency } from '@/lib/format';
 import {
   isNonNegativeDecimalInput,
@@ -54,6 +55,7 @@ export type VariantOption = {
   sku: string;
   variantName: string | null;
   productName: string;
+  shortDescription: string | null;
   basePrice: string | null;
   inventoryByWarehouse: Record<
     string,
@@ -732,51 +734,37 @@ function LineRow({
               control={control}
               name={`lines.${index}.variantId`}
               render={({ field }) => (
-                <Select
-                  value={field.value}
-                  onValueChange={field.onChange}
-                >
-                  <SelectTrigger
-                    id={`lines.${index}.variantId`}
-                    className="w-full"
-                    aria-invalid={!!lineErrors?.variantId}
-                  >
-                    <SelectValue placeholder="Pick a product…">
-                      {(v) =>
-                        v
-                          ? selectedVariantLabel(variants, v)
-                          : null
-                      }
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {variants.length === 0 ? (
-                      <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                        No active variants.
-                      </div>
-                    ) : (
-                      variants.map((v) => {
-                        const stock = v.inventoryByWarehouse[warehouseId];
-                        const onHand = Number(stock?.onHand ?? '0');
-                        const reserved = Number(stock?.reserved ?? '0');
-                        const available = onHand - reserved;
-                        return (
-                          <SelectItem key={v.id} value={v.id}>
-                            <span className="font-mono text-xs text-muted-foreground">
-                              {v.sku}
-                            </span>{' '}
-                            {v.productName}
-                            {v.variantName ? ` — ${v.variantName}` : ''}
-                            <span className="ml-1 text-xs text-muted-foreground">
-                              · QOH {formatStockQty(onHand)} / avail{' '}
-                              {formatStockQty(available)}
-                            </span>
-                          </SelectItem>
-                        );
-                      })
-                    )}
-                  </SelectContent>
-                </Select>
+                <VariantPicker
+                  id={`lines.${index}.variantId`}
+                  value={field.value || null}
+                  onValueChange={(v) => field.onChange(v ?? '')}
+                  variants={variants}
+                  ariaInvalid={!!lineErrors?.variantId}
+                  placeholder="Pick a product…"
+                  emptyMessage={
+                    variants.length === 0
+                      ? 'No active variants.'
+                      : 'No matching products.'
+                  }
+                  // QOH / available for the current SO warehouse,
+                  // rendered in the right-side cell of each row.
+                  // Variants with no inventory record for this
+                  // warehouse fall back to 0.
+                  renderItemMeta={(v) => {
+                    const source = variants.find((x) => x.id === v.id);
+                    const stock =
+                      source?.inventoryByWarehouse[warehouseId];
+                    const onHand = Number(stock?.onHand ?? '0');
+                    const reserved = Number(stock?.reserved ?? '0');
+                    const available = onHand - reserved;
+                    return (
+                      <span>
+                        QOH {formatStockQty(onHand)} / avail{' '}
+                        {formatStockQty(available)}
+                      </span>
+                    );
+                  }}
+                />
               )}
             />
             <FieldError errors={[lineErrors?.variantId]} />
@@ -898,22 +886,7 @@ function LineRow({
   );
 }
 
-// Helpers used inside LineRow's Select renderers.
-function selectedVariantLabel(
-  variants: VariantOption[],
-  variantId: string,
-): React.ReactNode {
-  const v = variants.find((x) => x.id === variantId);
-  if (!v) return variantId;
-  return (
-    <>
-      <span className="font-mono text-xs text-muted-foreground">{v.sku}</span>{' '}
-      {v.productName}
-      {v.variantName ? ` — ${v.variantName}` : ''}
-    </>
-  );
-}
-
+// Helper used by the VariantPicker's renderItemMeta for QOH/avail.
 function formatStockQty(n: number): string {
   if (!Number.isFinite(n)) return '0';
   // Strip trailing zeros after the decimal — 12.00 → 12; 12.50 → 12.5.
