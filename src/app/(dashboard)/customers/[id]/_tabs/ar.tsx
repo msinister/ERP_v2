@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { db } from '@/lib/db';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { RecordCustomerPaymentButton } from '@/components/shared/record-customer-payment-button';
 import {
   Table,
   TableBody,
@@ -21,7 +22,13 @@ const BUCKET_LABELS: Record<string, string> = {
   b91plus: '91+',
 };
 
-export async function ArTab({ customerId }: { customerId: string }) {
+export async function ArTab({
+  customerId,
+  customerName,
+}: {
+  customerId: string;
+  customerName: string;
+}) {
   const aging = await agingForCustomer(db, customerId);
 
   return (
@@ -84,9 +91,20 @@ export async function ArTab({ customerId }: { customerId: string }) {
       </Card>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-semibold text-muted-foreground">
-          Open invoices
-        </h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-muted-foreground">
+            Open invoices
+          </h2>
+          {/* Top-level entry point — no targetInvoice, so the full
+              amount lands as unapplied credit on the customer. Used
+              when the operator receives a check before knowing which
+              invoice(s) to apply it to, or when applying it to
+              multiple invoices in a later flow. */}
+          <RecordCustomerPaymentButton
+            customerId={customerId}
+            customerName={customerName}
+          />
+        </div>
         {aging.invoices.length === 0 ? (
           <TabEmpty message="No open invoices." />
         ) : (
@@ -102,6 +120,7 @@ export async function ArTab({ customerId }: { customerId: string }) {
                   <TableHead className="text-right">Credited</TableHead>
                   <TableHead className="text-right">Balance</TableHead>
                   <TableHead className="text-right">Days past due</TableHead>
+                  <TableHead className="w-0" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -160,6 +179,21 @@ export async function ArTab({ customerId }: { customerId: string }) {
                         }
                       >
                         {row.daysPastDue}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <RecordCustomerPaymentButton
+                          customerId={customerId}
+                          customerName={customerName}
+                          size="sm"
+                          variant="outline"
+                          targetInvoice={{
+                            invoiceId: row.invoiceId,
+                            invoiceNumber: row.number,
+                            remainingBalance: row.balance.toString(),
+                          }}
+                        >
+                          Pay
+                        </RecordCustomerPaymentButton>
                       </TableCell>
                     </TableRow>
                   );

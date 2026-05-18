@@ -12,6 +12,10 @@ import { SalesOrderHeader } from './_components/header';
 import { SalesOrderLinesTable } from './_components/lines-table';
 import { SalesOrderTotalsCard } from './_components/totals-card';
 import { SalesOrderInfoCard } from './_components/info-card';
+import {
+  PaymentsAppliedCard,
+  type AppliedRow,
+} from './_components/payments-applied-card';
 
 // Always live (no caching) — SO lifecycle / reservations / invoice
 // linkage change frequently. Same convention as customer detail.
@@ -68,7 +72,37 @@ export default async function SalesOrderDetailPage({
         select: { id: true, code: true, name: true, salesRepId: true },
       },
       warehouse: { select: { id: true, code: true, name: true } },
-      invoice: { select: { id: true, number: true } },
+      invoice: {
+        select: {
+          id: true,
+          number: true,
+          status: true,
+          total: true,
+          amountPaid: true,
+          amountCredited: true,
+          // Every application against this invoice, including
+          // reversed ones — the card renders reversed rows dimmed
+          // so the audit trail stays visible. payment/creditMemo
+          // are nullable in tandem with `kind`.
+          applications: {
+            include: {
+              payment: {
+                select: {
+                  number: true,
+                  method: true,
+                  status: true,
+                  reference: true,
+                  receivedAt: true,
+                },
+              },
+              creditMemo: {
+                select: { number: true, status: true },
+              },
+            },
+            orderBy: { appliedAt: 'asc' },
+          },
+        },
+      },
     },
   });
   if (!so) notFound();
@@ -166,6 +200,68 @@ export default async function SalesOrderDetailPage({
         })
       : computeSalesOrderTotal(so);
 
+  // Invoice money snapshot for the Totals card (Paid / Credited /
+  // Balance rows). Only present on CLOSED orders with a live invoice
+  // link; the SO is the only entity that can populate it because the
+  // invoice include here is keyed off so.invoice.id. After a void-
+  // on-reopen the FK is null and we skip.
+  const invoiceAmounts = so.invoice
+    ? {
+        amountPaid: so.invoice.amountPaid,
+        amountCredited: so.invoice.amountCredited,
+        balance: so.invoice.total
+          .minus(so.invoice.amountPaid)
+          .minus(so.invoice.amountCredited),
+      }
+    : null;
+
+  // Flatten CreditApplications into the AppliedRow shape the card
+  // expects. PAYMENT_TO_INVOICE rows carry the Payment metadata;
+  // CREDIT_TO_INVOICE rows carry the CreditMemo metadata. Defensive
+  // fallback when both relations are unexpectedly null — surface as
+  // a placeholder so the operator sees something instead of a crash.
+  const appliedRows: AppliedRow[] = so.invoice
+    ? so.invoice.applications.map((a) => {
+        if (a.payment) {
+          return {
+            id: a.id,
+            kind: 'PAYMENT' as const,
+            sourceNumber: a.payment.number,
+            appliedAmount: a.amount,
+            appliedAt: a.appliedAt,
+            method: a.payment.method,
+            reference: a.payment.reference,
+            sourceStatus: a.payment.status,
+            reversedAt: a.reversedAt,
+          };
+        }
+        if (a.creditMemo) {
+          return {
+            id: a.id,
+            kind: 'CREDIT_MEMO' as const,
+            sourceNumber: a.creditMemo.number,
+            appliedAmount: a.amount,
+            appliedAt: a.appliedAt,
+            method: null,
+            reference: null,
+            sourceStatus: a.creditMemo.status,
+            reversedAt: a.reversedAt,
+          };
+        }
+        return {
+          id: a.id,
+          kind: 'PAYMENT' as const,
+          sourceNumber: '—',
+          appliedAmount: a.amount,
+          appliedAt: a.appliedAt,
+          method: null,
+          reference: null,
+          sourceStatus: 'UNKNOWN',
+          reversedAt: a.reversedAt,
+        };
+      })
+    : [];
+
   return (
     <div className="space-y-6">
       <SalesOrderHeader
@@ -241,6 +337,30 @@ export default async function SalesOrderDetailPage({
             warehouse={so.warehouse}
             salesRep={salesRep}
           />
+
+          {/* Payments & credits applied — only when the SO has a
+              live invoice link. Hosts the Record Payment button for
+              CLOSED orders and lists every application (incl.
+              reversed). After a void-on-reopen the FK is null and
+              the card is omitted entirely. */}
+          {so.invoice ? (
+            <PaymentsAppliedCard
+              invoice={{
+                id: so.invoice.id,
+                number: so.invoice.number,
+                total: so.invoice.total.toString(),
+                amountPaid: so.invoice.amountPaid.toString(),
+                amountCredited: so.invoice.amountCredited.toString(),
+                balance: (
+                  invoiceAmounts?.balance ?? new Prisma.Decimal(0)
+                ).toString(),
+                status: so.invoice.status,
+              }}
+              customerId={so.customer.id}
+              customerName={so.customer.name}
+              rows={appliedRows}
+            />
+          ) : null}
         </div>
 
         {/* lg:self-start lets the column shrink to content so sticky has
@@ -256,6 +376,7 @@ export default async function SalesOrderDetailPage({
             handlingAmount={so.handlingAmount}
             total={displayTotal}
             status={so.status}
+            invoiceAmounts={invoiceAmounts}
           />
         </div>
       </div>

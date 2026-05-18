@@ -19,6 +19,7 @@ export function SalesOrderTotalsCard({
   handlingAmount,
   total,
   status,
+  invoiceAmounts,
 }: {
   lines: SalesOrderLine[];
   orderDiscountAmount: Prisma.Decimal | null;
@@ -27,6 +28,15 @@ export function SalesOrderTotalsCard({
   handlingAmount: Prisma.Decimal | null;
   total: Prisma.Decimal;
   status: string;
+  /** Only set on CLOSED orders with a live invoice. Drives the
+   * Paid / Credited / Balance rows below the grand total. Null
+   * pre-CLOSED (no invoice yet) and on orders whose invoice has
+   * been voided + unlinked. */
+  invoiceAmounts: {
+    amountPaid: Prisma.Decimal;
+    amountCredited: Prisma.Decimal;
+    balance: Prisma.Decimal;
+  } | null;
 }) {
   // CLOSED orders bill on qtyShipped (matches the invoice). Pre-CLOSED
   // shows the order commitment basis (qtyOrdered). Same switch as
@@ -91,6 +101,36 @@ export function SalesOrderTotalsCard({
             value={formatCurrency(total)}
             tone="emphasis"
           />
+          {invoiceAmounts ? (
+            <>
+              <div className="my-2 border-t" />
+              {invoiceAmounts.amountPaid.greaterThan(0) ? (
+                <Row
+                  label="Paid"
+                  value={`−${formatCurrency(invoiceAmounts.amountPaid)}`}
+                  tone="muted"
+                />
+              ) : (
+                <Row label="Paid" value="—" tone="muted" />
+              )}
+              {invoiceAmounts.amountCredited.greaterThan(0) ? (
+                <Row
+                  label="Credited"
+                  value={`−${formatCurrency(invoiceAmounts.amountCredited)}`}
+                  tone="muted"
+                />
+              ) : null}
+              <Row
+                label="Balance due"
+                value={formatCurrency(invoiceAmounts.balance)}
+                tone={
+                  invoiceAmounts.balance.lessThanOrEqualTo(0)
+                    ? 'muted'
+                    : 'emphasis'
+                }
+              />
+            </>
+          ) : null}
         </dl>
       </CardContent>
     </Card>
