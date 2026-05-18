@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { db } from '@/lib/db';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -113,7 +114,12 @@ export async function ApTab({ vendorId }: { vendorId: string }) {
                   return (
                     <TableRow key={row.billId}>
                       <TableCell className="font-mono text-xs">
-                        {row.number}
+                        <Link
+                          href={`/bills/${row.billId}`}
+                          className="text-primary hover:underline"
+                        >
+                          {row.number}
+                        </Link>
                       </TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">
                         {row.vendorReference ?? '—'}
