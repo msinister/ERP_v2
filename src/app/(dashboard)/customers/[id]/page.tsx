@@ -25,10 +25,16 @@ export const revalidate = 0;
 
 export default async function CustomerDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  // AR tab uses URL-driven pagination for its two paginated
+  // sections (payHistorySkip, paidInvSkip). Forward through so the
+  // server-rendered AR fetches see the current page.
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
+  const sp = await searchParams;
   const customer = await getCustomer(db, id);
   if (!customer) notFound();
 
@@ -82,7 +88,11 @@ export default async function CustomerDetailPage({
         </TabsContent>
         <TabsContent value="ar">
           <Suspense fallback={<TabSkeleton rows={4} />}>
-            <ArTab customerId={customer.id} customerName={customer.name} />
+            <ArTab
+              customerId={customer.id}
+              customerName={customer.name}
+              searchParams={sp}
+            />
           </Suspense>
         </TabsContent>
       </Tabs>

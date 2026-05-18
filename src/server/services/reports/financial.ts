@@ -496,6 +496,95 @@ export async function journalReport(
 }
 
 // ---------------------------------------------------------------------------
+// journalEntriesForInvoice — cross-entity JE walk for the SO detail
+// "Journal entries" card. journalReport filters by entityType only;
+// this helper returns every JE whose effect lands against a given
+// invoice:
+//
+//   - entityType='Invoice', entityId=invoiceId
+//       Close-time AR JE, COGS JE, void JE, COGS reversal JE.
+//   - entityType='Payment', entityId IN (payment ids applied to this
+//     invoice via CreditApplication kind=PAYMENT_TO_INVOICE).
+//       Payment JE (DR Cash / CR AR) + payment reversal JE.
+//
+// CreditMemo-side JEs (CM confirm / reversal, etc.) are deliberately
+// excluded — the SO/invoice surface owns the receivables view, not
+// the CM lifecycle. Operators drill into CM detail for those.
+//
+// Reversed-payment applications are still counted so the operator
+// sees the original payment JE alongside its reversal JE — the audit
+// trail relies on both being visible together.
+//
+// Results sorted by postedAt (oldest first) so the visual flow reads
+// chronologically: close → COGS → payments → reversals.
+// ---------------------------------------------------------------------------
+
+export async function journalEntriesForInvoice(
+  db: PrismaClient,
+  invoiceId: string,
+): Promise<JournalReportEntry[]> {
+  // Payment id set: every payment that's ever had an application
+  // against this invoice, live OR reversed. The application's
+  // reversedAt is intentionally ignored — the source payment's JE
+  // is still in the books even if the application was reversed
+  // (the reversal posts a separate offsetting JE under the same
+  // payment id).
+  const appRows = await db.creditApplication.findMany({
+    where: { invoiceId, paymentId: { not: null } },
+    select: { paymentId: true },
+  });
+  const paymentIds = Array.from(
+    new Set(
+      appRows
+        .map((r) => r.paymentId)
+        .filter((id): id is string => id != null),
+    ),
+  );
+
+  const jes = await db.journalEntry.findMany({
+    where: {
+      deletedAt: null,
+      OR: [
+        { entityType: 'Invoice', entityId: invoiceId },
+        ...(paymentIds.length > 0
+          ? [
+              {
+                entityType: 'Payment',
+                entityId: { in: paymentIds },
+              },
+            ]
+          : []),
+      ],
+    },
+    include: {
+      lines: {
+        include: {
+          account: { select: { code: true, name: true } },
+        },
+      },
+    },
+    orderBy: [{ postedAt: 'asc' }, { number: 'asc' }],
+  });
+
+  return jes.map((je) => ({
+    id: je.id,
+    number: je.number,
+    postedAt: je.postedAt,
+    description: je.description,
+    entityType: je.entityType,
+    entityId: je.entityId,
+    reversedAt: je.reversedAt,
+    lines: je.lines.map((l) => ({
+      accountCode: l.account.code,
+      accountName: l.account.name,
+      debit: l.debit,
+      credit: l.credit,
+      memo: l.memo,
+    })),
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // balanceSheet (slice C)
 // ---------------------------------------------------------------------------
 

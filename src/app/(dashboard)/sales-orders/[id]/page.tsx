@@ -16,6 +16,11 @@ import {
   PaymentsAppliedCard,
   type AppliedRow,
 } from './_components/payments-applied-card';
+import {
+  JournalEntriesCard,
+  type JournalEntryRow,
+} from './_components/journal-entries-card';
+import { journalEntriesForInvoice } from '@/server/services/reports/financial';
 
 // Always live (no caching) — SO lifecycle / reservations / invoice
 // linkage change frequently. Same convention as customer detail.
@@ -215,6 +220,30 @@ export default async function SalesOrderDetailPage({
       }
     : null;
 
+  // Journal entries against this order's invoice — fetched once
+  // here so the card can render synchronously below. Empty array
+  // when there's no live invoice (pre-CLOSED, or post-void where
+  // the FK was nulled — the prior JEs aren't reachable via the SO
+  // surface anymore, by design).
+  const journalRows: JournalEntryRow[] = so.invoice
+    ? (await journalEntriesForInvoice(db, so.invoice.id)).map((j) => ({
+        id: j.id,
+        number: j.number,
+        postedAt: j.postedAt,
+        description: j.description,
+        entityType: j.entityType,
+        entityId: j.entityId,
+        reversedAt: j.reversedAt,
+        lines: j.lines.map((l) => ({
+          accountCode: l.accountCode,
+          accountName: l.accountName,
+          debit: l.debit.toString(),
+          credit: l.credit.toString(),
+          memo: l.memo,
+        })),
+      }))
+    : [];
+
   // Flatten CreditApplications into the AppliedRow shape the card
   // expects. PAYMENT_TO_INVOICE rows carry the Payment metadata;
   // CREDIT_TO_INVOICE rows carry the CreditMemo metadata. Defensive
@@ -361,6 +390,10 @@ export default async function SalesOrderDetailPage({
               rows={appliedRows}
             />
           ) : null}
+
+          {/* GL visibility — only meaningful once the invoice exists
+              (close has fired). Pre-CLOSED: no JEs to show. */}
+          {so.invoice ? <JournalEntriesCard entries={journalRows} /> : null}
         </div>
 
         {/* lg:self-start lets the column shrink to content so sticky has

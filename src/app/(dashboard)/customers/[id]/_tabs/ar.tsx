@@ -1,7 +1,16 @@
 import Link from 'next/link';
+import { InvoiceStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { RecordCustomerPaymentButton } from '@/components/shared/record-customer-payment-button';
+import {
+  PaymentHistorySection,
+  type PaymentHistoryRow,
+} from './_components/payment-history-section';
+import {
+  PaidInvoicesSection,
+  type PaidInvoiceRow,
+} from './_components/paid-invoices-section';
 import {
   Table,
   TableBody,
@@ -22,14 +31,117 @@ const BUCKET_LABELS: Record<string, string> = {
   b91plus: '91+',
 };
 
+const PAGE_SIZE = 10;
+
+function readSkip(
+  searchParams: Record<string, string | string[] | undefined>,
+  key: string,
+): number {
+  const raw = searchParams[key];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value) return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
+}
+
 export async function ArTab({
   customerId,
   customerName,
+  searchParams = {},
 }: {
   customerId: string;
   customerName: string;
+  searchParams?: Record<string, string | string[] | undefined>;
 }) {
-  const aging = await agingForCustomer(db, customerId);
+  const basePath = `/customers/${customerId}`;
+  const payHistorySkip = readSkip(searchParams, 'payHistorySkip');
+  const paidInvSkip = readSkip(searchParams, 'paidInvSkip');
+
+  // Parallel fetch — aging summary + the two paginated sections,
+  // each with its own count() so the pager can render page totals.
+  const [
+    aging,
+    payments,
+    paymentsTotal,
+    paidInvoices,
+    paidInvoicesTotal,
+  ] = await Promise.all([
+    agingForCustomer(db, customerId),
+    db.payment.findMany({
+      where: { customerId, deletedAt: null },
+      include: {
+        applications: {
+          include: {
+            invoice: {
+              select: { number: true, salesOrderId: true },
+            },
+          },
+          orderBy: { appliedAt: 'asc' },
+        },
+      },
+      orderBy: { receivedAt: 'desc' },
+      skip: payHistorySkip,
+      take: PAGE_SIZE,
+    }),
+    db.payment.count({ where: { customerId, deletedAt: null } }),
+    db.invoice.findMany({
+      where: {
+        customerId,
+        deletedAt: null,
+        status: InvoiceStatus.PAID,
+      },
+      select: {
+        id: true,
+        number: true,
+        invoiceDate: true,
+        total: true,
+        amountPaid: true,
+        amountCredited: true,
+        salesOrderId: true,
+      },
+      orderBy: { invoiceDate: 'desc' },
+      skip: paidInvSkip,
+      take: PAGE_SIZE,
+    }),
+    db.invoice.count({
+      where: {
+        customerId,
+        deletedAt: null,
+        status: InvoiceStatus.PAID,
+      },
+    }),
+  ]);
+
+  const paymentRows: PaymentHistoryRow[] = payments.map((p) => ({
+    id: p.id,
+    number: p.number,
+    receivedAt: p.receivedAt,
+    amount: p.amount,
+    appliedAmount: p.appliedAmount,
+    method: p.method,
+    status: p.status,
+    reference: p.reference,
+    notes: p.notes,
+    reversedAt: p.reversedAt,
+    reversedReason: p.reversedReason,
+    applications: p.applications.map((a) => ({
+      invoiceNumber: a.invoice.number,
+      salesOrderId: a.invoice.salesOrderId,
+      amount: a.amount,
+      reversedAt: a.reversedAt,
+    })),
+  }));
+
+  const paidInvoiceRows: PaidInvoiceRow[] = paidInvoices.map((i) => ({
+    id: i.id,
+    number: i.number,
+    invoiceDate: i.invoiceDate,
+    total: i.total,
+    amountPaid: i.amountPaid,
+    amountCredited: i.amountCredited,
+    salesOrderId: i.salesOrderId,
+  }));
 
   return (
     <TabShell>
@@ -203,6 +315,22 @@ export async function ArTab({
           </div>
         )}
       </section>
+
+      <PaymentHistorySection
+        rows={paymentRows}
+        total={paymentsTotal}
+        skip={payHistorySkip}
+        take={PAGE_SIZE}
+        basePath={basePath}
+      />
+
+      <PaidInvoicesSection
+        rows={paidInvoiceRows}
+        total={paidInvoicesTotal}
+        skip={paidInvSkip}
+        take={PAGE_SIZE}
+        basePath={basePath}
+      />
     </TabShell>
   );
 }
