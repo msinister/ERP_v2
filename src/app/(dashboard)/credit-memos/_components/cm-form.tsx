@@ -513,10 +513,28 @@ export function CmForm({
 
               <Field>
                 <FieldLabel htmlFor="creditDate">Credit date</FieldLabel>
-                <Input
-                  id="creditDate"
-                  type="date"
-                  {...register('creditDate')}
+                {/* Controlled via RHF instead of register() because
+                    `<input type="date">` reads its initial value from
+                    the `value`/`defaultValue` HTML attribute, not from
+                    a JS-assigned `.value` after mount. RHF's register
+                    relies on the latter (uncontrolled mode), which
+                    leaves the input showing the mm/dd/yyyy placeholder
+                    until the user interacts — even when defaultValues
+                    holds the right ISO string. Controller binds the
+                    value prop on every render and avoids the gap. */}
+                <Controller
+                  control={control}
+                  name="creditDate"
+                  render={({ field }) => (
+                    <Input
+                      id="creditDate"
+                      type="date"
+                      value={field.value ?? ''}
+                      onChange={field.onChange}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  )}
                 />
                 <FieldError errors={[errors.creditDate]} />
                 <p className="text-[10px] text-muted-foreground">
