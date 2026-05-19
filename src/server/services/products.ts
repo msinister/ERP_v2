@@ -144,6 +144,10 @@ export type ProductListRow = Product & {
     available: Prisma.Decimal;
   };
   variantCount: number;
+  // URL of the product's primary image (ProductImage with isPrimary=true,
+  // smallest sortOrder). Null when the product has no images. Drives
+  // the thumbnail column on the products list.
+  primaryImageUrl: string | null;
 };
 
 function productWhere(
@@ -196,6 +200,15 @@ export async function listProductsPaged(
             inventory: { select: { onHand: true, reserved: true } },
           },
         },
+        // Primary image only — one row at most, surfaced as the
+        // products-list thumbnail. Non-primary + soft-deleted rows
+        // never reach the UI through this query.
+        images: {
+          where: { isPrimary: true, deletedAt: null },
+          orderBy: { sortOrder: 'asc' },
+          select: { url: true },
+          take: 1,
+        },
       },
       // Active rows on top, then alpha by name. Same intent as the
       // customers list (active-first) so eyeballs land on what's
@@ -223,6 +236,7 @@ export async function listProductsPaged(
       ...p,
       inventoryAgg: { onHand, reserved, available },
       variantCount: p.variants.length,
+      primaryImageUrl: p.images[0]?.url ?? null,
     };
   });
 

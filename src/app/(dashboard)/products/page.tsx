@@ -63,6 +63,7 @@ export default async function ProductsPage({
           ? 'active'
           : 'inactive',
     variantCount: p.variantCount,
+    imageUrl: p.primaryImageUrl,
   }));
 
   return (

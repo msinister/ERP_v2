@@ -10,6 +10,8 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency } from '@/lib/format';
+import { ProductThumbnail } from '@/components/shared/product-thumbnail';
+import { ProductImageToggle } from '@/components/shared/product-image-toggle';
 
 export type ProductRowData = {
   id: string;
@@ -22,6 +24,8 @@ export type ProductRowData = {
   available: Prisma.Decimal;
   status: 'active' | 'inactive' | 'archived';
   variantCount: number;
+  // Primary product image URL, or null when the product has no images.
+  imageUrl: string | null;
 };
 
 export function ProductsTable({ rows }: { rows: ProductRowData[] }) {
@@ -34,66 +38,86 @@ export function ProductsTable({ rows }: { rows: ProductRowData[] }) {
   }
 
   return (
-    <div className="rounded-lg border border-border">
-      <Table>
-        <TableHeader>
-          <TableRow className="bg-muted/30 hover:bg-muted/30">
-            <TableHead>SKU</TableHead>
-            <TableHead>Name</TableHead>
-            <TableHead>Brand</TableHead>
-            <TableHead>Category</TableHead>
-            <TableHead className="text-right">On hand</TableHead>
-            <TableHead className="text-right">Available</TableHead>
-            <TableHead className="text-right">Base price</TableHead>
-            <TableHead>Status</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => (
-            <TableRow
-              key={row.id}
-              className="relative cursor-pointer hover:bg-muted/50"
-            >
-              <TableCell className="font-mono text-xs text-muted-foreground">
-                {/* Stretched-link overlay — whole row clickable. */}
-                <Link
-                  href={`/products/${row.id}`}
-                  className="absolute inset-0 rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                >
-                  <span className="sr-only">View {row.name}</span>
-                </Link>
-                {row.sku}
-              </TableCell>
-              <TableCell className="font-medium">
-                {row.name}
-                {row.variantCount > 1 ? (
-                  <span className="ml-1.5 text-xs text-muted-foreground">
-                    ({row.variantCount} variants)
-                  </span>
-                ) : null}
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {row.brand ?? '—'}
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {row.category ?? '—'}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {formatQty(row.onHand)}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {formatQty(row.available)}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {row.basePrice != null ? formatCurrency(row.basePrice) : '—'}
-              </TableCell>
-              <TableCell>
-                <StatusBadge status={row.status} />
-              </TableCell>
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <ProductImageToggle />
+      </div>
+
+      <div className="rounded-lg border border-border">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-muted/30 hover:bg-muted/30">
+              <TableHead className="w-[60px] [.hide-product-images_&]:hidden">
+                <span className="sr-only">Image</span>
+              </TableHead>
+              <TableHead>SKU</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead>Brand</TableHead>
+              <TableHead>Category</TableHead>
+              <TableHead className="text-right">On hand</TableHead>
+              <TableHead className="text-right">Available</TableHead>
+              <TableHead className="text-right">Base price</TableHead>
+              <TableHead>Status</TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow
+                key={row.id}
+                className="relative cursor-pointer hover:bg-muted/50"
+              >
+                {/* Thumbnail cell must sit above the row's stretched
+                    Link (rendered in the SKU cell below). Without
+                    relative+z-10, clicking the thumbnail would
+                    navigate to the detail page instead of opening
+                    the lightbox/preview. */}
+                <TableCell className="relative z-10 [.hide-product-images_&]:hidden">
+                  <ProductThumbnail
+                    src={row.imageUrl}
+                    productName={row.name}
+                  />
+                </TableCell>
+                <TableCell className="font-mono text-xs text-muted-foreground">
+                  {/* Stretched-link overlay — whole row clickable. */}
+                  <Link
+                    href={`/products/${row.id}`}
+                    className="absolute inset-0 rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                  >
+                    <span className="sr-only">View {row.name}</span>
+                  </Link>
+                  {row.sku}
+                </TableCell>
+                <TableCell className="font-medium">
+                  {row.name}
+                  {row.variantCount > 1 ? (
+                    <span className="ml-1.5 text-xs text-muted-foreground">
+                      ({row.variantCount} variants)
+                    </span>
+                  ) : null}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {row.brand ?? '—'}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
+                  {row.category ?? '—'}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatQty(row.onHand)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatQty(row.available)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {row.basePrice != null ? formatCurrency(row.basePrice) : '—'}
+                </TableCell>
+                <TableCell>
+                  <StatusBadge status={row.status} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }
