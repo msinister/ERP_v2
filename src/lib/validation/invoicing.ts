@@ -156,6 +156,21 @@ export const createCreditMemoInputSchema = z.object({
   lines: z.array(creditMemoLineInputSchema).min(1),
 });
 
+// DRAFT-only edit input. Mirrors the create schema minus `customerId`
+// (immutable after creation — same precedent as VC). Lines, when
+// present, replace the existing set wholesale; restockingFee + reason
+// + currency + categoryId + invoiceId update in place. The service
+// re-validates SUM(line.qty × line.unitPrice) === amount.
+export const updateCreditMemoInputSchema = z.object({
+  invoiceId: z.string().min(1).nullable().optional(),
+  categoryId: z.string().min(1).optional(),
+  amount: positiveDecimal.optional(),
+  restockingFee: nonNegativeDecimal.optional(),
+  currency: z.string().min(3).max(3).optional(),
+  reason: z.string().max(2000).nullable().optional(),
+  lines: z.array(creditMemoLineInputSchema).min(1).optional(),
+});
+
 export const confirmCreditMemoInputSchema = z.object({
   creditMemoId: z.string().min(1),
 });
@@ -247,6 +262,7 @@ export type RecordPaymentInput = z.infer<typeof recordPaymentInputSchema>;
 export type ApplyCreditInput = z.infer<typeof applyCreditInputSchema>;
 export type ReversePaymentInput = z.infer<typeof reversePaymentInputSchema>;
 export type CreateCreditMemoInput = z.infer<typeof createCreditMemoInputSchema>;
+export type UpdateCreditMemoInput = z.infer<typeof updateCreditMemoInputSchema>;
 export type ConfirmCreditMemoInput = z.infer<typeof confirmCreditMemoInputSchema>;
 export type VoidCreditMemoInput = z.infer<typeof voidCreditMemoInputSchema>;
 export type CreateRmaInput = z.infer<typeof createRmaInputSchema>;

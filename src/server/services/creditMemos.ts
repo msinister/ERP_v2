@@ -15,7 +15,9 @@ import { post } from '@/lib/gl/post';
 import { getNextSequence } from '@/lib/sequences/sequences';
 import {
   createCreditMemoInputSchema,
+  updateCreditMemoInputSchema,
   type CreateCreditMemoInput,
+  type UpdateCreditMemoInput,
 } from '@/lib/validation/invoicing';
 import { recomputeAmountPaidForInvoice } from './invoices';
 
@@ -173,6 +175,142 @@ export async function createCreditMemoDraft(
   ctx?: AuditContext,
 ): Promise<CreditMemoWithLines> {
   return db.$transaction((tx) => createCreditMemoDraftTx(tx, input, ctx));
+}
+
+// ---------------------------------------------------------------------------
+// updateCreditMemoDraft — DRAFT-only, replace-all lines pattern
+// ---------------------------------------------------------------------------
+
+export async function updateCreditMemoDraft(
+  db: PrismaClient,
+  creditMemoId: string,
+  input: UpdateCreditMemoInput,
+  ctx?: AuditContext,
+): Promise<CreditMemoWithLines> {
+  const data = updateCreditMemoInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT 1 FROM "CreditMemo" WHERE "id" = ${creditMemoId} FOR UPDATE`;
+    const before = await tx.creditMemo.findUnique({
+      where: { id: creditMemoId },
+      include: { lines: true },
+    });
+    if (!before) throw new Error(`CreditMemo not found: ${creditMemoId}`);
+    if (before.deletedAt) throw new Error('CreditMemo is soft-deleted');
+    if (before.status !== CreditMemoStatus.DRAFT) {
+      throw new Error(
+        `Cannot edit CreditMemo in status ${before.status} (only DRAFT is editable)`,
+      );
+    }
+
+    // Determine the effective values.
+    const nextAmount = data.amount != null
+      ? new Prisma.Decimal(data.amount)
+      : before.amount;
+    const nextRestockingFee = data.restockingFee != null
+      ? new Prisma.Decimal(data.restockingFee)
+      : before.restockingFee;
+    const nextNetCredit = nextAmount.minus(nextRestockingFee);
+    if (nextNetCredit.lessThan(0)) {
+      throw new Error(
+        `restockingFee (${nextRestockingFee.toString()}) cannot exceed amount (${nextAmount.toString()}); netCredit would be negative`,
+      );
+    }
+
+    // When lines are supplied, re-validate the sum against the
+    // effective amount (same tolerance as createCreditMemoDraftTx).
+    if (data.lines) {
+      const lineSum = data.lines.reduce(
+        (acc, l) =>
+          acc.plus(
+            new Prisma.Decimal(l.qty).times(new Prisma.Decimal(l.unitPrice)),
+          ),
+        new Prisma.Decimal(0),
+      );
+      const diff = lineSum.minus(nextAmount).abs();
+      if (diff.greaterThan(LINE_MATH_TOLERANCE)) {
+        throw new Error(
+          `Line totals $${lineSum.toString()} don't match memo amount $${nextAmount.toString()}; difference $${diff.toString()}`,
+        );
+      }
+    }
+
+    // Cross-customer guard: an updated invoiceId must belong to the
+    // same customer (matches createCreditMemoDraftTx).
+    if (data.invoiceId !== undefined && data.invoiceId !== null) {
+      const invoice = await tx.invoice.findUnique({
+        where: { id: data.invoiceId },
+      });
+      if (!invoice) throw new Error(`Invoice not found: ${data.invoiceId}`);
+      if (invoice.deletedAt) throw new Error('Invoice is soft-deleted');
+      if (invoice.customerId !== before.customerId) {
+        throw new Error(
+          `Cross-customer credit memo: customer ${before.customerId} != invoice customer ${invoice.customerId}`,
+        );
+      }
+    }
+
+    // Category-id swap is allowed on DRAFT. Validate the new category
+    // is active.
+    if (data.categoryId !== undefined) {
+      const category = await tx.creditMemoCategory.findFirst({
+        where: { id: data.categoryId, deletedAt: null },
+      });
+      if (!category)
+        throw new Error(`CreditMemoCategory not found: ${data.categoryId}`);
+      if (!category.active) {
+        throw new Error(`CreditMemoCategory ${category.code} is inactive`);
+      }
+    }
+
+    if (data.lines) {
+      // Hard-delete on DRAFT — no GL or AR consumers can be holding
+      // references to a draft's lines (CreditApplication only attaches
+      // on confirm).
+      await tx.creditMemoLine.deleteMany({
+        where: { creditMemoId },
+      });
+      await tx.creditMemoLine.createMany({
+        data: data.lines.map((l) => ({
+          creditMemoId,
+          invoiceLineId: l.invoiceLineId ?? null,
+          variantId: l.variantId,
+          qty: new Prisma.Decimal(l.qty),
+          unitPrice: new Prisma.Decimal(l.unitPrice),
+          lineTotal: new Prisma.Decimal(l.qty).times(
+            new Prisma.Decimal(l.unitPrice),
+          ),
+          description: l.description,
+        })),
+      });
+    }
+
+    const after = await tx.creditMemo.update({
+      where: { id: creditMemoId },
+      data: {
+        invoiceId:
+          data.invoiceId !== undefined ? data.invoiceId : before.invoiceId,
+        categoryId:
+          data.categoryId !== undefined ? data.categoryId : before.categoryId,
+        amount: nextAmount,
+        restockingFee: nextRestockingFee,
+        netCredit: nextNetCredit,
+        currency:
+          data.currency !== undefined ? data.currency : before.currency,
+        reason: data.reason !== undefined ? data.reason : before.reason,
+      },
+      include: { lines: true },
+    });
+
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'CreditMemo',
+      entityId: creditMemoId,
+      before,
+      after,
+      ctx,
+    });
+    return after;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -535,37 +673,68 @@ export type CreditMemoListFilters = {
   take?: number;
 };
 
+function creditMemoWhere(
+  filters: Omit<CreditMemoListFilters, 'skip' | 'take'>,
+): Prisma.CreditMemoWhereInput {
+  const { customerId, status, categoryId, createdAtFrom, createdAtTo, q } =
+    filters;
+  const dateFilter: { gte?: Date; lte?: Date } = {};
+  if (createdAtFrom) dateFilter.gte = createdAtFrom;
+  if (createdAtTo) dateFilter.lte = createdAtTo;
+  return {
+    deletedAt: null,
+    ...(customerId ? { customerId } : {}),
+    ...(status
+      ? { status: Array.isArray(status) ? { in: status } : status }
+      : {}),
+    ...(categoryId ? { categoryId } : {}),
+    ...(createdAtFrom || createdAtTo ? { createdAt: dateFilter } : {}),
+    ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
+  };
+}
+
 export async function listCreditMemos(
   db: PrismaClient,
   filters: CreditMemoListFilters = {},
 ): Promise<CreditMemoWithLines[]> {
-  const {
-    customerId,
-    status,
-    categoryId,
-    createdAtFrom,
-    createdAtTo,
-    q,
-    skip = 0,
-    take = 100,
-  } = filters;
-  const dateFilter: { gte?: Date; lte?: Date } = {};
-  if (createdAtFrom) dateFilter.gte = createdAtFrom;
-  if (createdAtTo) dateFilter.lte = createdAtTo;
+  const { skip = 0, take = 100, ...rest } = filters;
   return db.creditMemo.findMany({
-    where: {
-      deletedAt: null,
-      ...(customerId ? { customerId } : {}),
-      ...(status
-        ? { status: Array.isArray(status) ? { in: status } : status }
-        : {}),
-      ...(categoryId ? { categoryId } : {}),
-      ...(createdAtFrom || createdAtTo ? { createdAt: dateFilter } : {}),
-      ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
-    },
+    where: creditMemoWhere(rest),
     include: { lines: { where: { deletedAt: null } } },
     orderBy: { createdAt: 'desc' },
     skip,
     take: Math.min(take, 500),
   });
+}
+
+export async function listCreditMemosPaged(
+  db: PrismaClient,
+  filters: CreditMemoListFilters = {},
+): Promise<{
+  rows: Array<
+    CreditMemo & {
+      lines: CreditMemoLine[];
+      customer: { id: string; code: string; name: string };
+      category: { id: string; code: string; label: string };
+    }
+  >;
+  total: number;
+}> {
+  const { skip = 0, take = 100, ...rest } = filters;
+  const where = creditMemoWhere(rest);
+  const [rows, total] = await Promise.all([
+    db.creditMemo.findMany({
+      where,
+      include: {
+        lines: { where: { deletedAt: null } },
+        customer: { select: { id: true, code: true, name: true } },
+        category: { select: { id: true, code: true, label: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: Math.min(take, 500),
+    }),
+    db.creditMemo.count({ where }),
+  ]);
+  return { rows, total };
 }

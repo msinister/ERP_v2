@@ -506,37 +506,45 @@ export async function journalReport(
 //   - entityType='Payment', entityId IN (payment ids applied to this
 //     invoice via CreditApplication kind=PAYMENT_TO_INVOICE).
 //       Payment JE (DR Cash / CR AR) + payment reversal JE.
+//   - entityType='CreditMemo', entityId IN (CM ids applied to this
+//     invoice via CreditApplication kind=CREDIT_TO_INVOICE).
+//       CM confirm JE (DR Sales Returns / CR AR + the restocking-fee
+//       chargeback pair when set) and any void/offset JE the CM
+//       lifecycle posts under the same entityId.
 //
-// CreditMemo-side JEs (CM confirm / reversal, etc.) are deliberately
-// excluded — the SO/invoice surface owns the receivables view, not
-// the CM lifecycle. Operators drill into CM detail for those.
-//
-// Reversed-payment applications are still counted so the operator
-// sees the original payment JE alongside its reversal JE — the audit
-// trail relies on both being visible together.
+// Reversed applications are still counted so the operator sees the
+// original JE alongside its offsetting JE — the audit trail relies on
+// both being visible together.
 //
 // Results sorted by postedAt (oldest first) so the visual flow reads
-// chronologically: close → COGS → payments → reversals.
+// chronologically: close → COGS → payments → credit memos → reversals.
 // ---------------------------------------------------------------------------
 
 export async function journalEntriesForInvoice(
   db: PrismaClient,
   invoiceId: string,
 ): Promise<JournalReportEntry[]> {
-  // Payment id set: every payment that's ever had an application
-  // against this invoice, live OR reversed. The application's
-  // reversedAt is intentionally ignored — the source payment's JE
-  // is still in the books even if the application was reversed
-  // (the reversal posts a separate offsetting JE under the same
-  // payment id).
+  // CreditApplication is the single source of truth for "what touched
+  // this invoice." Pull both payment-driven and credit-memo-driven
+  // applications in one query, then split the source ids. Reversed
+  // applications are intentionally ignored at the filter level — the
+  // source JE is still in the books regardless of whether its
+  // application later got unwound (the reversal is its own JE).
   const appRows = await db.creditApplication.findMany({
-    where: { invoiceId, paymentId: { not: null } },
-    select: { paymentId: true },
+    where: { invoiceId },
+    select: { paymentId: true, creditMemoId: true },
   });
   const paymentIds = Array.from(
     new Set(
       appRows
         .map((r) => r.paymentId)
+        .filter((id): id is string => id != null),
+    ),
+  );
+  const creditMemoIds = Array.from(
+    new Set(
+      appRows
+        .map((r) => r.creditMemoId)
         .filter((id): id is string => id != null),
     ),
   );
@@ -551,6 +559,14 @@ export async function journalEntriesForInvoice(
               {
                 entityType: 'Payment',
                 entityId: { in: paymentIds },
+              },
+            ]
+          : []),
+        ...(creditMemoIds.length > 0
+          ? [
+              {
+                entityType: 'CreditMemo',
+                entityId: { in: creditMemoIds },
               },
             ]
           : []),
