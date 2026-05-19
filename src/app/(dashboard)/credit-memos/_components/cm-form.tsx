@@ -104,7 +104,10 @@ const lineSchema = z.object({
   variantId: z.string().min(1, 'Required'),
   qty: positiveQty,
   unitPrice: nonNegPrice,
-  description: z.string().min(1, 'Required').max(500),
+  // Notes — optional. Operators only fill in a credit reason when
+  // they have something to say. RHF gives us a string from the text
+  // input regardless, so we just cap the length.
+  description: z.string().max(500),
 });
 
 const formSchema = z.object({

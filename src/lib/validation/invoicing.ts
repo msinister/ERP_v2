@@ -137,12 +137,17 @@ export const reversePaymentInputSchema = z.object({
 // $123 don't match memo amount $122; difference $1") rather than
 // generic Zod issues.
 
+// `description` is the per-line note field exposed in the UI as "Notes"
+// (a free-text reason for the credit on this line). It's optional —
+// operators only fill it in when there's something worth saying. The
+// underlying column is non-nullable, so omitted / undefined inputs
+// coerce to '' before the service inserts.
 const creditMemoLineInputSchema = z.object({
   invoiceLineId: z.string().min(1).optional(),
   variantId: z.string().min(1),
   qty: positiveDecimal,
   unitPrice: nonNegativeDecimal,
-  description: z.string().min(1).max(500),
+  description: z.string().max(500).default(''),
 });
 
 export const createCreditMemoInputSchema = z.object({

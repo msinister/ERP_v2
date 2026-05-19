@@ -67,11 +67,24 @@ export function CreditMemoLinesTable({ lines }: { lines: CmLineRow[] }) {
                 <div className="font-mono text-xs text-muted-foreground">
                   {l.variant.sku}
                 </div>
-                <div className="font-medium">{l.description}</div>
-                <div className="text-xs text-muted-foreground">
-                  {l.variant.productName}
-                  {l.variant.name ? ` · ${l.variant.name}` : ''}
-                </div>
+                {/* When notes are present, they're the primary line; the
+                    product info drops to a muted subtext. When blank, the
+                    product info becomes the primary line so the cell
+                    isn't visually empty. */}
+                {l.description && l.description.trim() !== '' ? (
+                  <>
+                    <div className="font-medium">{l.description}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {l.variant.productName}
+                      {l.variant.name ? ` · ${l.variant.name}` : ''}
+                    </div>
+                  </>
+                ) : (
+                  <div className="font-medium">
+                    {l.variant.productName}
+                    {l.variant.name ? ` · ${l.variant.name}` : ''}
+                  </div>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-3 gap-3 text-sm">
@@ -140,11 +153,20 @@ export function CreditMemoLinesTable({ lines }: { lines: CmLineRow[] }) {
                   {l.variant.sku}
                 </TableCell>
                 <TableCell>
-                  <div className="font-medium">{l.description}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {l.variant.productName}
-                    {l.variant.name ? ` · ${l.variant.name}` : ''}
-                  </div>
+                  {l.description && l.description.trim() !== '' ? (
+                    <>
+                      <div className="font-medium">{l.description}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {l.variant.productName}
+                        {l.variant.name ? ` · ${l.variant.name}` : ''}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="font-medium">
+                      {l.variant.productName}
+                      {l.variant.name ? ` · ${l.variant.name}` : ''}
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="font-mono text-xs">
                   {l.invoiceLine ? (
