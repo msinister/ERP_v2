@@ -152,6 +152,18 @@ function emptyLine(): CmFormValues['lines'][number] {
   };
 }
 
+// Today's date as YYYY-MM-DD in the browser's local timezone — matches
+// the format the <input type="date"> control reads/writes. Computed at
+// component mount (not module load) so a long-lived tab still picks up
+// the correct day on a fresh form open.
+function todayIso(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function nullEmpty(v: string | undefined): string | undefined {
   if (v == null) return undefined;
   const trimmed = v.trim();
@@ -209,7 +221,14 @@ export function CmForm({
 
   const form = useForm<CmFormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: { ...DEFAULT_VALUES, ...defaultValues },
+    // creditDate defaults to today; caller-provided defaultValues may
+    // override (e.g., the edit page passes the existing value). The
+    // field is informational only — not sent to the server.
+    defaultValues: {
+      ...DEFAULT_VALUES,
+      creditDate: todayIso(),
+      ...defaultValues,
+    },
   });
 
   const {
@@ -760,7 +779,9 @@ function LineRow({
     setValue(`lines.${index}.variantId`, il.variantId);
     setValue(`lines.${index}.qty`, il.qty);
     setValue(`lines.${index}.unitPrice`, il.unitPrice);
-    setValue(`lines.${index}.description`, il.description);
+    // Notes intentionally NOT pre-filled — that field is for the
+    // operator to type a reason for the credit on this line, not a
+    // repeat of the invoice line's description.
   }
 
   return (
@@ -818,24 +839,11 @@ function LineRow({
                 <VariantPicker
                   id={`lines.${index}.variantId`}
                   value={field.value || null}
-                  onValueChange={(v) => {
-                    field.onChange(v ?? '');
-                    // Auto-fill description from the variant's product
-                    // name when the description is empty, so the line
-                    // has something useful out of the gate.
-                    const current = form.getValues(
-                      `lines.${index}.description`,
-                    );
-                    if (!current || current.trim() === '') {
-                      const picked = variants.find((x) => x.id === v);
-                      if (picked) {
-                        const label = picked.variantName
-                          ? `${picked.productName} — ${picked.variantName}`
-                          : picked.productName;
-                        setValue(`lines.${index}.description`, label);
-                      }
-                    }
-                  }}
+                  // Notes is intentionally not auto-filled on variant
+                  // pick — operators use that field for a credit reason,
+                  // not a repeat of the product name (the picker already
+                  // surfaces SKU + product name).
+                  onValueChange={(v) => field.onChange(v ?? '')}
                   variants={variants}
                   ariaInvalid={!!lineErrors?.variantId}
                   placeholder="Pick a product…"

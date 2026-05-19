@@ -67,11 +67,14 @@ export default async function EditCreditMemoPage({
     shortDescription: v.product.shortDescription,
   }));
 
+  // creditDate intentionally omitted — the form defaults it to today.
+  // The field is informational only (not stored on the memo), and an
+  // edit re-opens the draft "as of today" rather than the original
+  // create date.
   const defaultValues: Partial<CmFormValues> = {
     customerId: cm.customerId,
     invoiceId: cm.invoiceId ?? '',
     categoryId: cm.categoryId,
-    creditDate: '',
     restockingFee: cm.restockingFee.greaterThan(0)
       ? cm.restockingFee.toString()
       : '',
