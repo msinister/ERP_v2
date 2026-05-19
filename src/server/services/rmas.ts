@@ -470,37 +470,76 @@ export type RmaListFilters = {
   take?: number;
 };
 
+function rmaWhere(
+  filters: Omit<RmaListFilters, 'skip' | 'take'>,
+): Prisma.RmaWhereInput {
+  const { customerId, invoiceId, status, createdAtFrom, createdAtTo } = filters;
+  const dateFilter: { gte?: Date; lte?: Date } = {};
+  if (createdAtFrom) dateFilter.gte = createdAtFrom;
+  if (createdAtTo) dateFilter.lte = createdAtTo;
+  return {
+    deletedAt: null,
+    ...(customerId ? { customerId } : {}),
+    ...(invoiceId ? { invoiceId } : {}),
+    ...(status
+      ? { status: Array.isArray(status) ? { in: status } : status }
+      : {}),
+    ...(createdAtFrom || createdAtTo ? { createdAt: dateFilter } : {}),
+  };
+}
+
 export async function listRmas(
   db: PrismaClient,
   filters: RmaListFilters = {},
 ): Promise<RmaWithLines[]> {
-  const {
-    customerId,
-    invoiceId,
-    status,
-    createdAtFrom,
-    createdAtTo,
-    skip = 0,
-    take = 100,
-  } = filters;
-  const dateFilter: { gte?: Date; lte?: Date } = {};
-  if (createdAtFrom) dateFilter.gte = createdAtFrom;
-  if (createdAtTo) dateFilter.lte = createdAtTo;
+  const { skip = 0, take = 100, ...rest } = filters;
   return db.rma.findMany({
-    where: {
-      deletedAt: null,
-      ...(customerId ? { customerId } : {}),
-      ...(invoiceId ? { invoiceId } : {}),
-      ...(status
-        ? { status: Array.isArray(status) ? { in: status } : status }
-        : {}),
-      ...(createdAtFrom || createdAtTo ? { createdAt: dateFilter } : {}),
-    },
+    where: rmaWhere(rest),
     include: { lines: { where: { deletedAt: null } } },
     orderBy: { createdAt: 'desc' },
     skip,
     take: Math.min(take, 500),
   });
+}
+
+// Paged variant — returns rows enriched with customer + invoice header
+// data and each line's matched InvoiceLine.unitPrice so the list page
+// can render the dollar total without a second round-trip.
+export async function listRmasPaged(
+  db: PrismaClient,
+  filters: RmaListFilters = {},
+): Promise<{
+  rows: Array<
+    Rma & {
+      lines: Array<RmaLine & { invoiceLine: { unitPrice: Prisma.Decimal } }>;
+      customer: { id: string; code: string; name: string };
+      invoice: { id: string; number: string };
+      creditMemo: { id: string; number: string } | null;
+    }
+  >;
+  total: number;
+}> {
+  const { skip = 0, take = 100, ...rest } = filters;
+  const where = rmaWhere(rest);
+  const [rows, total] = await Promise.all([
+    db.rma.findMany({
+      where,
+      include: {
+        lines: {
+          where: { deletedAt: null },
+          include: { invoiceLine: { select: { unitPrice: true } } },
+        },
+        customer: { select: { id: true, code: true, name: true } },
+        invoice: { select: { id: true, number: true } },
+        creditMemo: { select: { id: true, number: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: Math.min(take, 500),
+    }),
+    db.rma.count({ where }),
+  ]);
+  return { rows, total };
 }
 
 // Re-export the credit-memo type used in the response shape so callers

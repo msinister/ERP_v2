@@ -1,0 +1,180 @@
+'use client';
+
+import { useEffect, useState, useTransition } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Search, X } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+
+// Friendly labels mirror the spec wording — the enum value is PENDING
+// on the server but reads as "Pending Review" to operators.
+const RMA_STATUSES: Array<{ value: string; label: string }> = [
+  { value: 'PENDING', label: 'Pending Review' },
+  { value: 'APPROVED', label: 'Approved' },
+  { value: 'IN_TRANSIT', label: 'In Transit' },
+  { value: 'RECEIVED', label: 'Received' },
+  { value: 'INSPECTED', label: 'Inspected' },
+  { value: 'CREDITED', label: 'Credited' },
+  { value: 'REJECTED', label: 'Rejected' },
+];
+
+const ALL_VALUE = '__all__';
+
+export type CustomerOption = { id: string; code: string; name: string };
+
+export function RmasFilters({
+  customers,
+}: {
+  customers: CustomerOption[];
+}) {
+  const router = useRouter();
+  const params = useSearchParams();
+  const [pending, startTransition] = useTransition();
+
+  const currentStatus = params.get('status') ?? ALL_VALUE;
+  const currentCustomer = params.get('customerId') ?? ALL_VALUE;
+  const currentFrom = params.get('from') ?? '';
+  const currentTo = params.get('to') ?? '';
+
+  const [fromInput, setFromInput] = useState(currentFrom);
+  const [toInput, setToInput] = useState(currentTo);
+
+  useEffect(() => {
+    setFromInput(currentFrom);
+  }, [currentFrom]);
+  useEffect(() => {
+    setToInput(currentTo);
+  }, [currentTo]);
+
+  function apply(updates: Record<string, string | null>) {
+    const next = new URLSearchParams(params.toString());
+    for (const [key, value] of Object.entries(updates)) {
+      if (value === null || value === '' || value === ALL_VALUE) {
+        next.delete(key);
+      } else {
+        next.set(key, value);
+      }
+    }
+    startTransition(() => {
+      router.push(`/rmas?${next.toString()}`);
+    });
+  }
+
+  function clearAll() {
+    setFromInput('');
+    setToInput('');
+    startTransition(() => {
+      router.push('/rmas');
+    });
+  }
+
+  const hasFilters =
+    currentStatus !== ALL_VALUE ||
+    currentCustomer !== ALL_VALUE ||
+    currentFrom !== '' ||
+    currentTo !== '';
+
+  return (
+    <div className="flex flex-wrap items-end gap-3">
+      <div className="space-y-1.5">
+        <Label htmlFor="rma-status">Status</Label>
+        <Select
+          value={currentStatus}
+          onValueChange={(v) => apply({ status: v, skip: '0' })}
+        >
+          <SelectTrigger id="rma-status" className="w-44">
+            <SelectValue placeholder="All">
+              {(v) =>
+                v === ALL_VALUE
+                  ? 'All statuses'
+                  : (RMA_STATUSES.find((s) => s.value === v)?.label ?? v)
+              }
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_VALUE}>All statuses</SelectItem>
+            {RMA_STATUSES.map((s) => (
+              <SelectItem key={s.value} value={s.value}>
+                {s.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="rma-customer">Customer</Label>
+        <Select
+          value={currentCustomer}
+          onValueChange={(v) => apply({ customerId: v, skip: '0' })}
+        >
+          <SelectTrigger id="rma-customer" className="w-56">
+            <SelectValue placeholder="All customers">
+              {(v) => {
+                if (v === ALL_VALUE) return 'All customers';
+                const c = customers.find((x) => x.id === v);
+                return c ? `${c.name} (${c.code})` : v;
+              }}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_VALUE}>All customers</SelectItem>
+            {customers.map((c) => (
+              <SelectItem key={c.id} value={c.id}>
+                {c.name} ({c.code})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="rma-from">From</Label>
+        <Input
+          id="rma-from"
+          type="date"
+          value={fromInput}
+          onChange={(e) => {
+            setFromInput(e.target.value);
+            apply({ from: e.target.value || null, skip: '0' });
+          }}
+          className="w-40"
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="rma-to">To</Label>
+        <Input
+          id="rma-to"
+          type="date"
+          value={toInput}
+          onChange={(e) => {
+            setToInput(e.target.value);
+            apply({ to: e.target.value || null, skip: '0' });
+          }}
+          className="w-40"
+        />
+      </div>
+
+      {hasFilters ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={clearAll}
+          disabled={pending}
+        >
+          <X />
+          Clear
+        </Button>
+      ) : null}
+    </div>
+  );
+}
