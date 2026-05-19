@@ -8,8 +8,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
-import { formatCurrency, formatStatusLabel } from '@/lib/format';
+import { StatusBadge } from '@/components/shared/status-badge';
+import { formatCurrency } from '@/lib/format';
 
 export type SalesOrderRowData = {
   id: string;
@@ -66,7 +66,7 @@ export function SalesOrdersTable({ rows }: { rows: SalesOrderRowData[] }) {
                 {formatOrderDate(row.orderDate)}
               </TableCell>
               <TableCell>
-                <StatusBadge status={row.status} />
+                <StatusBadge entityType="SalesOrder" status={row.status} />
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatCurrency(row.total)}
@@ -80,27 +80,6 @@ export function SalesOrdersTable({ rows }: { rows: SalesOrderRowData[] }) {
       </Table>
     </div>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const label = formatStatusLabel(status);
-  // Open lifecycle (DRAFT/CONFIRMED/DISPATCHED) → default tone.
-  // CLOSED is the "done & invoiced" terminal — secondary (muted).
-  // CANCELLED is unhappy-path — outline + muted text.
-  switch (status) {
-    case 'CLOSED':
-      return <Badge variant="secondary">{label}</Badge>;
-    case 'CANCELLED':
-      return (
-        <Badge variant="outline" className="text-muted-foreground">
-          {label}
-        </Badge>
-      );
-    case 'DRAFT':
-      return <Badge variant="outline">{label}</Badge>;
-    default:
-      return <Badge>{label}</Badge>;
-  }
 }
 
 // "MMM D, YYYY" — short, scannable, fits the column. No times shown;

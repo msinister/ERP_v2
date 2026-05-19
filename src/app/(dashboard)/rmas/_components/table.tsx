@@ -9,8 +9,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/shared/status-badge';
 import { formatCurrency } from '@/lib/format';
-import { formatRmaStatusLabel } from '../_lib/status';
 
 export type RmaRowData = {
   id: string;
@@ -92,7 +92,7 @@ export function RmasTable({ rows }: { rows: RmaRowData[] }) {
               </TableCell>
               <TableCell>
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <StatusBadge status={row.status} />
+                  <StatusBadge entityType="Rma" status={row.status} />
                   {row.returnless ? (
                     <Badge
                       variant="outline"
@@ -109,20 +109,6 @@ export function RmasTable({ rows }: { rows: RmaRowData[] }) {
       </Table>
     </div>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const label = formatRmaStatusLabel(status);
-  if (status === 'CREDITED') return <Badge>{label}</Badge>;
-  if (status === 'REJECTED') {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        {label}
-      </Badge>
-    );
-  }
-  if (status === 'INSPECTED') return <Badge variant="secondary">{label}</Badge>;
-  return <Badge variant="outline">{label}</Badge>;
 }
 
 function formatDate(d: Date): string {

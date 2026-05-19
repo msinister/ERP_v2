@@ -9,7 +9,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { formatCurrency, formatStatusLabel } from '@/lib/format';
+import { StatusBadge } from '@/components/shared/status-badge';
+import { formatCurrency } from '@/lib/format';
 
 export type VendorCreditRowData = {
   id: string;
@@ -94,7 +95,7 @@ export function VendorCreditsTable({ rows }: { rows: VendorCreditRowData[] }) {
                     : '—'}
                 </TableCell>
                 <TableCell>
-                  <StatusBadge status={row.status} />
+                  <StatusBadge entityType="VendorCredit" status={row.status} />
                 </TableCell>
                 <TableCell>
                   {row.isOverpayment ? (
@@ -114,19 +115,6 @@ export function VendorCreditsTable({ rows }: { rows: VendorCreditRowData[] }) {
       </Table>
     </div>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const label = formatStatusLabel(status);
-  if (status === 'CONFIRMED') return <Badge>{label}</Badge>;
-  if (status === 'CANCELLED') {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        {label}
-      </Badge>
-    );
-  }
-  return <Badge variant="outline">{label}</Badge>;
 }
 
 function formatDate(d: Date): string {

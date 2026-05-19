@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/shared/status-badge';
 import {
   Table,
   TableBody,
@@ -112,7 +113,7 @@ export default async function WorkOrderDetailPage({
               <h1 className="font-mono text-2xl font-semibold tracking-tight">
                 {wo.number}
               </h1>
-              <StatusBadge status={wo.status} />
+              <StatusBadge entityType="WorkOrder" status={wo.status} />
             </div>
             <p className="text-sm text-muted-foreground">
               Build {formatQty(wo.qtyToBuild)} × {product.name}{' '}
@@ -316,20 +317,6 @@ function Row({ label, value }: { label: string; value: string }) {
       </span>
       <span className="font-mono text-sm">{value}</span>
     </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const tone: Record<string, 'default' | 'secondary' | 'outline'> = {
-    DRAFT: 'outline',
-    IN_PROGRESS: 'secondary',
-    COMPLETED: 'default',
-    CANCELLED: 'outline',
-  };
-  return (
-    <Badge variant={tone[status] ?? 'outline'} className="text-[10px]">
-      {formatStatusLabel(status)}
-    </Badge>
   );
 }
 

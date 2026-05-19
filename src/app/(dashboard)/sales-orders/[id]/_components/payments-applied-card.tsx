@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/table';
 import { formatCurrency, formatStatusLabel } from '@/lib/format';
 import { RecordCustomerPaymentButton } from '@/components/shared/record-customer-payment-button';
+import { StatusBadge } from '@/components/shared/status-badge';
 
 // Per-application row. PAYMENT_TO_INVOICE rows reference a Payment;
 // CREDIT_TO_INVOICE rows reference a CreditMemo. Caller flattens
@@ -166,16 +167,21 @@ function SourceStatusBadge({
   kind: 'PAYMENT' | 'CREDIT_MEMO';
   status: string;
 }) {
+  // CreditMemo statuses get the shared color scheme (DRAFT grey,
+  // CONFIRMED green, VOIDED outline). Payment statuses (RECORDED /
+  // REVERSED) aren't part of the shared entity coverage, so they
+  // keep the existing semantic-only rendering.
+  if (kind === 'CREDIT_MEMO') {
+    return <StatusBadge entityType="CreditMemo" status={status} />;
+  }
   const label = formatStatusLabel(status);
-  const muted = status === 'REVERSED' || status === 'VOIDED';
-  if (muted) {
+  if (status === 'REVERSED') {
     return (
       <Badge variant="outline" className="text-muted-foreground">
         {label}
       </Badge>
     );
   }
-  void kind;
   return <Badge variant="secondary">{label}</Badge>;
 }
 

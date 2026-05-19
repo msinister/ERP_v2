@@ -8,8 +8,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
-import { formatCurrency, formatStatusLabel } from '@/lib/format';
+import { StatusBadge } from '@/components/shared/status-badge';
+import { formatCurrency } from '@/lib/format';
 
 export type PurchaseOrderRowData = {
   id: string;
@@ -95,7 +95,7 @@ export function PurchaseOrdersTable({
                   : '—'}
               </TableCell>
               <TableCell>
-                <PoStatusBadge status={row.status} />
+                <StatusBadge entityType="PurchaseOrder" status={row.status} />
               </TableCell>
               <TableCell className="text-right tabular-nums text-muted-foreground">
                 {row.lineCount}
@@ -111,16 +111,3 @@ export function PurchaseOrdersTable({
   );
 }
 
-function PoStatusBadge({ status }: { status: string }) {
-  if (status === 'CLOSED') {
-    return <Badge variant="secondary">{formatStatusLabel(status)}</Badge>;
-  }
-  if (status === 'CANCELLED') {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        {formatStatusLabel(status)}
-      </Badge>
-    );
-  }
-  return <Badge variant="outline">{formatStatusLabel(status)}</Badge>;
-}

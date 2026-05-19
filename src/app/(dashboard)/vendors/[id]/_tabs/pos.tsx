@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/shared/status-badge';
 import {
   Table,
   TableBody,
@@ -11,7 +11,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { listPurchaseOrders } from '@/server/services/purchaseOrders';
-import { formatCurrency, formatStatusLabel } from '@/lib/format';
+import { formatCurrency } from '@/lib/format';
 import { TabShell, TabEmpty } from './tab-shell';
 
 // Embedded read-only PO table filtered to this vendor. 6E adds the
@@ -91,7 +91,7 @@ export async function PosTab({ vendorId }: { vendorId: string }) {
                       : '—'}
                   </TableCell>
                   <TableCell>
-                    <PoStatusBadge status={po.status} />
+                    <StatusBadge entityType="PurchaseOrder" status={po.status} />
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">
                     {po.lines.length}
@@ -109,19 +109,3 @@ export async function PosTab({ vendorId }: { vendorId: string }) {
   );
 }
 
-function PoStatusBadge({ status }: { status: string }) {
-  // Use the same neutral outline for non-terminal/non-destructive
-  // states; secondary for CLOSED (success) and outline-muted for
-  // CANCELLED (de-emphasized).
-  if (status === 'CLOSED') {
-    return <Badge variant="secondary">{formatStatusLabel(status)}</Badge>;
-  }
-  if (status === 'CANCELLED') {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        {formatStatusLabel(status)}
-      </Badge>
-    );
-  }
-  return <Badge variant="outline">{formatStatusLabel(status)}</Badge>;
-}

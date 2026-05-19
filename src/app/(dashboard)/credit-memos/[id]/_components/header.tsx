@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { formatStatusLabel } from '@/lib/format';
+import { StatusBadge } from '@/components/shared/status-badge';
 import { LifecycleActions } from './lifecycle-actions';
 
 export type CreditMemoHeaderProps = {
@@ -36,7 +36,7 @@ export function CreditMemoHeader({ cm }: CreditMemoHeaderProps) {
             <h1 className="font-mono text-2xl font-semibold tracking-tight">
               {cm.number}
             </h1>
-            <StatusBadge status={cm.status} />
+            <StatusBadge entityType="CreditMemo" status={cm.status} />
             {cm.rma ? (
               <Badge variant="outline" className="text-muted-foreground">
                 From RMA {cm.rma.number}
@@ -86,19 +86,6 @@ export function CreditMemoHeader({ cm }: CreditMemoHeaderProps) {
       </div>
     </div>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const label = formatStatusLabel(status);
-  if (status === 'CONFIRMED') return <Badge>{label}</Badge>;
-  if (status === 'VOIDED') {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        {label}
-      </Badge>
-    );
-  }
-  return <Badge variant="outline">{label}</Badge>;
 }
 
 function DateLine({

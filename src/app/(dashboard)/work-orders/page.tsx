@@ -3,7 +3,7 @@ import { Wrench } from 'lucide-react';
 import { Prisma, WorkOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listWorkOrdersPaged } from '@/server/services/workOrders';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/shared/status-badge';
 import {
   Table,
   TableBody,
@@ -104,7 +104,7 @@ export default async function WorkOrdersPage({
                     {formatQty(wo.qtyCompleted)} / {formatQty(wo.qtyToBuild)}
                   </TableCell>
                   <TableCell>
-                    <StatusBadge status={wo.status} />
+                    <StatusBadge entityType="WorkOrder" status={wo.status} />
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {wo.createdAt.toLocaleDateString()}
@@ -148,20 +148,6 @@ function StatusTabs({ current }: { current: WorkOrderStatus | undefined }) {
         );
       })}
     </div>
-  );
-}
-
-function StatusBadge({ status }: { status: WorkOrderStatus }) {
-  const tone: Record<WorkOrderStatus, 'default' | 'secondary' | 'outline'> = {
-    DRAFT: 'outline',
-    IN_PROGRESS: 'secondary',
-    COMPLETED: 'default',
-    CANCELLED: 'outline',
-  };
-  return (
-    <Badge variant={tone[status]} className="text-[10px]">
-      {formatStatusLabel(status)}
-    </Badge>
   );
 }
 

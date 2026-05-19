@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
-import { formatStatusLabel } from '@/lib/format';
+import { StatusBadge } from '@/components/shared/status-badge';
 import { LifecycleActions } from './lifecycle-actions';
 import { DocumentsMenu } from './documents-menu';
 
@@ -40,7 +39,7 @@ export function SalesOrderHeader({ so }: SalesOrderHeaderProps) {
             <h1 className="font-mono text-2xl font-semibold tracking-tight">
               {so.number}
             </h1>
-            <StatusBadge status={so.status} />
+            <StatusBadge entityType="SalesOrder" status={so.status} />
           </div>
           <div className="text-sm text-muted-foreground">
             <Link
@@ -85,24 +84,6 @@ export function SalesOrderHeader({ so }: SalesOrderHeaderProps) {
       </div>
     </div>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const label = formatStatusLabel(status);
-  switch (status) {
-    case 'CLOSED':
-      return <Badge variant="secondary">{label}</Badge>;
-    case 'CANCELLED':
-      return (
-        <Badge variant="outline" className="text-muted-foreground">
-          {label}
-        </Badge>
-      );
-    case 'DRAFT':
-      return <Badge variant="outline">{label}</Badge>;
-    default:
-      return <Badge>{label}</Badge>;
-  }
 }
 
 function DateLine({

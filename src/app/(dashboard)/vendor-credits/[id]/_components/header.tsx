@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { formatStatusLabel } from '@/lib/format';
+import { StatusBadge } from '@/components/shared/status-badge';
 import { LifecycleActions } from './lifecycle-actions';
 
 export type VendorCreditHeaderProps = {
@@ -34,7 +34,7 @@ export function VendorCreditHeader({ vc }: VendorCreditHeaderProps) {
             <h1 className="font-mono text-2xl font-semibold tracking-tight">
               {vc.number}
             </h1>
-            <StatusBadge status={vc.status} />
+            <StatusBadge entityType="VendorCredit" status={vc.status} />
             {vc.isOverpayment ? (
               <Badge variant="outline" className="text-muted-foreground">
                 Overpayment
@@ -66,19 +66,6 @@ export function VendorCreditHeader({ vc }: VendorCreditHeaderProps) {
       </div>
     </div>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const label = formatStatusLabel(status);
-  if (status === 'CONFIRMED') return <Badge>{label}</Badge>;
-  if (status === 'CANCELLED') {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        {label}
-      </Badge>
-    );
-  }
-  return <Badge variant="outline">{label}</Badge>;
 }
 
 function DateLine({

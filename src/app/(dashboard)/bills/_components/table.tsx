@@ -9,7 +9,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { formatCurrency, formatStatusLabel } from '@/lib/format';
+import { StatusBadge } from '@/components/shared/status-badge';
+import { formatCurrency } from '@/lib/format';
 
 export type BillRowData = {
   id: string;
@@ -93,13 +94,19 @@ export function BillsTable({ rows }: { rows: BillRowData[] }) {
                 </Badge>
               </TableCell>
               <TableCell>
-                <StatusBadge status={row.status} />
+                <StatusBadge entityType="Bill" status={row.status} />
               </TableCell>
               <TableCell>
-                <PaymentStatusBadge
-                  status={row.paymentStatus}
-                  billStatus={row.status}
-                />
+                {/* Payment status only meaningful on CONFIRMED bills.
+                    DRAFT has no AP entry yet; CANCELLED unwinds the AP. */}
+                {row.status === 'CONFIRMED' ? (
+                  <StatusBadge
+                    entityType="BillPaymentStatus"
+                    status={row.paymentStatus}
+                  />
+                ) : (
+                  <span className="text-xs text-muted-foreground">—</span>
+                )}
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatCurrency(row.total)}
@@ -119,40 +126,6 @@ export function BillsTable({ rows }: { rows: BillRowData[] }) {
         </TableBody>
       </Table>
     </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const label = formatStatusLabel(status);
-  if (status === 'CONFIRMED') return <Badge>{label}</Badge>;
-  if (status === 'CANCELLED') {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        {label}
-      </Badge>
-    );
-  }
-  return <Badge variant="outline">{label}</Badge>;
-}
-
-function PaymentStatusBadge({
-  status,
-  billStatus,
-}: {
-  status: string;
-  billStatus: string;
-}) {
-  // Payment status only meaningful on CONFIRMED bills.
-  if (billStatus !== 'CONFIRMED') {
-    return <span className="text-xs text-muted-foreground">—</span>;
-  }
-  const label = formatStatusLabel(status);
-  if (status === 'PAID') return <Badge variant="secondary">{label}</Badge>;
-  if (status === 'PARTIAL') return <Badge variant="outline">{label}</Badge>;
-  return (
-    <Badge variant="outline" className="text-muted-foreground">
-      {label}
-    </Badge>
   );
 }
 

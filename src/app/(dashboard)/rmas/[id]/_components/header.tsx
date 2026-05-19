@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { formatRmaStatusLabel } from '../../_lib/status';
+import { StatusBadge } from '@/components/shared/status-badge';
 
 export type RmaHeaderProps = {
   rma: {
@@ -37,7 +37,7 @@ export function RmaHeader({ rma }: RmaHeaderProps) {
             <h1 className="font-mono text-2xl font-semibold tracking-tight">
               {rma.number}
             </h1>
-            <StatusBadge status={rma.status} />
+            <StatusBadge entityType="Rma" status={rma.status} />
             <Badge variant="outline" className="text-muted-foreground">
               {rma.returnless ? 'Returnless' : 'Standard'}
             </Badge>
@@ -82,20 +82,6 @@ export function RmaHeader({ rma }: RmaHeaderProps) {
       </div>
     </div>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const label = formatRmaStatusLabel(status);
-  if (status === 'CREDITED') return <Badge>{label}</Badge>;
-  if (status === 'REJECTED') {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        {label}
-      </Badge>
-    );
-  }
-  if (status === 'INSPECTED') return <Badge variant="secondary">{label}</Badge>;
-  return <Badge variant="outline">{label}</Badge>;
 }
 
 function DateLine({

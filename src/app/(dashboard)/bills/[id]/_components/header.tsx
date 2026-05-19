@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import { formatStatusLabel } from '@/lib/format';
+import { StatusBadge } from '@/components/shared/status-badge';
 import { LifecycleActions } from './lifecycle-actions';
 
 export type BillHeaderProps = {
@@ -36,11 +36,14 @@ export function BillHeader({ bill }: BillHeaderProps) {
             <h1 className="font-mono text-2xl font-semibold tracking-tight">
               {bill.number}
             </h1>
-            <StatusBadge status={bill.status} />
-            <PaymentStatusBadge
-              status={bill.paymentStatus}
-              billStatus={bill.status}
-            />
+            <StatusBadge entityType="Bill" status={bill.status} />
+            {/* Payment status only meaningful on CONFIRMED bills. */}
+            {bill.status === 'CONFIRMED' ? (
+              <StatusBadge
+                entityType="BillPaymentStatus"
+                status={bill.paymentStatus}
+              />
+            ) : null}
             <Badge variant="outline" className="text-muted-foreground">
               {bill.source === 'PRODUCT' ? 'Product' : 'Expense'}
             </Badge>
@@ -70,39 +73,6 @@ export function BillHeader({ bill }: BillHeaderProps) {
         />
       </div>
     </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const label = formatStatusLabel(status);
-  if (status === 'CONFIRMED') return <Badge>{label}</Badge>;
-  if (status === 'CANCELLED') {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        {label}
-      </Badge>
-    );
-  }
-  return <Badge variant="outline">{label}</Badge>;
-}
-
-function PaymentStatusBadge({
-  status,
-  billStatus,
-}: {
-  status: string;
-  billStatus: string;
-}) {
-  // Payment status only meaningful on CONFIRMED bills — DRAFT and
-  // CANCELLED bills have no AP balance.
-  if (billStatus !== 'CONFIRMED') return null;
-  const label = formatStatusLabel(status);
-  if (status === 'PAID') return <Badge variant="secondary">{label}</Badge>;
-  if (status === 'PARTIAL') return <Badge variant="outline">{label}</Badge>;
-  return (
-    <Badge variant="outline" className="text-muted-foreground">
-      {label}
-    </Badge>
   );
 }
 

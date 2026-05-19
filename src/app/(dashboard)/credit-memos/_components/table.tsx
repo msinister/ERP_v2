@@ -8,8 +8,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
-import { formatCurrency, formatStatusLabel } from '@/lib/format';
+import { StatusBadge } from '@/components/shared/status-badge';
+import { formatCurrency } from '@/lib/format';
 
 export type CreditMemoRowData = {
   id: string;
@@ -99,7 +99,7 @@ export function CreditMemosTable({ rows }: { rows: CreditMemoRowData[] }) {
                     : '—'}
                 </TableCell>
                 <TableCell>
-                  <StatusBadge status={row.status} />
+                  <StatusBadge entityType="CreditMemo" status={row.status} />
                 </TableCell>
               </TableRow>
             );
@@ -108,19 +108,6 @@ export function CreditMemosTable({ rows }: { rows: CreditMemoRowData[] }) {
       </Table>
     </div>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const label = formatStatusLabel(status);
-  if (status === 'CONFIRMED') return <Badge>{label}</Badge>;
-  if (status === 'VOIDED') {
-    return (
-      <Badge variant="outline" className="text-muted-foreground">
-        {label}
-      </Badge>
-    );
-  }
-  return <Badge variant="outline">{label}</Badge>;
 }
 
 function formatDate(d: Date): string {
