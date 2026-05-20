@@ -15,16 +15,14 @@ import {
 // =============================================================================
 // ProductThumbnail
 //
-// 40x40 image cell used in line-item tables (and the mobile card view).
-// Three behaviors:
-//   1. Image present → renders <img> with object-cover + lazy loading.
-//      Hover (200ms delay) shows a 200x200 preview popover. Click opens
-//      a Dialog lightbox with the image at natural size, capped at 600px.
-//   2. No image → renders a Package icon in the same 40x40 container.
-//      No hover, no click.
-//   3. Touch devices → hover preview is suppressed by the
-//      (hover: hover) media gate on the PreviewCard.Trigger render path.
-//      Tap-to-enlarge still works via the underlying button click.
+// Two sizes:
+//   - 'sm' (default, 40x40): line-item tables + mobile cards. Image present →
+//     <img> with a 200x200 hover preview (200ms) and click-to-lightbox. No
+//     image → small Package placeholder. No hover/click on the placeholder.
+//   - 'lg' (200x200): product detail header. Always-visible static image,
+//     click opens the SAME lightbox (natural size, capped at 600px). No hover
+//     preview (the thumbnail is already large). No image → big Package
+//     placeholder.
 //
 // `alt` defaults to productName when omitted, falling back to a generic
 // label so screen readers always get something useful.
@@ -35,11 +33,13 @@ export function ProductThumbnail({
   alt,
   productName,
   className,
+  size = 'sm',
 }: {
   src?: string | null;
   alt?: string | null;
   productName?: string | null;
   className?: string;
+  size?: 'sm' | 'lg';
 }) {
   const [openLightbox, setOpenLightbox] = useState(false);
   const resolvedAlt =
@@ -47,18 +47,75 @@ export function ProductThumbnail({
     (productName && productName.trim() !== '' && productName) ||
     'Product image';
 
+  const large = size === 'lg';
+  const boxClass = large ? 'size-[200px] rounded-lg' : 'size-10 rounded-md';
+
   // No image: render a muted placeholder. Not clickable, no hover.
   if (!src) {
     return (
       <div
         aria-label="No image"
         className={cn(
-          'flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/40 text-muted-foreground',
+          'flex shrink-0 items-center justify-center bg-muted/40 text-muted-foreground',
+          boxClass,
           className,
         )}
       >
-        <Package className="size-5" aria-hidden />
+        <Package className={large ? 'size-20' : 'size-5'} aria-hidden />
       </div>
+    );
+  }
+
+  const lightbox = (
+    <Dialog open={openLightbox} onOpenChange={setOpenLightbox}>
+      <DialogContent
+        className="w-auto max-w-[min(calc(100vw-2rem),600px)] bg-popover p-2"
+        showCloseButton
+      >
+        {/* DialogTitle for a11y; visually hidden since the image alt
+            carries the description. */}
+        <DialogTitle className="sr-only">{resolvedAlt}</DialogTitle>
+        <DialogClose
+          // Whole-image click also closes — matches lightbox UX
+          // people expect (click outside / Escape / X / click image).
+          className="block w-full"
+          render={<button type="button" aria-label="Close image preview" />}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={src}
+            alt={resolvedAlt}
+            className="block max-h-[calc(100vh-8rem)] max-w-full rounded-md object-contain"
+          />
+        </DialogClose>
+      </DialogContent>
+    </Dialog>
+  );
+
+  // Large header image: static, click → lightbox. No hover preview (the
+  // image is already at preview size).
+  if (large) {
+    return (
+      <>
+        <button
+          type="button"
+          aria-label={`Open ${resolvedAlt} at full size`}
+          onClick={() => setOpenLightbox(true)}
+          className={cn(
+            'block shrink-0 overflow-hidden bg-muted/30 outline-none transition-shadow hover:ring-2 hover:ring-ring focus-visible:ring-2 focus-visible:ring-ring',
+            boxClass,
+            className,
+          )}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={src}
+            alt={resolvedAlt}
+            className="size-full object-cover"
+          />
+        </button>
+        {lightbox}
+      </>
     );
   }
 
@@ -114,31 +171,7 @@ export function ProductThumbnail({
         </PreviewCard.Portal>
       </PreviewCard.Root>
 
-      <Dialog open={openLightbox} onOpenChange={setOpenLightbox}>
-        <DialogContent
-          className="w-auto max-w-[min(calc(100vw-2rem),600px)] bg-popover p-2"
-          showCloseButton
-        >
-          {/* DialogTitle for a11y; visually hidden since the image alt
-              carries the description. */}
-          <DialogTitle className="sr-only">{resolvedAlt}</DialogTitle>
-          <DialogClose
-            // Whole-image click also closes — matches lightbox UX
-            // people expect (click outside / Escape / X / click image).
-            className="block w-full"
-            render={
-              <button type="button" aria-label="Close image preview" />
-            }
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={src}
-              alt={resolvedAlt}
-              className="block max-h-[calc(100vh-8rem)] max-w-full rounded-md object-contain"
-            />
-          </DialogClose>
-        </DialogContent>
-      </Dialog>
+      {lightbox}
     </>
   );
 }

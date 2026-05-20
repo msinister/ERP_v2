@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ChevronLeft, MoreVertical, Pencil, Wrench } from 'lucide-react';
+import { MoreVertical, Pencil, Wrench } from 'lucide-react';
 import type { Product } from '@/generated/tenant';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -30,15 +30,7 @@ export function ProductHeader({
   const showBuild = !archived && bomEligible && hasBom;
 
   return (
-    <div className="space-y-3">
-      <Link
-        href="/products"
-        className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
-      >
-        <ChevronLeft className="size-3.5" />
-        Products
-      </Link>
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">
@@ -108,7 +100,6 @@ export function ProductHeader({
             </DropdownMenu>
           ) : null}
         </div>
-      </div>
     </div>
   );
 }

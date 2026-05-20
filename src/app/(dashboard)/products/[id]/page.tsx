@@ -1,6 +1,9 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ChevronLeft } from 'lucide-react';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { ProductThumbnail } from '@/components/shared/product-thumbnail';
 import { computeWac, getLastPurchaseCost } from '@/server/services/wac';
 import { listTagsForProduct } from '@/server/services/productTags';
 import { listVendors } from '@/server/services/vendors';
@@ -295,9 +298,38 @@ export default async function ProductDetailPage({
     label: t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
   }));
 
+  // Primary image for the header thumbnail (same source as the Images
+  // tab); prefer the isPrimary image, fall back to the first image.
+  const primaryImageUrl =
+    product.images.find((i) => i.isPrimary)?.url ??
+    product.images[0]?.url ??
+    null;
+
   return (
     <div className="space-y-6">
-      <ProductHeader product={product} hasBom={bomLineRows.length > 0} />
+      <div className="space-y-4">
+        <Link
+          href="/products"
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+        >
+          <ChevronLeft className="size-3.5" />
+          Products
+        </Link>
+
+        {/* Header row: image left, product info right. Tab content
+            renders full-width below, not inside this column. */}
+        <div className="flex flex-col gap-6 sm:flex-row sm:items-start">
+          <ProductThumbnail
+            src={primaryImageUrl}
+            productName={product.name}
+            size="lg"
+            className="shrink-0"
+          />
+          <div className="min-w-0 flex-1">
+            <ProductHeader product={product} hasBom={bomLineRows.length > 0} />
+          </div>
+        </div>
+      </div>
 
       <Tabs defaultValue="overview">
         <TabsList variant="line" className="overflow-x-auto">
