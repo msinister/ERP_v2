@@ -45,6 +45,7 @@ export async function GET(req: Request) {
       hazmat: p.hazmat,
       active: p.active,
       type: p.type,
+      imageUrl: p.imageUrl,
     }));
     return NextResponse.json({ products });
   } catch (e) {

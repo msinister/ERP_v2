@@ -33,6 +33,7 @@ const rowSchema = z.object({
   hazmat: z.string().optional(),
   active: z.string().optional(),
   type: z.string().optional(),
+  imageUrl: z.string().optional(),
 });
 
 const bodySchema = z.object({

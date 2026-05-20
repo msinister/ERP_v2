@@ -2,6 +2,7 @@ import type { PrismaClient } from '@/generated/tenant';
 import type { AuditContext } from '@/lib/audit/audit';
 import type { ProductCreateInput } from '@/lib/validation/product';
 import { createProduct, getProductBySku, updateProduct } from './products';
+import { addProductImage, setPrimaryProductImage } from './productImages';
 
 // =============================================================================
 // Product CSV import. The client maps + pre-validates rows and POSTs them as
@@ -38,6 +39,7 @@ export type ImportRowInput = {
   hazmat?: string;
   active?: string;
   type?: string;
+  imageUrl?: string;
 };
 
 export type ImportRowStatus = 'created' | 'updated' | 'skipped' | 'error';
@@ -133,6 +135,43 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
   return out;
 }
 
+function isValidHttpUrl(v: string): boolean {
+  try {
+    const u = new URL(v);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+// Attach an external image URL to a product as its primary image.
+//   - new product: it has no images yet → the new image becomes primary.
+//   - existing product without a primary image: create + promote to primary.
+//   - existing product that already has a primary image: skip (never
+//     overwrite existing images).
+// The URL is referenced as-is (no download/re-upload).
+async function applyImageUrl(
+  db: PrismaClient,
+  productId: string,
+  url: string,
+  isNewProduct: boolean,
+  ctx?: AuditContext,
+): Promise<void> {
+  if (!isNewProduct) {
+    const primary = await db.productImage.findFirst({
+      where: { productId, isPrimary: true, deletedAt: null },
+      select: { id: true },
+    });
+    if (primary) return; // don't overwrite an existing primary image
+  }
+  const created = await addProductImage(db, productId, { url }, ctx);
+  // addProductImage only auto-primaries the very first image; if the
+  // product had non-primary images but no primary, promote this one.
+  if (!created.isPrimary) {
+    await setPrimaryProductImage(db, productId, created.id, ctx);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Importer
 // ---------------------------------------------------------------------------
@@ -164,6 +203,17 @@ export async function importProductRows(
           sku,
           status: 'error',
           message: 'Name is required',
+        });
+        continue;
+      }
+
+      const imageUrl = clean(row.imageUrl);
+      if (imageUrl && !isValidHttpUrl(imageUrl)) {
+        results.push({
+          rowNumber: row.rowNumber,
+          sku,
+          status: 'error',
+          message: 'Invalid image URL (must start with http:// or https://)',
         });
         continue;
       }
@@ -205,9 +255,12 @@ export async function importProductRows(
         // Update: only the columns present in the file. Never touches the
         // variant or deletes anything.
         await updateProduct(db, existing.id, stripUndefined(fields), ctx);
+        if (imageUrl) {
+          await applyImageUrl(db, existing.id, imageUrl, false, ctx);
+        }
         results.push({ rowNumber: row.rowNumber, sku, status: 'updated' });
       } else {
-        await createProduct(
+        const created = await createProduct(
           db,
           {
             sku,
@@ -216,6 +269,9 @@ export async function importProductRows(
           } as ProductCreateInput,
           ctx,
         );
+        if (imageUrl) {
+          await applyImageUrl(db, created.id, imageUrl, true, ctx);
+        }
         results.push({ rowNumber: row.rowNumber, sku, status: 'created' });
       }
     } catch (e) {

@@ -29,6 +29,7 @@ type ExportProduct = {
   hazmat: boolean;
   active: boolean;
   type: string;
+  imageUrl: string | null;
 };
 
 const COLUMNS: Array<{ header: string; value: (p: ExportProduct) => string }> = [
@@ -50,6 +51,7 @@ const COLUMNS: Array<{ header: string; value: (p: ExportProduct) => string }> = 
   { header: 'Hazmat', value: (p) => (p.hazmat ? 'Yes' : 'No') },
   { header: 'Active', value: (p) => (p.active ? 'Yes' : 'No') },
   { header: 'Product type', value: (p) => p.type },
+  { header: 'Image URL', value: (p) => p.imageUrl ?? '' },
 ];
 
 function today(): string {

@@ -268,13 +268,15 @@ export type ProductExportRow = {
   hazmat: boolean;
   active: boolean;
   type: Product['type'];
+  // Primary image URL (ProductImage where isPrimary), or null.
+  imageUrl: string | null;
 };
 
 export async function listProductsForExport(
   db: PrismaClient,
   filters: Omit<ProductListFilters, 'skip' | 'take'> = {},
 ): Promise<ProductExportRow[]> {
-  return db.product.findMany({
+  const rows = await db.product.findMany({
     where: productWhere(filters),
     select: {
       sku: true,
@@ -295,10 +297,20 @@ export async function listProductsForExport(
       hazmat: true,
       active: true,
       type: true,
+      images: {
+        where: { isPrimary: true, deletedAt: null },
+        orderBy: { sortOrder: 'asc' },
+        select: { url: true },
+        take: 1,
+      },
     },
     orderBy: [{ active: 'desc' }, { name: 'asc' }],
     take: 50000,
   });
+  return rows.map(({ images, ...rest }) => ({
+    ...rest,
+    imageUrl: images[0]?.url ?? null,
+  }));
 }
 
 // Distinct brand / category values from existing products. Powers the

@@ -242,6 +242,10 @@ export function ImportWizard() {
         seen.set(sku, count + 1);
         if (count > 0) issues.push('Duplicate SKU in file');
       }
+      const imageUrl = (fields.imageUrl ?? '').trim();
+      if (imageUrl && !/^https?:\/\//i.test(imageUrl)) {
+        issues.push('Invalid image URL');
+      }
       let status: RowValidation['status'];
       if (issues.length > 0) status = 'error';
       else if (existingSkus.has(sku)) status = 'exists';
