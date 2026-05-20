@@ -20,7 +20,7 @@ export async function TodaysSalesWidget() {
       </div>
       <div className="mt-3 text-xs text-muted-foreground">
         {formatCount(data.invoiceCount)}{' '}
-        {data.invoiceCount === 1 ? 'invoice' : 'invoices'}
+        {data.invoiceCount === 1 ? 'order' : 'orders'} closed today
       </div>
     </WidgetCard>
   );

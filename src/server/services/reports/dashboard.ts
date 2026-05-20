@@ -1,5 +1,7 @@
 import {
+  AuditAction,
   InvoiceStatus,
+  PaymentStatus,
   Prisma,
   PurchaseOrderStatus,
   SalesOrderStatus,
@@ -11,14 +13,6 @@ import { cashPosition } from './operational';
 
 // =============================================================================
 // Dashboard widget endpoints — slice E of phase 9. Spec docs/08:286-302.
-//
-// Pilot scope: 6 widgets (the highest-value subset of the 12 listed):
-//   - openSosWidget
-//   - openPosWidget
-//   - todaysSalesWidget
-//   - cashPositionWidget
-//   - arAgingWidget (wraps agingSummary; aggregate totals only)
-//   - apAgingWidget (wraps apAgingSummary; aggregate totals only)
 //
 // Each widget returns a small flat shape suitable for direct render
 // (counts, totals, top-N samples). Larger drill-downs go through the
@@ -259,4 +253,183 @@ export async function apAgingWidget(
     total,
     vendorCount: rows.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// lowStockWidget
+// ---------------------------------------------------------------------------
+
+export type LowStockRow = {
+  variantId: string;
+  productId: string;
+  sku: string;
+  name: string; // variant name || parent product name
+  qoh: Prisma.Decimal;
+  available: Prisma.Decimal; // qoh − reserved
+};
+
+export type LowStockWidget = {
+  rows: LowStockRow[];
+  totalLow: number; // count of variants with available ≤ threshold across all of inventory
+};
+
+const LOW_STOCK_LIMIT = 10;
+
+/**
+ * Variants that need attention: available qty ≤ 0 across all warehouses,
+ * aggregated by variant. Pilot uses ≤ 0 as the threshold — no
+ * per-product reorder point exists in schema yet (deferred per
+ * docs/11). Only inventory-tracked, active, non-deleted variants
+ * surface.
+ *
+ * Returns top-N (ascending available — most-negative first) plus a
+ * total count so the widget can show "X of N low-stock items".
+ */
+export async function lowStockWidget(
+  db: PrismaClient,
+): Promise<LowStockWidget> {
+  const variants = await db.productVariant.findMany({
+    where: {
+      active: true,
+      deletedAt: null,
+      product: { deletedAt: null, tracksInventory: true },
+    },
+    select: {
+      id: true,
+      sku: true,
+      name: true,
+      product: { select: { id: true, name: true } },
+      inventory: { select: { onHand: true, reserved: true } },
+    },
+  });
+
+  const aggregated: LowStockRow[] = [];
+  for (const v of variants) {
+    let qoh = ZERO;
+    let reserved = ZERO;
+    for (const item of v.inventory) {
+      qoh = qoh.plus(item.onHand);
+      reserved = reserved.plus(item.reserved);
+    }
+    const available = qoh.minus(reserved);
+    if (available.lte(0)) {
+      aggregated.push({
+        variantId: v.id,
+        productId: v.product.id,
+        sku: v.sku,
+        name: v.name ?? v.product.name,
+        qoh,
+        available,
+      });
+    }
+  }
+
+  // Most-negative (largest stockout) first; tiebreak by sku ASC for
+  // stable display.
+  aggregated.sort((a, b) => {
+    const cmp = a.available.comparedTo(b.available);
+    if (cmp !== 0) return cmp;
+    return a.sku.localeCompare(b.sku);
+  });
+
+  return {
+    rows: aggregated.slice(0, LOW_STOCK_LIMIT),
+    totalLow: aggregated.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// unappliedPaymentsWidget
+// ---------------------------------------------------------------------------
+
+export type UnappliedPaymentsWidget = {
+  count: number;
+  totalUnapplied: Prisma.Decimal;
+};
+
+/**
+ * Customer payments with a remaining unapplied balance — RECORDED
+ * status, not soft-deleted, amount > appliedAmount. The widget
+ * surfaces the cash-on-account that still needs to be matched against
+ * an invoice.
+ */
+export async function unappliedPaymentsWidget(
+  db: PrismaClient,
+): Promise<UnappliedPaymentsWidget> {
+  const rows = await db.payment.findMany({
+    where: {
+      deletedAt: null,
+      status: PaymentStatus.RECORDED,
+    },
+    select: { amount: true, appliedAmount: true },
+  });
+  let count = 0;
+  let totalUnapplied = ZERO;
+  for (const r of rows) {
+    const unapplied = r.amount.minus(r.appliedAmount);
+    if (unapplied.gt(0)) {
+      count += 1;
+      totalUnapplied = totalUnapplied.plus(unapplied);
+    }
+  }
+  return { count, totalUnapplied };
+}
+
+// ---------------------------------------------------------------------------
+// recentActivityWidget
+// ---------------------------------------------------------------------------
+
+export type RecentActivityRow = {
+  id: string;
+  action: AuditAction;
+  entityType: string;
+  entityId: string;
+  reason: string | null;
+  createdAt: Date;
+  userName: string | null;
+  userEmail: string | null;
+};
+
+export type RecentActivityWidget = {
+  rows: RecentActivityRow[];
+};
+
+const RECENT_ACTIVITY_LIMIT = 10;
+
+/**
+ * Last N audit-log entries, newest first. Users are resolved in a
+ * second batched query (no FK on AuditLog.userId by design — see
+ * the AuditLog model comment in schema.prisma).
+ */
+export async function recentActivityWidget(
+  db: PrismaClient,
+): Promise<RecentActivityWidget> {
+  const rawRows = await db.auditLog.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: RECENT_ACTIVITY_LIMIT,
+  });
+  const userIds = Array.from(
+    new Set(rawRows.map((r) => r.userId).filter((id): id is string => id !== null)),
+  );
+  const users = userIds.length
+    ? await db.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, name: true, email: true },
+      })
+    : [];
+  const usersById = new Map(users.map((u) => [u.id, u]));
+  const rows: RecentActivityRow[] = rawRows.map((r) => {
+    const u = r.userId ? usersById.get(r.userId) : null;
+    return {
+      id: r.id,
+      action: r.action,
+      entityType: r.entityType,
+      entityId: r.entityId,
+      reason: r.reason,
+      createdAt: r.createdAt,
+      userName: u?.name ?? null,
+      userEmail: u?.email ?? null,
+    };
+  });
+  return { rows };
 }

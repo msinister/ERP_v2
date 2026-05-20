@@ -1,10 +1,13 @@
 import { Suspense } from 'react';
-import { OpenSosWidget } from './_widgets/open-sos';
-import { OpenPosWidget } from './_widgets/open-pos';
 import { TodaysSalesWidget } from './_widgets/todays-sales';
-import { CashPositionWidget } from './_widgets/cash-position';
 import { ArAgingWidget } from './_widgets/ar-aging';
 import { ApAgingWidget } from './_widgets/ap-aging';
+import { OpenSosWidget } from './_widgets/open-sos';
+import { OpenPosWidget } from './_widgets/open-pos';
+import { LowStockWidget } from './_widgets/low-stock';
+import { UnappliedPaymentsWidget } from './_widgets/unapplied-payments';
+import { RecentActivityWidget } from './_widgets/recent-activity';
+import { CashPositionWidget } from './_widgets/cash-position';
 import { WidgetSkeleton } from './_widgets/widget-card';
 
 // Dashboard always reflects live data (no caching) — operational
@@ -21,18 +24,9 @@ export default function DashboardPage() {
           Live snapshot of operations.
         </p>
       </div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <Suspense fallback={<WidgetSkeleton title="Open Sales Orders" />}>
-          <OpenSosWidget />
-        </Suspense>
-        <Suspense fallback={<WidgetSkeleton title="Open Purchase Orders" />}>
-          <OpenPosWidget />
-        </Suspense>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Suspense fallback={<WidgetSkeleton title="Today's Sales" />}>
           <TodaysSalesWidget />
-        </Suspense>
-        <Suspense fallback={<WidgetSkeleton title="Cash Position" />}>
-          <CashPositionWidget />
         </Suspense>
         <Suspense
           fallback={<WidgetSkeleton title="AR Aging" bodyClassName="h-20" />}
@@ -43,6 +37,32 @@ export default function DashboardPage() {
           fallback={<WidgetSkeleton title="AP Aging" bodyClassName="h-20" />}
         >
           <ApAgingWidget />
+        </Suspense>
+        <Suspense fallback={<WidgetSkeleton title="Open Sales Orders" />}>
+          <OpenSosWidget />
+        </Suspense>
+        <Suspense fallback={<WidgetSkeleton title="Open Purchase Orders" />}>
+          <OpenPosWidget />
+        </Suspense>
+        <Suspense
+          fallback={
+            <WidgetSkeleton title="Low Stock Alerts" bodyClassName="h-40" />
+          }
+        >
+          <LowStockWidget />
+        </Suspense>
+        <Suspense fallback={<WidgetSkeleton title="Unapplied Payments" />}>
+          <UnappliedPaymentsWidget />
+        </Suspense>
+        <Suspense
+          fallback={
+            <WidgetSkeleton title="Recent Activity" bodyClassName="h-40" />
+          }
+        >
+          <RecentActivityWidget />
+        </Suspense>
+        <Suspense fallback={<WidgetSkeleton title="Cash Position" />}>
+          <CashPositionWidget />
         </Suspense>
       </div>
     </div>
