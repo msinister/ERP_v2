@@ -56,6 +56,20 @@ export function ReceiptHeader({ receipt }: ReceiptHeaderProps) {
             size="sm"
             render={
               <Link
+                href={`/print/receipts/${receipt.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              />
+            }
+          >
+            <Printer />
+            Print
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            render={
+              <Link
                 href={`/print/receipts/${receipt.id}/check-in`}
                 target="_blank"
                 rel="noopener noreferrer"

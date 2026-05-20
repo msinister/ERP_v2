@@ -1,6 +1,7 @@
 import Link from 'next/link';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Printer } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { LifecycleActions } from './lifecycle-actions';
 
@@ -65,12 +66,28 @@ export function BillHeader({ bill }: BillHeaderProps) {
             cancelledAt={bill.cancelledAt}
           />
         </div>
-        <LifecycleActions
-          billId={bill.id}
-          billNumber={bill.number}
-          status={bill.status}
-          hasAppliedMoney={bill.hasAppliedMoney}
-        />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            render={
+              <Link
+                href={`/print/bills/${bill.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              />
+            }
+          >
+            <Printer />
+            Print
+          </Button>
+          <LifecycleActions
+            billId={bill.id}
+            billNumber={bill.number}
+            status={bill.status}
+            hasAppliedMoney={bill.hasAppliedMoney}
+          />
+        </div>
       </div>
     </div>
   );

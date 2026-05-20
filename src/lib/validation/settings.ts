@@ -182,6 +182,39 @@ export type OverShippingPolicyValue =
   OverShippingPolicyOnDisk['policy'];
 
 // ---------------------------------------------------------------------------
+// company_info
+// ---------------------------------------------------------------------------
+// Shape on disk: { name, addressLine1, addressLine2, city, region,
+//                  postalCode, country, phone, email, logoUrl } — every
+// field string | null. Drives the header (logo + name + address + contact)
+// on every printable document. Empty strings normalize to null so a blank
+// field round-trips cleanly. Read at the document boundary via
+// getCompanyInfo(db); a missing row falls back to defaults.
+
+const companyField = z
+  .union([z.string(), z.null()])
+  .transform((v) => {
+    if (v == null) return null;
+    const s = v.trim();
+    return s === '' ? null : s;
+  });
+
+export const companyInfoValueSchema = z.object({
+  name: companyField,
+  addressLine1: companyField,
+  addressLine2: companyField,
+  city: companyField,
+  region: companyField,
+  postalCode: companyField,
+  country: companyField,
+  phone: companyField,
+  email: companyField,
+  logoUrl: companyField,
+});
+
+export type CompanyInfoOnDisk = z.infer<typeof companyInfoValueSchema>;
+
+// ---------------------------------------------------------------------------
 // Per-key registry — useful for a future generic admin UI that needs to
 // validate any key by name. For now only one entry; later admin settings
 // (late_fee_default, ar_hold_default, etc.) get added here as they ship.
@@ -193,6 +226,7 @@ export const SETTING_KEYS = {
   TIER_DISCOUNT_PERCENTAGES: 'tier_discount_percentages',
   COMMISSION_PAYOUT_CYCLE: 'commission_payout_cycle',
   OVER_SHIPPING_POLICY: 'over_shipping_policy',
+  COMPANY_INFO: 'company_info',
 } as const;
 
 export const settingValueSchemas: ReadonlyMap<string, z.ZodTypeAny> = new Map<
@@ -204,4 +238,5 @@ export const settingValueSchemas: ReadonlyMap<string, z.ZodTypeAny> = new Map<
   [SETTING_KEYS.TIER_DISCOUNT_PERCENTAGES, tierDiscountPercentagesValueSchema],
   [SETTING_KEYS.COMMISSION_PAYOUT_CYCLE, commissionPayoutCycleValueSchema],
   [SETTING_KEYS.OVER_SHIPPING_POLICY, overShippingPolicyValueSchema],
+  [SETTING_KEYS.COMPANY_INFO, companyInfoValueSchema],
 ]);

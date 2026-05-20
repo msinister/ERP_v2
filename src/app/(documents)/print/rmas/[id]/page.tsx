@@ -3,6 +3,7 @@ import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { getCompanyInfo, type CompanyInfo } from '@/lib/company-info';
 import { formatCurrency } from '@/lib/format';
+import { resolveLineImageUrl } from '@/lib/products/lineItemImage';
 import {
   getRestockingFeeDefault,
   resolveRestockingFee,
@@ -11,6 +12,10 @@ import { DocumentShell } from '../../../_components/document-shell';
 import { DocumentHeader } from '../../../_components/document-header';
 import { AddressBlock } from '../../../_components/address-block';
 import { TotalsFooter, type TotalsRow } from '../../../_components/totals-footer';
+import {
+  LineThumbnailCell,
+  LineThumbnailHead,
+} from '../../../_components/line-thumbnail';
 
 export const revalidate = 0;
 
@@ -50,7 +55,18 @@ export default async function RmaDocumentPage({
                   select: {
                     sku: true,
                     name: true,
-                    product: { select: { name: true } },
+                    imageUrl: true,
+                    product: {
+                      select: {
+                        name: true,
+                        images: {
+                          where: { isPrimary: true, deletedAt: null },
+                          select: { url: true },
+                          orderBy: { sortOrder: 'asc' },
+                          take: 1,
+                        },
+                      },
+                    },
                   },
                 },
               },
@@ -64,7 +80,7 @@ export default async function RmaDocumentPage({
   ]);
   if (!rma) notFound();
 
-  const company = getCompanyInfo();
+  const company = await getCompanyInfo(db);
   const shipping = rma.customer.addresses[0] ?? null;
 
   const zero = new Prisma.Decimal(0);
@@ -77,6 +93,7 @@ export default async function RmaDocumentPage({
       sku: l.invoiceLine.variant.sku,
       productName: l.invoiceLine.variant.product.name,
       variantName: l.invoiceLine.variant.name,
+      imageUrl: resolveLineImageUrl(l.invoiceLine.variant),
       description: l.invoiceLine.description,
       qty: l.qty,
       unitPrice: l.invoiceLine.unitPrice,
@@ -120,7 +137,11 @@ export default async function RmaDocumentPage({
   }
 
   return (
-    <DocumentShell backHref={`/rmas/${rma.id}`} backLabel={`RMA ${rma.number}`}>
+    <DocumentShell
+      backHref={`/rmas/${rma.id}`}
+      backLabel={`RMA ${rma.number}`}
+      thumbnailToggle
+    >
       <DocumentHeader
         company={company}
         title="Return Merchandise Authorization"
@@ -163,6 +184,7 @@ export default async function RmaDocumentPage({
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-border text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+              <LineThumbnailHead />
               <th className="py-2 pr-3 font-semibold">SKU</th>
               <th className="py-2 pr-3 font-semibold">Description</th>
               <th className="py-2 pr-3 text-right font-semibold">
@@ -175,10 +197,11 @@ export default async function RmaDocumentPage({
           <tbody>
             {lines.map((l) => (
               <tr key={l.id} className="border-b border-border align-top">
+                <LineThumbnailCell url={l.imageUrl} alt={l.productName} />
                 <td className="py-2 pr-3 font-mono text-xs">{l.sku}</td>
                 <td className="py-2 pr-3">
                   <div className="font-medium">{l.productName}</div>
-                  {l.variantName ? (
+                  {l.variantName && l.variantName !== l.productName ? (
                     <div className="text-xs text-muted-foreground">
                       {l.variantName}
                     </div>

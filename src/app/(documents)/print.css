@@ -6,6 +6,14 @@
    page-break protection.
    ============================================================================= */
 
+/* Thumbnail toggle: when the toolbar toggle adds `thumbs-hidden` to
+   <html>, collapse the line-item thumbnail column (header + cells).
+   A plain rule (not screen-only) so it applies to the live preview AND
+   to print output — toggled-off thumbnails never reach the printer. */
+.thumbs-hidden .doc-thumb {
+  display: none !important;
+}
+
 @media print {
   .no-print {
     display: none !important;

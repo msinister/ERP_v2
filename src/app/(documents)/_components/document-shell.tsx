@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { ChevronLeft, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PrintButton } from './print-button';
+import { ThumbnailToggle } from './thumbnail-toggle';
 
 // Wrapper for every printable document. On screen it shows a paper-ish
 // card with Back + Print buttons in a top bar; on print, the chrome
@@ -18,10 +19,14 @@ export function DocumentShell({
   backHref,
   backLabel,
   children,
+  // Show the thumbnail show/hide toggle in the toolbar. Only meaningful
+  // for documents that render a thumbnail column (line-item docs).
+  thumbnailToggle = false,
 }: {
   backHref: string;
   backLabel: string;
   children: ReactNode;
+  thumbnailToggle?: boolean;
 }) {
   return (
     <div className="mx-auto max-w-[8.5in] py-6">
@@ -34,10 +39,13 @@ export function DocumentShell({
           <ChevronLeft />
           {backLabel}
         </Button>
-        <PrintButton>
-          <Printer />
-          Print / Save PDF
-        </PrintButton>
+        <div className="flex items-center gap-2">
+          {thumbnailToggle ? <ThumbnailToggle /> : null}
+          <PrintButton>
+            <Printer />
+            Print / Save PDF
+          </PrintButton>
+        </div>
       </div>
       <div className="document-paper rounded-md border border-border bg-white p-8 text-sm text-foreground shadow-sm">
         {children}

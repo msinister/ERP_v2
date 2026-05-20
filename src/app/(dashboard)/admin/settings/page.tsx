@@ -15,6 +15,10 @@ import { TierDiscountForm } from './_components/tier-discount-form';
 import { CommissionCycleForm } from './_components/commission-cycle-form';
 import { NegativeInventoryForm } from './_components/negative-inventory-form';
 import { OverShippingPolicyForm } from './_components/over-shipping-policy-form';
+import {
+  CompanyInfoForm,
+  type CompanyInfoOnDisk,
+} from './_components/company-info-form';
 import type { OverShippingPolicyValue } from '@/lib/validation/settings';
 
 export const revalidate = 0;
@@ -70,6 +74,9 @@ export default async function AdminSettingsPage() {
     (byKey.get(SETTING_KEYS.OVER_SHIPPING_POLICY) as
       | OverShippingPolicyOnDisk
       | undefined) ?? null;
+  const companyInfo =
+    (byKey.get(SETTING_KEYS.COMPANY_INFO) as CompanyInfoOnDisk | undefined) ??
+    null;
 
   return (
     <div className="space-y-6">
@@ -122,6 +129,20 @@ export default async function AdminSettingsPage() {
             </CardContent>
           </Card>
         </div>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold text-muted-foreground">
+          Company
+        </h2>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Company info</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <CompanyInfoForm initial={companyInfo} />
+          </CardContent>
+        </Card>
       </section>
 
       <section className="space-y-3">

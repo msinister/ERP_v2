@@ -1,13 +1,21 @@
+import type { PrismaClient } from '@/generated/tenant';
+import {
+  SETTING_KEYS,
+  companyInfoValueSchema,
+  type CompanyInfoOnDisk,
+} from '@/lib/validation/settings';
+import { getSetting } from '@/server/services/settings';
+
 // =============================================================================
-// Per-tenant company info — sourced from env vars for the pilot. Each
-// deployed instance reads its own .env so company name / address /
-// contact info live with the tenant they describe. A follow-up phase
-// can move this into a Setting row for in-app editing without touching
-// any caller — only this helper changes.
+// Per-tenant company info — sourced from the `company_info` admin Setting.
 //
-// Every field defaults to a stable sentinel so a freshly provisioned
-// instance that hasn't set its env yet still renders documents
-// (with "Configure company info in .env" hints in the right spots).
+// Configured in Admin → Settings; read at the document boundary via
+// getCompanyInfo(db). A freshly provisioned instance that hasn't saved the
+// setting yet falls back to a stable default (with a "Set company name in
+// Admin → Settings" hint) so documents still render.
+//
+// Previously env-backed (COMPANY_NAME etc.); that dependency is removed —
+// the setting is the single source of truth.
 // =============================================================================
 
 export type CompanyInfo = {
@@ -26,25 +34,33 @@ export type CompanyInfo = {
   logoUrl: string | null;
 };
 
-const FALLBACK_NAME = 'Configure COMPANY_NAME in .env';
+const FALLBACK_NAME = 'Set company name in Admin → Settings';
 
-function trim(v: string | undefined): string | null {
-  if (v == null) return null;
-  const s = v.trim();
-  return s === '' ? null : s;
-}
+export async function getCompanyInfo(db: PrismaClient): Promise<CompanyInfo> {
+  let stored: CompanyInfoOnDisk | null = null;
+  try {
+    stored = await getSetting(
+      db,
+      SETTING_KEYS.COMPANY_INFO,
+      companyInfoValueSchema,
+    );
+  } catch {
+    // Row missing (not configured yet) or corrupt — fall back to defaults
+    // so documents always render. The schema already trims/normalizes
+    // empty fields to null when present.
+    stored = null;
+  }
 
-export function getCompanyInfo(): CompanyInfo {
   return {
-    name: trim(process.env.COMPANY_NAME) ?? FALLBACK_NAME,
-    addressLine1: trim(process.env.COMPANY_ADDRESS_LINE1),
-    addressLine2: trim(process.env.COMPANY_ADDRESS_LINE2),
-    city: trim(process.env.COMPANY_CITY),
-    region: trim(process.env.COMPANY_REGION),
-    postalCode: trim(process.env.COMPANY_POSTAL),
-    country: trim(process.env.COMPANY_COUNTRY),
-    phone: trim(process.env.COMPANY_PHONE),
-    email: trim(process.env.COMPANY_EMAIL),
-    logoUrl: trim(process.env.COMPANY_LOGO_URL),
+    name: stored?.name ?? FALLBACK_NAME,
+    addressLine1: stored?.addressLine1 ?? null,
+    addressLine2: stored?.addressLine2 ?? null,
+    city: stored?.city ?? null,
+    region: stored?.region ?? null,
+    postalCode: stored?.postalCode ?? null,
+    country: stored?.country ?? null,
+    phone: stored?.phone ?? null,
+    email: stored?.email ?? null,
+    logoUrl: stored?.logoUrl ?? null,
   };
 }

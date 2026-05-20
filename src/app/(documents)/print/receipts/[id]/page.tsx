@@ -1,25 +1,21 @@
 import { notFound } from 'next/navigation';
+import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { getCompanyInfo } from '@/lib/company-info';
-import { formatStatusLabel } from '@/lib/format';
+import { formatCurrency, formatStatusLabel } from '@/lib/format';
 import { resolveLineImageUrl } from '@/lib/products/lineItemImage';
-import { DocumentShell } from '../../../../_components/document-shell';
-import { DocumentHeader } from '../../../../_components/document-header';
-import { AddressBlock } from '../../../../_components/address-block';
+import { DocumentShell } from '../../../_components/document-shell';
+import { DocumentHeader } from '../../../_components/document-header';
+import { AddressBlock } from '../../../_components/address-block';
+import { TotalsFooter, type TotalsRow } from '../../../_components/totals-footer';
 import {
   LineThumbnailCell,
   LineThumbnailHead,
-} from '../../../../_components/line-thumbnail';
+} from '../../../_components/line-thumbnail';
 
 export const revalidate = 0;
 
-// Internal warehouse check-in sheet. NO prices. Printed when a shipment
-// arrives so staff can hand-count actual received quantities and flag
-// condition against what the receipt expects. Expected Qty is the
-// receipt line's drafted qty; Received Qty + condition are blank for
-// handwriting.
-
-export default async function CheckInSheetDocumentPage({
+export default async function ReceiptDocumentPage({
   params,
 }: {
   params: Promise<{ id: string }>;
@@ -52,11 +48,10 @@ export default async function CheckInSheetDocumentPage({
               },
             },
           },
+          warehouse: { select: { code: true } },
           purchaseOrderLine: {
             select: {
-              purchaseOrder: {
-                select: { number: true, deletedAt: true },
-              },
+              purchaseOrder: { select: { number: true, deletedAt: true } },
             },
           },
         },
@@ -68,8 +63,6 @@ export default async function CheckInSheetDocumentPage({
 
   const company = await getCompanyInfo(db);
 
-  // Distinct PO numbers across the receipt's lines (a single shipment
-  // can cover multiple POs).
   const poNumbers = Array.from(
     new Set(
       receipt.lines
@@ -81,6 +74,15 @@ export default async function CheckInSheetDocumentPage({
     ),
   );
 
+  const total = receipt.lines.reduce(
+    (acc, l) => acc.plus(l.qtyReceived.times(l.unitCost)),
+    new Prisma.Decimal(0),
+  );
+
+  const totalsRows: TotalsRow[] = [
+    { label: 'Receipt total', value: total.toString(), tone: 'emphasis' },
+  ];
+
   return (
     <DocumentShell
       backHref={`/receipts/${receipt.id}`}
@@ -89,10 +91,13 @@ export default async function CheckInSheetDocumentPage({
     >
       <DocumentHeader
         company={company}
-        title="Check-In Sheet"
+        title="Receipt"
         metadata={[
           { label: 'Receipt #', value: receipt.number },
-          { label: 'Date', value: formatDate(receipt.createdAt) },
+          {
+            label: 'Date',
+            value: formatDate(receipt.receivedAt ?? receipt.createdAt),
+          },
           { label: 'Status', value: formatStatusLabel(receipt.status) },
           { label: 'Warehouse', value: receipt.warehouse.code },
         ]}
@@ -120,10 +125,10 @@ export default async function CheckInSheetDocumentPage({
               <LineThumbnailHead />
               <th className="py-2 pr-3 font-semibold">SKU</th>
               <th className="py-2 pr-3 font-semibold">Description</th>
-              <th className="py-2 pr-3 text-right font-semibold">Expected</th>
-              <th className="py-2 pr-3 text-right font-semibold">Received</th>
-              <th className="py-2 pr-3 font-semibold">Condition</th>
-              <th className="py-2 font-semibold">Notes</th>
+              <th className="py-2 pr-3 font-semibold">Warehouse</th>
+              <th className="py-2 pr-3 text-right font-semibold">Qty received</th>
+              <th className="py-2 pr-3 text-right font-semibold">Unit cost</th>
+              <th className="py-2 text-right font-semibold">Line total</th>
             </tr>
           </thead>
           <tbody>
@@ -133,8 +138,8 @@ export default async function CheckInSheetDocumentPage({
                   url={resolveLineImageUrl(l.variant)}
                   alt={l.variant.product.name}
                 />
-                <td className="py-5 pr-3 font-mono text-xs">{l.variant.sku}</td>
-                <td className="py-5 pr-3">
+                <td className="py-2 pr-3 font-mono text-xs">{l.variant.sku}</td>
+                <td className="py-2 pr-3">
                   <div className="font-medium">{l.variant.product.name}</div>
                   {l.variant.name && l.variant.name !== l.variant.product.name ? (
                     <div className="text-xs text-muted-foreground">
@@ -142,31 +147,17 @@ export default async function CheckInSheetDocumentPage({
                     </div>
                   ) : null}
                 </td>
-                <td className="py-5 pr-3 text-right tabular-nums">
+                <td className="py-2 pr-3 font-mono text-xs text-muted-foreground">
+                  {l.warehouse.code}
+                </td>
+                <td className="py-2 pr-3 text-right tabular-nums font-medium">
                   {formatQty(l.qtyReceived)}
                 </td>
-                {/* Blank cell for handwriting the physical count. */}
-                <td className="py-5 pr-3 text-right">
-                  <span className="inline-block min-w-[60px] border-b border-foreground/40">
-                    &nbsp;
-                  </span>
+                <td className="py-2 pr-3 text-right tabular-nums">
+                  {formatCurrency(l.unitCost)}
                 </td>
-                <td className="py-5 pr-3">
-                  <div className="flex flex-col gap-1.5 text-xs">
-                    <span className="flex items-center gap-1.5">
-                      <span className="inline-block size-3.5 border border-foreground/50" />
-                      Good
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="inline-block size-3.5 border border-foreground/50" />
-                      Damaged
-                    </span>
-                  </div>
-                </td>
-                <td className="py-5">
-                  <span className="block min-h-[1.25rem] border-b border-foreground/30">
-                    &nbsp;
-                  </span>
+                <td className="py-2 text-right tabular-nums font-medium">
+                  {formatCurrency(l.qtyReceived.times(l.unitCost))}
                 </td>
               </tr>
             ))}
@@ -174,26 +165,23 @@ export default async function CheckInSheetDocumentPage({
         </table>
       </section>
 
-      <section className="mt-12 grid grid-cols-1 gap-8 sm:grid-cols-2">
-        <SignatureLine label="Received by" />
-        <SignatureLine label="Date received" />
+      <section className="mt-6">
+        <TotalsFooter rows={totalsRows} />
       </section>
+
+      {receipt.notes ? (
+        <section className="mt-8 border-t border-border pt-4">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Notes
+          </div>
+          <p className="whitespace-pre-line text-sm">{receipt.notes}</p>
+        </section>
+      ) : null}
     </DocumentShell>
   );
 }
 
-function SignatureLine({ label }: { label: string }) {
-  return (
-    <div>
-      <div className="h-8 border-b border-foreground/50" />
-      <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-    </div>
-  );
-}
-
-function formatQty(qty: { toString(): string }): string {
+function formatQty(qty: Prisma.Decimal): string {
   const s = qty.toString();
   if (!s.includes('.')) return s;
   return s.replace(/\.?0+$/, '');

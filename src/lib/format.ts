@@ -21,13 +21,15 @@ export function formatCurrency(
       : typeof d === 'string'
         ? new Prisma.Decimal(d).toFixed(2)
         : d.toFixed(2);
-  return (
-    '$' +
-    Number(fixed).toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-  );
+  // Place the minus sign before the currency symbol ("-$29.97"), not
+  // between them ("$-29.97"). Format the magnitude, then prefix.
+  const num = Number(fixed);
+  const negative = num < 0;
+  const body = Math.abs(num).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return (negative ? '-$' : '$') + body;
 }
 
 export function formatCount(n: number): string {

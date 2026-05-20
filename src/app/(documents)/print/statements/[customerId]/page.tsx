@@ -8,7 +8,7 @@ import {
   Prisma,
 } from '@/generated/tenant';
 import { db } from '@/lib/db';
-import { getCompanyInfo } from '@/lib/company-info';
+import { getCompanyInfo, type CompanyInfo } from '@/lib/company-info';
 import { formatCurrency } from '@/lib/format';
 import { agingForCustomer } from '@/server/services/ar';
 import { DocumentShell } from '../../../_components/document-shell';
@@ -54,7 +54,7 @@ export default async function CustomerStatementDocumentPage({
   });
   if (!customer) notFound();
 
-  const company = getCompanyInfo();
+  const company = await getCompanyInfo(db);
   const billing = customer.addresses[0] ?? null;
   const billToBlock = (
     <AddressBlock
@@ -125,7 +125,7 @@ async function OpenBalanceStatement({
 }: {
   customerId: string;
   customerCode: string;
-  company: ReturnType<typeof getCompanyInfo>;
+  company: CompanyInfo;
   billToBlock: ReactNode;
 }) {
   const asOf = new Date();
@@ -300,7 +300,7 @@ async function ActivityStatement({
 }: {
   customerId: string;
   customerCode: string;
-  company: ReturnType<typeof getCompanyInfo>;
+  company: CompanyInfo;
   billToBlock: ReactNode;
   fromRaw: string | undefined;
   toRaw: string | undefined;

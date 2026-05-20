@@ -61,7 +61,7 @@ export default async function PaymentReceiptDocumentPage({
   });
   if (!payment) notFound();
 
-  const company = getCompanyInfo();
+  const company = await getCompanyInfo(db);
   const billing = payment.customer.addresses[0] ?? null;
   const unapplied = payment.amount.minus(payment.appliedAmount);
 

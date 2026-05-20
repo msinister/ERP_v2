@@ -2,9 +2,14 @@ import { notFound } from 'next/navigation';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { getCompanyInfo } from '@/lib/company-info';
+import { resolveLineImageUrl } from '@/lib/products/lineItemImage';
 import { DocumentShell } from '../../../_components/document-shell';
 import { DocumentHeader } from '../../../_components/document-header';
 import { AddressBlock } from '../../../_components/address-block';
+import {
+  LineThumbnailCell,
+  LineThumbnailHead,
+} from '../../../_components/line-thumbnail';
 
 export const revalidate = 0;
 
@@ -38,7 +43,18 @@ export default async function PackingSlipDocumentPage({
             select: {
               sku: true,
               name: true,
-              product: { select: { name: true } },
+              imageUrl: true,
+              product: {
+                select: {
+                  name: true,
+                  images: {
+                    where: { isPrimary: true, deletedAt: null },
+                    select: { url: true },
+                    orderBy: { sortOrder: 'asc' },
+                    take: 1,
+                  },
+                },
+              },
             },
           },
         },
@@ -48,12 +64,13 @@ export default async function PackingSlipDocumentPage({
   });
   if (!so) notFound();
 
-  const company = getCompanyInfo();
+  const company = await getCompanyInfo(db);
 
   return (
     <DocumentShell
       backHref={`/sales-orders/${so.id}`}
       backLabel={`SO ${so.number}`}
+      thumbnailToggle
     >
       <DocumentHeader
         company={company}
@@ -95,6 +112,7 @@ export default async function PackingSlipDocumentPage({
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-border text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+              <LineThumbnailHead />
               <th className="py-2 pr-3 font-semibold">SKU</th>
               <th className="py-2 pr-3 font-semibold">Description</th>
               <th className="py-2 text-right font-semibold">Qty</th>
@@ -103,10 +121,14 @@ export default async function PackingSlipDocumentPage({
           <tbody>
             {so.lines.map((l) => (
               <tr key={l.id} className="border-b border-border align-top">
+                <LineThumbnailCell
+                  url={resolveLineImageUrl(l.variant)}
+                  alt={l.variant.product.name}
+                />
                 <td className="py-2 pr-3 font-mono text-xs">{l.variant.sku}</td>
                 <td className="py-2 pr-3">
                   <div className="font-medium">{l.variant.product.name}</div>
-                  {l.variant.name ? (
+                  {l.variant.name && l.variant.name !== l.variant.product.name ? (
                     <div className="text-xs text-muted-foreground">
                       {l.variant.name}
                     </div>
