@@ -3,18 +3,24 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency } from '@/lib/format';
 import { TabShell } from './tab-shell';
 import { TagEditor } from './tag-editor';
-import { VendorEditor, type VendorOption } from './vendor-editor';
+import {
+  VendorEditor,
+  type VendorOption,
+  type PaymentTermOption,
+} from './vendor-editor';
 
 export function OverviewTab({
   product,
   tags,
   vendor,
   vendors,
+  paymentTerms,
 }: {
   product: Product;
   tags: Array<{ id: string; name: string }>;
   vendor: { id: string; name: string } | null;
   vendors: VendorOption[];
+  paymentTerms: PaymentTermOption[];
 }) {
   return (
     <TabShell>
@@ -37,6 +43,7 @@ export function OverviewTab({
                   productId={product.id}
                   initialVendor={vendor}
                   vendors={vendors}
+                  paymentTerms={paymentTerms}
                 />
               </dd>
             </div>

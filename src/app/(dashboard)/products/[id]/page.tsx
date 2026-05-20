@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { computeWac, getLastPurchaseCost } from '@/server/services/wac';
 import { listTagsForProduct } from '@/server/services/productTags';
 import { listVendors } from '@/server/services/vendors';
+import { listPaymentTerms } from '@/server/services/paymentTerms';
 import {
   Tabs,
   TabsContent,
@@ -286,6 +287,14 @@ export default async function ProductDetailPage({
     .filter((v) => v.type !== 'SERVICE')
     .map((v) => ({ id: v.id, code: v.code, name: v.name }));
 
+  // Payment terms for the inline "create vendor" dialog (required field).
+  const paymentTermOptions = (
+    await listPaymentTerms(db, { active: true })
+  ).map((t) => ({
+    id: t.id,
+    label: t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
+  }));
+
   return (
     <div className="space-y-6">
       <ProductHeader product={product} hasBom={bomLineRows.length > 0} />
@@ -343,6 +352,7 @@ export default async function ProductDetailPage({
                 : null
             }
             vendors={vendorOptions}
+            paymentTerms={paymentTermOptions}
           />
         </TabsContent>
         <TabsContent value="images">
