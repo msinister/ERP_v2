@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
+  Info,
   ChevronRight,
   ChevronLeft,
 } from 'lucide-react';
@@ -695,10 +696,20 @@ function RowStatusBadge({ v, mode }: { v: RowValidation; mode: ImportMode }) {
     );
   }
   if (v.status === 'exists') {
+    // Update mode: existing rows are an expected, informational state —
+    // render neutral/blue, not the orange "warning" used for skip.
+    if (mode === 'update') {
+      return (
+        <span className="inline-flex items-center gap-1.5 text-xs text-blue-600">
+          <Info className="size-3.5" />
+          Will update
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-1.5 text-xs text-amber-600">
         <AlertTriangle className="size-3.5" />
-        Already exists — will {mode === 'update' ? 'update' : 'skip'}
+        Already exists — will skip
       </span>
     );
   }
