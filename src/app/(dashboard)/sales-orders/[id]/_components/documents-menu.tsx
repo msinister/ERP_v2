@@ -48,7 +48,7 @@ export function DocumentsMenu({
         <DropdownMenuItem
           render={
             <Link
-              href={`/documents/sales-order/${salesOrderId}`}
+              href={`/print/sales-order/${salesOrderId}`}
               target="_blank"
               rel="noopener noreferrer"
             />
@@ -62,7 +62,7 @@ export function DocumentsMenu({
           <DropdownMenuItem
             render={
               <Link
-                href={`/documents/pick-sheet/${salesOrderId}`}
+                href={`/print/pick-sheet/${salesOrderId}`}
                 target="_blank"
                 rel="noopener noreferrer"
               />
@@ -77,7 +77,7 @@ export function DocumentsMenu({
           <DropdownMenuItem
             render={
               <Link
-                href={`/documents/packing-slip/${salesOrderId}`}
+                href={`/print/packing-slip/${salesOrderId}`}
                 target="_blank"
                 rel="noopener noreferrer"
               />
@@ -92,7 +92,7 @@ export function DocumentsMenu({
           <DropdownMenuItem
             render={
               <Link
-                href={`/documents/invoice/${invoice.id}`}
+                href={`/print/invoice/${invoice.id}`}
                 target="_blank"
                 rel="noopener noreferrer"
               />

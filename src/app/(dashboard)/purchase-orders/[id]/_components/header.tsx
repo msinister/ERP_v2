@@ -58,7 +58,7 @@ export function PurchaseOrderHeader({ po }: PurchaseOrderHeaderProps) {
             size="sm"
             render={
               <Link
-                href={`/documents/purchase-order/${po.id}`}
+                href={`/print/purchase-order/${po.id}`}
                 target="_blank"
                 rel="noopener noreferrer"
               />

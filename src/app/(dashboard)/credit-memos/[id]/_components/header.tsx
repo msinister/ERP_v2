@@ -1,6 +1,7 @@
 import Link from 'next/link';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Printer } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { LifecycleActions } from './lifecycle-actions';
 
@@ -76,13 +77,29 @@ export function CreditMemoHeader({ cm }: CreditMemoHeaderProps) {
             voidedAt={cm.voidedAt}
           />
         </div>
-        <LifecycleActions
-          creditMemoId={cm.id}
-          creditMemoNumber={cm.number}
-          status={cm.status}
-          hasApplications={cm.hasApplications}
-          isFromRma={!!cm.rma}
-        />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            render={
+              <Link
+                href={`/print/credit-memos/${cm.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              />
+            }
+          >
+            <Printer />
+            Print
+          </Button>
+          <LifecycleActions
+            creditMemoId={cm.id}
+            creditMemoNumber={cm.number}
+            status={cm.status}
+            hasApplications={cm.hasApplications}
+            isFromRma={!!cm.rma}
+          />
+        </div>
       </div>
     </div>
   );

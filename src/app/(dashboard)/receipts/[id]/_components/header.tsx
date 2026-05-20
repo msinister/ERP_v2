@@ -1,6 +1,7 @@
 import Link from 'next/link';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Printer } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { formatStatusLabel } from '@/lib/format';
 import { ReceiptLifecycleActions } from './lifecycle-actions';
 
@@ -49,11 +50,27 @@ export function ReceiptHeader({ receipt }: ReceiptHeaderProps) {
             status={receipt.status}
           />
         </div>
-        <ReceiptLifecycleActions
-          receiptId={receipt.id}
-          receiptNumber={receipt.number}
-          status={receipt.status}
-        />
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            render={
+              <Link
+                href={`/print/receipts/${receipt.id}/check-in`}
+                target="_blank"
+                rel="noopener noreferrer"
+              />
+            }
+          >
+            <Printer />
+            Check-in sheet
+          </Button>
+          <ReceiptLifecycleActions
+            receiptId={receipt.id}
+            receiptNumber={receipt.number}
+            status={receipt.status}
+          />
+        </div>
       </div>
     </div>
   );

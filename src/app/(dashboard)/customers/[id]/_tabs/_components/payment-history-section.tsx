@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Printer } from 'lucide-react';
 import { Prisma } from '@/generated/tenant';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -71,6 +72,7 @@ export function PaymentHistorySection({
                   <TableHead>Applied to</TableHead>
                   <TableHead>Notes</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead className="w-0" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -117,6 +119,18 @@ export function PaymentHistorySection({
                             {p.reversedReason}
                           </div>
                         ) : null}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Link
+                          href={`/print/payments/${p.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center text-muted-foreground hover:text-foreground"
+                          aria-label={`Print receipt for payment ${p.number}`}
+                          title="Print receipt"
+                        >
+                          <Printer className="size-4" />
+                        </Link>
                       </TableCell>
                     </TableRow>
                   );

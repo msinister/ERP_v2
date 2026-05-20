@@ -1,6 +1,7 @@
 import Link from 'next/link';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Printer } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/shared/status-badge';
 
 export type RmaHeaderProps = {
@@ -79,6 +80,20 @@ export function RmaHeader({ rma }: RmaHeaderProps) {
             rejectedAt={rma.rejectedAt}
           />
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          render={
+            <Link
+              href={`/print/rmas/${rma.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            />
+          }
+        >
+          <Printer />
+          Print
+        </Button>
       </div>
     </div>
   );

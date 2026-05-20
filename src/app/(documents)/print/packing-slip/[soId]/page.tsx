@@ -2,9 +2,9 @@ import { notFound } from 'next/navigation';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { getCompanyInfo } from '@/lib/company-info';
-import { DocumentShell } from '../../_components/document-shell';
-import { DocumentHeader } from '../../_components/document-header';
-import { AddressBlock } from '../../_components/address-block';
+import { DocumentShell } from '../../../_components/document-shell';
+import { DocumentHeader } from '../../../_components/document-header';
+import { AddressBlock } from '../../../_components/address-block';
 
 export const revalidate = 0;
 

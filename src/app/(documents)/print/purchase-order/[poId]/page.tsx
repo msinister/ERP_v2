@@ -3,10 +3,10 @@ import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { getCompanyInfo } from '@/lib/company-info';
 import { formatCurrency, formatStatusLabel } from '@/lib/format';
-import { DocumentShell } from '../../_components/document-shell';
-import { DocumentHeader } from '../../_components/document-header';
-import { AddressBlock } from '../../_components/address-block';
-import { TotalsFooter, type TotalsRow } from '../../_components/totals-footer';
+import { DocumentShell } from '../../../_components/document-shell';
+import { DocumentHeader } from '../../../_components/document-header';
+import { AddressBlock } from '../../../_components/address-block';
+import { TotalsFooter, type TotalsRow } from '../../../_components/totals-footer';
 
 export const revalidate = 0;
 
