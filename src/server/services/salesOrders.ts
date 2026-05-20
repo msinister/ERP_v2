@@ -43,6 +43,7 @@ import {
   createSalesOrderInputSchema,
   removeSalesOrderLineInputSchema,
   reopenSalesOrderInputSchema,
+  setSalesOrderSalesRepInputSchema,
   updateSalesOrderInputSchema,
   updateSalesOrderLineFieldsInputSchema,
   updateSalesOrderLineQtyShippedInputSchema,
@@ -52,6 +53,7 @@ import {
   type CreateSalesOrderInput,
   type RemoveSalesOrderLineInput,
   type ReopenSalesOrderInput,
+  type SetSalesOrderSalesRepInput,
   type UpdateSalesOrderInput,
   type UpdateSalesOrderLineFieldsInput,
   type UpdateSalesOrderLineQtyShippedInput,
@@ -274,6 +276,13 @@ export async function updateSalesOrder(
     if ('shippingAddress' in data) updateData.shippingAddress = data.shippingAddress ?? null;
     if ('customerNotes' in data) updateData.customerNotes = data.customerNotes ?? null;
     if ('internalNotes' in data) updateData.internalNotes = data.internalNotes ?? null;
+    // Per-order rep override. null clears it (inherit customer's rep).
+    // A bad id surfaces as a connect failure → 400 at the route.
+    if ('salesRepId' in data) {
+      updateData.salesRep = data.salesRepId
+        ? { connect: { id: data.salesRepId } }
+        : { disconnect: true };
+    }
 
     if (data.lines) {
       // DRAFT-only wholesale replace. Resolve each line's price afresh.
@@ -323,6 +332,67 @@ export async function updateSalesOrder(
       entityId: id,
       before,
       after,
+      ctx,
+    });
+    return after;
+  });
+}
+
+/**
+ * Change (or clear) the per-order sales-rep override. Unlike
+ * updateSalesOrder (DRAFT-only), this is allowed on DRAFT, CONFIRMED, and
+ * DISPATCHED — operators routinely reassign in-flight orders. CLOSED and
+ * CANCELLED are rejected: a closed order may already have accrued
+ * commission to the old rep, and reassigning would silently mis-credit it.
+ *
+ * salesRepId = null clears the override → the order inherits the
+ * customer's rep again. A non-null id must reference a live SalesRep.
+ * Effective-rep readers (commission accrual, "view own" scoping, list +
+ * detail display) resolve `so.salesRepId ?? customer.salesRepId`.
+ */
+export async function setSalesOrderSalesRep(
+  db: PrismaClient,
+  id: string,
+  input: SetSalesOrderSalesRepInput,
+  ctx?: AuditContext,
+): Promise<SalesOrder> {
+  const data = setSalesOrderSalesRepInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    const before = await tx.salesOrder.findUnique({
+      where: { id },
+      select: { id: true, status: true, salesRepId: true, deletedAt: true },
+    });
+    if (!before || before.deletedAt) {
+      throw new Error(`SalesOrder not found: ${id}`);
+    }
+    if (
+      before.status === SalesOrderStatus.CLOSED ||
+      before.status === SalesOrderStatus.CANCELLED
+    ) {
+      throw new Error(
+        `Cannot change the sales rep on a ${before.status} order`,
+      );
+    }
+    if (data.salesRepId) {
+      const rep = await tx.salesRep.findFirst({
+        where: { id: data.salesRepId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!rep) throw new Error('Sales rep not found');
+    }
+
+    const after = await tx.salesOrder.update({
+      where: { id },
+      data: data.salesRepId
+        ? { salesRep: { connect: { id: data.salesRepId } } }
+        : { salesRep: { disconnect: true } },
+    });
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'SalesOrder',
+      entityId: id,
+      before: { salesRepId: before.salesRepId },
+      after: { salesRepId: after.salesRepId },
       ctx,
     });
     return after;
@@ -1783,7 +1853,16 @@ function salesOrderWhere(
     deletedAt: null,
     ...(status ? { status } : {}),
     ...(customerId ? { customerId } : {}),
-    ...(salesRepId ? { customer: { salesRepId } } : {}),
+    // Filter by EFFECTIVE rep: orders explicitly overridden to this rep,
+    // OR orders with no override whose customer's rep is this rep.
+    ...(salesRepId
+      ? {
+          OR: [
+            { salesRepId },
+            { salesRepId: null, customer: { salesRepId } },
+          ],
+        }
+      : {}),
     ...(dateClause ? { orderDate: dateClause } : {}),
     ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
   };

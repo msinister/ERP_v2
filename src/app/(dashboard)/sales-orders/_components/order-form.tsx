@@ -46,6 +46,11 @@ import {
 
 export type CustomerOption = { id: string; code: string; name: string };
 export type WarehouseOption = { id: string; code: string; name: string };
+export type SalesRepOption = { id: string; name: string };
+
+// Sentinel for "inherit the customer's rep" (Select can't use '' values).
+// Maps to salesRepId: null on submit.
+const NO_REP = '__inherit__';
 // inventoryByWarehouse keys onHand/reserved by warehouseId so the
 // LineRow can show QOH + available for the current SO warehouse in
 // the SKU dropdown. Variants without inventory rows for the warehouse
@@ -129,6 +134,9 @@ const formSchema = z
     orderDiscountAmount: decimalStr,
     shippingAmount: decimalStr,
     handlingAmount: decimalStr,
+    // Per-order rep override (edit mode only). NO_REP sentinel = inherit
+    // the customer's rep; the submit handler maps it to null.
+    salesRepId: z.string().optional(),
     lines: z
       .array(lineSchema)
       .min(1, 'At least one line is required'),
@@ -161,6 +169,7 @@ const DEFAULT_VALUES: OrderFormValues = {
   orderDiscountAmount: '',
   shippingAmount: '',
   handlingAmount: '',
+  salesRepId: NO_REP,
   lines: [emptyLine()],
 };
 
@@ -217,12 +226,15 @@ export function OrderForm({
   customers,
   warehouses,
   variants,
+  salesReps = [],
   defaultValues,
 }: {
   mode: OrderFormMode;
   customers: CustomerOption[];
   warehouses: WarehouseOption[];
   variants: VariantOption[];
+  // Active reps for the edit-mode rep override picker. Omitted on create.
+  salesReps?: SalesRepOption[];
   defaultValues?: Partial<OrderFormValues>;
 }) {
   const router = useRouter();
@@ -297,7 +309,15 @@ export function OrderForm({
             : (() => {
                 const { customerId: _c, ...rest } = payload;
                 void _c;
-                return rest;
+                // Edit-only: include the per-order rep override. NO_REP
+                // sentinel clears it (inherit the customer's rep).
+                return {
+                  ...rest,
+                  salesRepId:
+                    values.salesRepId && values.salesRepId !== NO_REP
+                      ? values.salesRepId
+                      : null,
+                };
               })();
         const res = await fetch(endpoint, {
           method,
@@ -434,6 +454,45 @@ export function OrderForm({
               <FieldError errors={[errors.warehouseId]} />
             </Field>
           </div>
+          {mode.kind === 'edit' ? (
+            <div className="mt-4 md:max-w-[calc(50%-0.5rem)]">
+              <Field>
+                <FieldLabel htmlFor="salesRepId">Sales rep</FieldLabel>
+                <Controller
+                  control={control}
+                  name="salesRepId"
+                  render={({ field }) => (
+                    <Select
+                      value={field.value || NO_REP}
+                      onValueChange={field.onChange}
+                    >
+                      <SelectTrigger id="salesRepId" className="w-full">
+                        <SelectValue>
+                          {(v) =>
+                            !v || v === NO_REP
+                              ? 'Customer default'
+                              : (salesReps.find((r) => r.id === v)?.name ?? v)
+                          }
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NO_REP}>Customer default</SelectItem>
+                        {salesReps.map((r) => (
+                          <SelectItem key={r.id} value={r.id}>
+                            {r.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Overrides the rep for this order only — the customer&apos;s
+                  default is unchanged.
+                </p>
+              </Field>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 

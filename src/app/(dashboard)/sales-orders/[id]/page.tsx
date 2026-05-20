@@ -118,10 +118,33 @@ export default async function SalesOrderDetailPage({
   });
   if (!so) notFound();
 
-  const salesRep = await db.salesRep.findUnique({
-    where: { id: so.customer.salesRepId },
-    select: { id: true, name: true },
-  });
+  // Effective rep = per-order override (so.salesRepId) when set, else the
+  // customer's default. Resolve names for both, plus the active-rep list
+  // for the inline picker.
+  const effectiveRepId = so.salesRepId ?? so.customer.salesRepId;
+  const [activeReps, repNameRows] = await Promise.all([
+    db.salesRep.findMany({
+      where: { active: true, deletedAt: null },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    }),
+    db.salesRep.findMany({
+      where: { id: { in: [effectiveRepId, so.customer.salesRepId] } },
+      select: { id: true, name: true },
+    }),
+  ]);
+  const repNameById = new Map(repNameRows.map((r) => [r.id, r.name]));
+  const salesRep = {
+    id: effectiveRepId,
+    name: repNameById.get(effectiveRepId) ?? '—',
+  };
+  const customerDefaultName = repNameById.get(so.customer.salesRepId) ?? null;
+  // The rep is reassignable until the order closes (post-close changes
+  // would affect already-accrued commission).
+  const repEditable =
+    so.status === 'DRAFT' ||
+    so.status === 'CONFIRMED' ||
+    so.status === 'DISPATCHED';
 
   // Fetch the tenant-wide over-shipping policy once per page render —
   // QtyShippedInput uses it to decide whether to save immediately,
@@ -371,6 +394,16 @@ export default async function SalesOrderDetailPage({
             }}
             warehouse={so.warehouse}
             salesRep={salesRep}
+            repEdit={
+              repEditable
+                ? {
+                    salesOrderId: so.id,
+                    reps: activeReps,
+                    overrideRepId: so.salesRepId,
+                    customerDefaultName,
+                  }
+                : null
+            }
           />
 
           {/* Payments & credits applied — only when the SO has a

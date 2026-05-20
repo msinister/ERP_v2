@@ -101,7 +101,8 @@ export default async function SalesOrdersPage({
     orderDate: so.orderDate,
     status: so.status,
     total: computeSalesOrderTotal(so),
-    salesRepName: repName.get(so.customer.salesRepId) ?? '—',
+    // Effective rep: per-order override when set, else the customer's rep.
+    salesRepName: repName.get(so.salesRepId ?? so.customer.salesRepId) ?? '—',
   }));
 
   return (

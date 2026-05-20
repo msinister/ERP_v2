@@ -1020,6 +1020,12 @@ model SalesOrder {
   number               String           @unique
   customerId           String
   warehouseId          String
+  // Per-order sales-rep override. NULL = inherit the customer's rep
+  // (customer.salesRepId) — the default. When set, THIS rep is the
+  // order's effective rep: it drives commission accrual, "view own"
+  // scoping, and display, without changing the customer's default. Set
+  // via setSalesOrderSalesRep (Draft/Confirmed/Dispatched only).
+  salesRepId           String?
   status               SalesOrderStatus @default(DRAFT)
   source               SalesOrderSource @default(STAFF)
   currency             String?          @default("USD")
@@ -1053,12 +1059,14 @@ model SalesOrder {
 
   customer  Customer         @relation(fields: [customerId], references: [id])
   warehouse Warehouse        @relation(fields: [warehouseId], references: [id])
+  salesRep  SalesRep?        @relation(fields: [salesRepId], references: [id])
   lines     SalesOrderLine[]
   invoice   Invoice?
 
   @@index([customerId, status])
   @@index([status, orderDate])
   @@index([warehouseId])
+  @@index([salesRepId])
   @@index([deletedAt])
 }
 
@@ -1281,6 +1289,10 @@ model SalesRep {
   customers          Customer[]
   commissionAccruals CommissionAccrual[]
   user               User?
+  // Sales orders whose rep was explicitly overridden to this rep
+  // (SalesOrder.salesRepId). Orders that inherit the customer's rep do
+  // NOT appear here.
+  salesOrders        SalesOrder[]
 }
 
 model CustomerAddress {

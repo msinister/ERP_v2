@@ -54,9 +54,16 @@ export function salesOrderScopeWhere(actor: Actor): Prisma.SalesOrderWhereInput 
   const mode = resolveScope(actor, SCOPE_PAIRS.salesOrders.all, SCOPE_PAIRS.salesOrders.own);
   if (mode === 'all') return {};
   if (mode === 'own') {
-    return actor.salesRepId
-      ? { customer: { salesRepId: actor.salesRepId } }
-      : { id: MATCH_NONE };
+    if (!actor.salesRepId) return { id: MATCH_NONE };
+    // Effective rep: orders explicitly overridden to me, OR orders with
+    // no override whose customer's rep is me. Mirrors salesOrderWhere's
+    // rep filter so a reassigned order moves between reps' "view own".
+    return {
+      OR: [
+        { salesRepId: actor.salesRepId },
+        { salesRepId: null, customer: { salesRepId: actor.salesRepId } },
+      ],
+    };
   }
   return { id: MATCH_NONE };
 }

@@ -4,11 +4,26 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import {
+  SalesRepInlineEdit,
+  type RepOption,
+} from './sales-rep-inline-edit';
+
+// When `repEdit` is provided (Draft/Confirmed/Dispatched), the Sales rep
+// field becomes an inline searchable picker; otherwise it's static text
+// (Closed/Cancelled — changing the rep then would affect commission).
+export type SalesRepEdit = {
+  salesOrderId: string;
+  reps: RepOption[];
+  overrideRepId: string | null;
+  customerDefaultName: string | null;
+};
 
 export function SalesOrderInfoCard({
   so,
   warehouse,
   salesRep,
+  repEdit,
 }: {
   so: {
     customerPo: string | null;
@@ -22,7 +37,9 @@ export function SalesOrderInfoCard({
   };
   warehouse: { id: string; code: string; name: string } | null;
   salesRep: { id: string; name: string } | null;
+  repEdit?: SalesRepEdit | null;
 }) {
+  const repName = salesRep?.name ?? '—';
   return (
     <Card>
       <CardHeader>
@@ -30,10 +47,24 @@ export function SalesOrderInfoCard({
       </CardHeader>
       <CardContent>
         <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm md:grid-cols-2">
-          <Row
-            label="Sales rep"
-            value={salesRep?.name ?? '—'}
-          />
+          <div className="space-y-0.5">
+            <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+              Sales rep
+            </dt>
+            <dd className="text-sm">
+              {repEdit ? (
+                <SalesRepInlineEdit
+                  salesOrderId={repEdit.salesOrderId}
+                  reps={repEdit.reps}
+                  effectiveRepName={repName}
+                  overrideRepId={repEdit.overrideRepId}
+                  customerDefaultName={repEdit.customerDefaultName}
+                />
+              ) : (
+                repName
+              )}
+            </dd>
+          </div>
           <Row
             label="Warehouse"
             value={warehouse ? `${warehouse.name} (${warehouse.code})` : '—'}

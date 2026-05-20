@@ -44,10 +44,32 @@ import {
 // =============================================================================
 
 /**
+ * Resolve the EFFECTIVE rep for commission on a sales order: the
+ * per-order override (SalesOrder.salesRepId) when set, otherwise the
+ * customer's default rep. Pure + generic over the rep shape so it's unit-
+ * testable without a DB. Returns null when there's no SO or no rep.
+ */
+export function pickEffectiveCommissionRep<R>(
+  so:
+    | {
+        salesRepId: string | null;
+        salesRep: R | null;
+        customer: { salesRep: R | null };
+      }
+    | null
+    | undefined,
+): R | null {
+  if (!so) return null;
+  return so.salesRepId ? so.salesRep : so.customer.salesRep;
+}
+
+/**
  * Given a freshly-created CreditApplication of kind PAYMENT_TO_INVOICE,
- * accrue commission for the SO's sales rep if eligible. Returns the
- * accrual row, or null if the rep was ineligible (commissionEnabled
- * false, no percent, no basis) or the invoice has no SO link.
+ * accrue commission for the SO's EFFECTIVE sales rep if eligible (the
+ * per-order override when set, else the customer's default — see
+ * pickEffectiveCommissionRep). Returns the accrual row, or null if the
+ * rep was ineligible (commissionEnabled false, no percent, no basis) or
+ * the invoice has no SO link.
  *
  * Caller MUST gate on application kind: do not invoke for
  * CREDIT_TO_INVOICE applications (APPLIED_CREDIT method path).
@@ -66,8 +88,17 @@ export async function accrueCommissionForApplicationTx(
     return null;
   }
 
-  // Walk Invoice → SO → Customer → SalesRep. Pull cogsAtClose +
+  // Walk Invoice → SO → effective rep (per-order override, else the
+  // customer's default). Pull both rep candidates + cogsAtClose +
   // subtotal in the same query so MARGIN math is one round-trip.
+  const repSelect = {
+    select: {
+      id: true,
+      commissionEnabled: true,
+      commissionBasis: true,
+      commissionPercent: true,
+    },
+  } as const;
   const invoice = await tx.invoice.findUnique({
     where: { id: app.invoiceId },
     select: {
@@ -76,24 +107,15 @@ export async function accrueCommissionForApplicationTx(
       cogsAtClose: true,
       salesOrder: {
         select: {
-          customer: {
-            select: {
-              salesRep: {
-                select: {
-                  id: true,
-                  commissionEnabled: true,
-                  commissionBasis: true,
-                  commissionPercent: true,
-                },
-              },
-            },
-          },
+          salesRepId: true,
+          salesRep: repSelect,
+          customer: { select: { salesRep: repSelect } },
         },
       },
     },
   });
   if (!invoice) return null;
-  const rep = invoice.salesOrder?.customer?.salesRep;
+  const rep = pickEffectiveCommissionRep(invoice.salesOrder);
   if (!rep) return null;
   if (!rep.commissionEnabled) return null;
   if (rep.commissionBasis == null || rep.commissionPercent == null) return null;

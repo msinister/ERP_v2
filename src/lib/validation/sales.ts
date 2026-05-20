@@ -96,9 +96,21 @@ export const updateSalesOrderInputSchema = z
     shippingAddress: z.string().max(2000).nullable().optional(),
     customerNotes: z.string().max(2000).nullable().optional(),
     internalNotes: z.string().max(2000).nullable().optional(),
+    // Per-order rep override. null = clear the override (inherit the
+    // customer's rep). Absent = leave unchanged. DRAFT path only — the
+    // detail-page inline edit (Confirmed/Dispatched too) uses
+    // setSalesOrderSalesRepInputSchema instead.
+    salesRepId: z.string().min(1).nullable().optional(),
     lines: z.array(salesOrderLineInputSchema).min(1).optional(),
   })
   .superRefine(orderDiscountExclusive);
+
+// Dedicated sales-rep change for the SO detail inline edit. Works on
+// Draft/Confirmed/Dispatched (service gates Closed/Cancelled). null =
+// inherit the customer's rep.
+export const setSalesOrderSalesRepInputSchema = z.object({
+  salesRepId: z.string().min(1).nullable(),
+});
 
 export const cancelSalesOrderInputSchema = z.object({
   reason: z.string().min(1).max(2000),
@@ -204,6 +216,9 @@ export const removeSalesOrderLineInputSchema = z.object({
 export type SalesOrderLineInput = z.infer<typeof salesOrderLineInputSchema>;
 export type CreateSalesOrderInput = z.infer<typeof createSalesOrderInputSchema>;
 export type UpdateSalesOrderInput = z.infer<typeof updateSalesOrderInputSchema>;
+export type SetSalesOrderSalesRepInput = z.infer<
+  typeof setSalesOrderSalesRepInputSchema
+>;
 export type CancelSalesOrderInput = z.infer<typeof cancelSalesOrderInputSchema>;
 export type CloseSalesOrderInput = z.infer<typeof closeSalesOrderInputSchema>;
 export type CloseSalesOrderLineInput = z.infer<

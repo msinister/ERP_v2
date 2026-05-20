@@ -136,12 +136,17 @@ describe('salesOrderScopeWhere', () => {
     ).toEqual({});
   });
 
-  it('view_own with a linked rep → filter via customer relation', () => {
+  it('view_own with a linked rep → matches override OR inherited rep', () => {
     const a = actor({
       permissions: { 'sales_orders.view_own': true },
       salesRepId: 'rep-7',
     });
-    expect(salesOrderScopeWhere(a)).toEqual({ customer: { salesRepId: 'rep-7' } });
+    expect(salesOrderScopeWhere(a)).toEqual({
+      OR: [
+        { salesRepId: 'rep-7' },
+        { salesRepId: null, customer: { salesRepId: 'rep-7' } },
+      ],
+    });
   });
 
   it('view_own with no linked rep → matches nothing', () => {

@@ -4,6 +4,7 @@ import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { listCustomers } from '@/server/services/customers';
 import { listWarehouses } from '@/server/services/warehouse';
+import { listSalesReps } from '@/server/services/salesReps';
 import { getActor } from '@/lib/permissions/getActor';
 import { salesOrderScopeWhere } from '@/lib/permissions/scope';
 import {
@@ -67,9 +68,11 @@ export default async function EditSalesOrderPage({
 
   const existingVariantIds = so.lines.map((l) => l.variantId);
 
-  const [customers, warehouses, variants, inventoryRows] = await Promise.all([
-    listCustomers(db, { active: true, take: 1000 }),
-    listWarehouses(db),
+  const [customers, warehouses, salesReps, variants, inventoryRows] =
+    await Promise.all([
+      listCustomers(db, { active: true, take: 1000 }),
+      listWarehouses(db),
+      listSalesReps(db, { active: true }),
     // Active variants + any inactive variants the existing lines
     // reference (so historical SKUs still render in the dropdown).
     db.productVariant.findMany({
@@ -155,6 +158,9 @@ export default async function EditSalesOrderPage({
       customerNote: l.customerNote ?? '',
     })),
   };
+  // Pre-select the per-order rep override when set; otherwise the form
+  // defaults to "Customer default" (inherit).
+  if (so.salesRepId) defaults.salesRepId = so.salesRepId;
 
   return (
     <div className="space-y-6">
@@ -196,6 +202,7 @@ export default async function EditSalesOrderPage({
           basePrice: v.product.basePrice?.toString() ?? null,
           inventoryByWarehouse: stockByVariant.get(v.id) ?? {},
         }))}
+        salesReps={salesReps.map((r) => ({ id: r.id, name: r.name }))}
         defaultValues={defaults}
       />
     </div>
