@@ -289,10 +289,13 @@ function VendorCombobox({
   );
 }
 
+// SERVICE is intentionally omitted: service vendors can't be a product's
+// primary/catalog vendor (blocked at the service layer), so offering it
+// here — where the whole point is setting the primary vendor — only
+// creates confusion.
 const VENDOR_TYPES: Array<{ value: string; label: string }> = [
   { value: 'STOCK', label: 'Stock' },
   { value: 'DROP_SHIP', label: 'Drop-ship' },
-  { value: 'SERVICE', label: 'Service' },
 ];
 
 function CreateVendorDialog({
