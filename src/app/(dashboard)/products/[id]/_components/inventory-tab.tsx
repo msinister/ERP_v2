@@ -10,9 +10,12 @@ import {
 import { formatCurrency } from '@/lib/format';
 import { TabEmpty, TabShell } from './tab-shell';
 import { BinCell } from './bin-cell';
+import { QuickAdjustButton } from './quick-adjust-button';
 
 export type InventoryRow = {
   inventoryItemId: string;
+  variantId: string;
+  warehouseId: string;
   variantSku: string;
   variantName: string | null;
   warehouseCode: string;
@@ -52,6 +55,7 @@ export function InventoryTab({ rows }: { rows: InventoryRow[] }) {
               <TableHead className="text-right">Available</TableHead>
               <TableHead className="text-right">WAC</TableHead>
               <TableHead className="text-right">Last cost</TableHead>
+              <TableHead className="w-0" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -91,6 +95,14 @@ export function InventoryTab({ rows }: { rows: InventoryRow[] }) {
                 </TableCell>
                 <TableCell className="text-right tabular-nums text-muted-foreground">
                   {row.lastCost != null ? formatCurrency(row.lastCost) : '—'}
+                </TableCell>
+                <TableCell className="text-right">
+                  <QuickAdjustButton
+                    variantId={row.variantId}
+                    warehouseId={row.warehouseId}
+                    variantSku={row.variantSku}
+                    warehouseCode={row.warehouseCode}
+                  />
                 </TableCell>
               </TableRow>
             ))}

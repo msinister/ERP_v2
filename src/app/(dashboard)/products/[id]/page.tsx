@@ -155,6 +155,8 @@ export default async function ProductDetailPage({
     const rawAvail = p.onHand.minus(p.reserved);
     return {
       inventoryItemId: p.inventoryItemId,
+      variantId: p.variantId,
+      warehouseId: p.warehouseId,
       variantSku: p.variantSku,
       variantName: p.variantName,
       warehouseCode: p.warehouseCode,

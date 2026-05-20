@@ -16,6 +16,24 @@ enum ProductType {
   BUNDLE
 }
 
+enum AdjustmentCategory {
+  SHORTAGE
+  BREAKAGE
+  MISSING
+  THEFT
+  DEFECT
+  REJECT
+  FOUND_STOCK
+  CYCLE_COUNT
+  OTHER
+}
+
+enum AdjustmentStatus {
+  DRAFT
+  POSTED
+  VOIDED
+}
+
 enum InventoryMovementType {
   ADJUST
   RECEIVE
@@ -407,6 +425,7 @@ model ProductVariant {
   fifoLayers         FifoLayer[]
   vendorProducts     VendorProduct[]
   billLines          BillLine[]
+  inventoryAdjustmentLines InventoryAdjustmentLine[]
   bomComponentUsage  BomLine[]               @relation("BomLineComponent")
   // Built as the finished variant on a Work Order.
   workOrdersBuilt    WorkOrder[]             @relation("WorkOrderFinishedVariant")
@@ -472,6 +491,7 @@ model Warehouse {
   fifoLayers         FifoLayer[]
   users              User[]
   workOrders         WorkOrder[]
+  inventoryAdjustments InventoryAdjustment[]
   inventoryAccount   GlAccount?          @relation(fields: [inventoryAccountId], references: [id])
 }
 
@@ -1463,6 +1483,54 @@ model ProductTag {
 
   @@unique([productId, tagId])
   @@index([tagId])
+}
+
+// Inventory adjustment header. Quick adjustments post immediately
+// (status POSTED); the batch flow (future slice) uses DRAFT → POSTED.
+// VOIDED adjustments are reversed via a compensating set of opposite
+// movements + a reversing JE (originals are never mutated).
+model InventoryAdjustment {
+  id             String             @id @default(cuid())
+  number         String             @unique // ADJ-YYYY-NNNNN via Sequence
+  warehouseId    String
+  adjustmentDate DateTime           @default(now())
+  category       AdjustmentCategory
+  reason         String
+  internalNotes  String?
+  status         AdjustmentStatus   @default(DRAFT)
+  postedAt       DateTime?
+  voidedAt       DateTime?
+  voidReason     String?
+  createdById    String?
+  deletedAt      DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  warehouse Warehouse                 @relation(fields: [warehouseId], references: [id])
+  lines     InventoryAdjustmentLine[]
+
+  @@index([warehouseId, status])
+  @@index([status, adjustmentDate])
+  @@index([deletedAt])
+}
+
+model InventoryAdjustmentLine {
+  id           String   @id @default(cuid())
+  adjustmentId String
+  variantId    String
+  // Signed: positive adds stock (gain), negative removes (loss).
+  qtyChange    Decimal  @db.Decimal(18, 5)
+  // Gain: cost the new FIFO layer was created at (WAC/last cost).
+  // Loss: FIFO-consumed cost (system-calculated). 0 when no value flowed.
+  unitCost     Decimal  @default(0) @db.Decimal(18, 5)
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  adjustment InventoryAdjustment @relation(fields: [adjustmentId], references: [id])
+  variant    ProductVariant      @relation(fields: [variantId], references: [id])
+
+  @@index([adjustmentId])
+  @@index([variantId])
 }
 
 // Generic admin-managed key/value settings table. Replaces the
