@@ -20,7 +20,8 @@ export type ProductFieldKey =
   | 'hazmat'
   | 'active'
   | 'type'
-  | 'imageUrl';
+  | 'imageUrl'
+  | 'tags';
 
 export type ProductFieldDef = {
   key: ProductFieldKey;
@@ -50,6 +51,7 @@ export const PRODUCT_FIELDS: ProductFieldDef[] = [
   { key: 'active', label: 'Active (yes/no)', aliases: ['active', 'enabled'] },
   { key: 'type', label: 'Product type', aliases: ['type', 'producttype', 'kind'] },
   { key: 'imageUrl', label: 'Image URL', aliases: ['imageurl', 'image', 'img', 'photo', 'picture', 'imagelink'] },
+  { key: 'tags', label: 'Tags', aliases: ['tags', 'tag', 'labels'] },
 ];
 
 export const FIELD_BY_KEY: Record<ProductFieldKey, ProductFieldDef> =

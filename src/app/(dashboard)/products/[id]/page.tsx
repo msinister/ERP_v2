@@ -2,6 +2,8 @@ import { notFound } from 'next/navigation';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { computeWac, getLastPurchaseCost } from '@/server/services/wac';
+import { listTagsForProduct } from '@/server/services/productTags';
+import { listVendors } from '@/server/services/vendors';
 import {
   Tabs,
   TabsContent,
@@ -105,12 +107,14 @@ export default async function ProductDetailPage({
   // them in the table (the SO entry path uses a different per-bin
   // lookup that gracefully handles missing rows).
   type Pair = {
+    inventoryItemId: string;
     variantId: string;
     variantSku: string;
     variantName: string | null;
     warehouseId: string;
     warehouseCode: string;
     warehouseName: string;
+    binLocation: string | null;
     onHand: Prisma.Decimal;
     reserved: Prisma.Decimal;
   };
@@ -118,12 +122,14 @@ export default async function ProductDetailPage({
   for (const v of variants) {
     for (const inv of v.inventory) {
       pairs.push({
+        inventoryItemId: inv.id,
         variantId: v.id,
         variantSku: v.sku,
         variantName: v.name,
         warehouseId: inv.warehouseId,
         warehouseCode: inv.warehouse.code,
         warehouseName: inv.warehouse.name,
+        binLocation: inv.binLocation,
         onHand: inv.onHand,
         reserved: inv.reserved,
       });
@@ -144,10 +150,12 @@ export default async function ProductDetailPage({
   const inventoryRows: InventoryRow[] = pairs.map((p, i) => {
     const rawAvail = p.onHand.minus(p.reserved);
     return {
+      inventoryItemId: p.inventoryItemId,
       variantSku: p.variantSku,
       variantName: p.variantName,
       warehouseCode: p.warehouseCode,
       warehouseName: p.warehouseName,
+      binLocation: p.binLocation,
       onHand: p.onHand,
       reserved: p.reserved,
       available: rawAvail.lessThan(0) ? zero : rawAvail,
@@ -258,6 +266,26 @@ export default async function ProductDetailPage({
       }))
     : [];
 
+  // Tags + primary vendor for the Overview tab. Primary vendor is the
+  // VendorProduct flagged isPrimary on any of this product's variants
+  // (typically the default variant); first by creation order wins.
+  const productTags = await listTagsForProduct(db, product.id);
+  const primaryVendorLink = await db.vendorProduct.findFirst({
+    where: {
+      variant: { productId: product.id },
+      isPrimary: true,
+      deletedAt: null,
+    },
+    include: { vendor: { select: { id: true, name: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  // Selectable vendors for the inline picker — active, non-SERVICE
+  // (catalog rows are blocked for SERVICE vendors at the service layer).
+  const vendorOptions = (await listVendors(db, { active: true, take: 1000 }))
+    .filter((v) => v.type !== 'SERVICE')
+    .map((v) => ({ id: v.id, code: v.code, name: v.name }));
+
   return (
     <div className="space-y-6">
       <ProductHeader product={product} hasBom={bomLineRows.length > 0} />
@@ -303,7 +331,19 @@ export default async function ProductDetailPage({
         </TabsList>
 
         <TabsContent value="overview">
-          <OverviewTab product={product} />
+          <OverviewTab
+            product={product}
+            tags={productTags.map((t) => ({ id: t.id, name: t.name }))}
+            vendor={
+              primaryVendorLink
+                ? {
+                    id: primaryVendorLink.vendor.id,
+                    name: primaryVendorLink.vendor.name,
+                  }
+                : null
+            }
+            vendors={vendorOptions}
+          />
         </TabsContent>
         <TabsContent value="images">
           <ImagesTab

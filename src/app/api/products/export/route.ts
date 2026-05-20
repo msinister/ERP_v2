@@ -24,8 +24,16 @@ export async function GET(req: Request) {
     const q = url.searchParams.get('q') ?? undefined;
     const brand = url.searchParams.get('brand') ?? undefined;
     const category = url.searchParams.get('category') ?? undefined;
+    const tagsParam = url.searchParams.get('tags');
+    const tagIds = tagsParam ? tagsParam.split(',').filter(Boolean) : undefined;
 
-    const rows = await listProductsForExport(db, { q, status, brand, category });
+    const rows = await listProductsForExport(db, {
+      q,
+      status,
+      brand,
+      category,
+      tagIds,
+    });
     const products = rows.map((p) => ({
       sku: p.sku,
       name: p.name,
@@ -46,6 +54,7 @@ export async function GET(req: Request) {
       active: p.active,
       type: p.type,
       imageUrl: p.imageUrl,
+      tags: p.tags,
     }));
     return NextResponse.json({ products });
   } catch (e) {

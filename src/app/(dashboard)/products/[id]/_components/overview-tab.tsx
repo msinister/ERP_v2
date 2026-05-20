@@ -2,8 +2,20 @@ import type { Product } from '@/generated/tenant';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatCurrency } from '@/lib/format';
 import { TabShell } from './tab-shell';
+import { TagEditor } from './tag-editor';
+import { VendorEditor, type VendorOption } from './vendor-editor';
 
-export function OverviewTab({ product }: { product: Product }) {
+export function OverviewTab({
+  product,
+  tags,
+  vendor,
+  vendors,
+}: {
+  product: Product;
+  tags: Array<{ id: string; name: string }>;
+  vendor: { id: string; name: string } | null;
+  vendors: VendorOption[];
+}) {
   return (
     <TabShell>
       <Card>
@@ -16,9 +28,30 @@ export function OverviewTab({ product }: { product: Product }) {
               product.basePrice != null ? formatCurrency(product.basePrice) : '—'
             } />
             <Row label="Tracks inventory" value={product.tracksInventory ? 'Yes' : 'No'} />
+            <div className="space-y-0.5">
+              <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                Vendor
+              </dt>
+              <dd className="text-sm">
+                <VendorEditor
+                  productId={product.id}
+                  initialVendor={vendor}
+                  vendors={vendors}
+                />
+              </dd>
+            </div>
             <Row label="Shopify product ID" value={product.shopifyProductId ?? '—'} mono={!!product.shopifyProductId} />
             <Row label="Last updated" value={formatDate(product.updatedAt)} />
           </dl>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Tags</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <TagEditor productId={product.id} initialTags={tags} />
         </CardContent>
       </Card>
 

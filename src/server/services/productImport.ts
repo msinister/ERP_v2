@@ -3,6 +3,7 @@ import type { AuditContext } from '@/lib/audit/audit';
 import type { ProductCreateInput } from '@/lib/validation/product';
 import { createProduct, getProductBySku, updateProduct } from './products';
 import { addProductImage, setPrimaryProductImage } from './productImages';
+import { setProductTags } from './productTags';
 
 // =============================================================================
 // Product CSV import. The client maps + pre-validates rows and POSTs them as
@@ -40,6 +41,8 @@ export type ImportRowInput = {
   active?: string;
   type?: string;
   imageUrl?: string;
+  // Comma-separated tag names; auto-created + assigned (additive).
+  tags?: string;
 };
 
 export type ImportRowStatus = 'created' | 'updated' | 'skipped' | 'error';
@@ -135,6 +138,15 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
   return out;
 }
 
+// Split a comma-separated tag cell into de-duped, trimmed names.
+function parseTags(v: string | undefined): string[] {
+  const s = clean(v);
+  if (s == null) return [];
+  return Array.from(
+    new Set(s.split(',').map((t) => t.trim()).filter(Boolean)),
+  );
+}
+
 function isValidHttpUrl(v: string): boolean {
   try {
     const u = new URL(v);
@@ -218,6 +230,8 @@ export async function importProductRows(
         continue;
       }
 
+      const tagNames = parseTags(row.tags);
+
       // Common field set. undefined values are stripped so they don't
       // overwrite on update or fight the create-schema defaults.
       const fields = {
@@ -258,6 +272,9 @@ export async function importProductRows(
         if (imageUrl) {
           await applyImageUrl(db, existing.id, imageUrl, false, ctx);
         }
+        if (tagNames.length > 0) {
+          await setProductTags(db, existing.id, { add: tagNames }, ctx);
+        }
         results.push({ rowNumber: row.rowNumber, sku, status: 'updated' });
       } else {
         const created = await createProduct(
@@ -271,6 +288,9 @@ export async function importProductRows(
         );
         if (imageUrl) {
           await applyImageUrl(db, created.id, imageUrl, true, ctx);
+        }
+        if (tagNames.length > 0) {
+          await setProductTags(db, created.id, { add: tagNames }, ctx);
         }
         results.push({ rowNumber: row.rowNumber, sku, status: 'created' });
       }

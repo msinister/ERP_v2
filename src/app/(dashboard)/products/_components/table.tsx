@@ -18,7 +18,10 @@ export type ProductRowData = {
   sku: string;
   name: string;
   brand: string | null;
+  vendorName: string | null;
   category: string | null;
+  tags: Array<{ id: string; name: string }>;
+  binLocation: string | null;
   basePrice: Prisma.Decimal | null;
   onHand: Prisma.Decimal;
   available: Prisma.Decimal;
@@ -27,6 +30,8 @@ export type ProductRowData = {
   // Primary product image URL, or null when the product has no images.
   imageUrl: string | null;
 };
+
+const MAX_VISIBLE_TAGS = 3;
 
 export function ProductsTable({ rows }: { rows: ProductRowData[] }) {
   if (rows.length === 0) {
@@ -53,7 +58,10 @@ export function ProductsTable({ rows }: { rows: ProductRowData[] }) {
               <TableHead>SKU</TableHead>
               <TableHead>Name</TableHead>
               <TableHead>Brand</TableHead>
+              <TableHead>Vendor</TableHead>
               <TableHead>Category</TableHead>
+              <TableHead>Tags</TableHead>
+              <TableHead>Bin</TableHead>
               <TableHead className="text-right">On hand</TableHead>
               <TableHead className="text-right">Available</TableHead>
               <TableHead className="text-right">Base price</TableHead>
@@ -99,7 +107,16 @@ export function ProductsTable({ rows }: { rows: ProductRowData[] }) {
                   {row.brand ?? '—'}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
+                  {row.vendorName ?? '—'}
+                </TableCell>
+                <TableCell className="text-muted-foreground">
                   {row.category ?? '—'}
+                </TableCell>
+                <TableCell className="relative z-10">
+                  <TagPills tags={row.tags} />
+                </TableCell>
+                <TableCell className="font-mono text-xs text-muted-foreground">
+                  {row.binLocation ?? '—'}
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {formatQty(row.onHand)}
@@ -118,6 +135,31 @@ export function ProductsTable({ rows }: { rows: ProductRowData[] }) {
           </TableBody>
         </Table>
       </div>
+    </div>
+  );
+}
+
+function TagPills({ tags }: { tags: Array<{ id: string; name: string }> }) {
+  if (tags.length === 0) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  const visible = tags.slice(0, MAX_VISIBLE_TAGS);
+  const overflow = tags.length - visible.length;
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {visible.map((t) => (
+        <Badge key={t.id} variant="secondary" className="text-[10px] font-normal">
+          {t.name}
+        </Badge>
+      ))}
+      {overflow > 0 ? (
+        <span
+          className="text-[10px] text-muted-foreground"
+          title={tags.map((t) => t.name).join(', ')}
+        >
+          +{overflow} more
+        </span>
+      ) : null}
     </div>
   );
 }

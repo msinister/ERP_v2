@@ -87,6 +87,20 @@ export const setProductBomInputSchema = z.object({
   laborCost: decimalString.nullable().optional(),
 });
 
+// Product tag name — trimmed, 1..64 chars. Citext column handles
+// case-insensitive uniqueness; we just normalize whitespace here.
+export const productTagNameSchema = z
+  .string()
+  .transform((s) => s.trim())
+  .pipe(z.string().min(1).max(64));
+
+export const productTagsPatchSchema = z.object({
+  add: z.array(z.string()).optional(),
+  remove: z.array(z.string()).optional(),
+});
+
+export type ProductTagsPatchInput = z.infer<typeof productTagsPatchSchema>;
+
 export type ProductCreateInput = z.infer<typeof productCreateSchema>;
 export type ProductUpdateInput = z.infer<typeof productUpdateSchema>;
 export type VariantCreateInput = z.infer<typeof variantCreateSchema>;

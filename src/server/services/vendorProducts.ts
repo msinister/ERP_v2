@@ -253,3 +253,117 @@ export async function listVendorsForVariant(
     orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
   });
 }
+
+// ---------------------------------------------------------------------------
+// Product-level primary vendor (Overview tab editor)
+// ---------------------------------------------------------------------------
+
+/**
+ * Set (or clear) the primary vendor for a product, operating on the
+ * product's default variant — the variant whose SKU matches the product
+ * SKU (the auto-seeded default), falling back to the earliest variant.
+ *
+ *   - vendorId provided + a non-deleted VendorProduct already exists for
+ *     (vendor, variant): promote it to primary (demote any other).
+ *   - vendorId provided + no row exists: create one as primary (demote
+ *     any other).
+ *   - vendorId null: clear — unset isPrimary on the variant's current
+ *     primary, leaving no primary.
+ *
+ * Returns the resulting primary vendor (or null when cleared). Audited.
+ */
+export async function setProductPrimaryVendor(
+  db: PrismaClient,
+  productId: string,
+  vendorId: string | null,
+  ctx?: AuditContext,
+): Promise<{ vendorId: string; vendorName: string } | null> {
+  return db.$transaction(async (tx) => {
+    const product = await tx.product.findFirst({
+      where: { id: productId, deletedAt: null },
+      select: { id: true, sku: true },
+    });
+    if (!product) throw new Error(`Product not found: ${productId}`);
+
+    const variants = await tx.productVariant.findMany({
+      where: { productId, deletedAt: null },
+      select: { id: true, sku: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (variants.length === 0) {
+      throw new Error('Product has no variant to assign a vendor to');
+    }
+    const variant =
+      variants.find((v) => v.sku === product.sku) ?? variants[0];
+
+    // Clear path.
+    if (vendorId == null) {
+      const current = await tx.vendorProduct.findFirst({
+        where: { variantId: variant.id, isPrimary: true, deletedAt: null },
+      });
+      if (current) {
+        const after = await tx.vendorProduct.update({
+          where: { id: current.id },
+          data: { isPrimary: false },
+        });
+        await audit(tx, {
+          action: AuditAction.UPDATE,
+          entityType: 'VendorProduct',
+          entityId: current.id,
+          before: current,
+          after,
+          ctx: { ...ctx, reason: 'cleared primary vendor for product' },
+        });
+      }
+      return null;
+    }
+
+    // Set path.
+    await lockVendor(tx, vendorId);
+    await assertVendorAllowsProducts(tx, vendorId);
+    const vendor = await tx.vendor.findUniqueOrThrow({
+      where: { id: vendorId },
+      select: { id: true, name: true },
+    });
+
+    const existing = await tx.vendorProduct.findFirst({
+      where: { vendorId, variantId: variant.id, deletedAt: null },
+    });
+    if (existing) {
+      await clearOtherPrimariesForVariant(tx, variant.id, existing.id);
+      if (!existing.isPrimary) {
+        const after = await tx.vendorProduct.update({
+          where: { id: existing.id },
+          data: { isPrimary: true },
+        });
+        await audit(tx, {
+          action: AuditAction.UPDATE,
+          entityType: 'VendorProduct',
+          entityId: existing.id,
+          before: existing,
+          after,
+          ctx: { ...ctx, reason: 'set as primary vendor for product' },
+        });
+      }
+    } else {
+      await clearOtherPrimariesForVariant(tx, variant.id, null);
+      const created = await tx.vendorProduct.create({
+        data: {
+          vendorId,
+          variantId: variant.id,
+          isPrimary: true,
+          active: true,
+        },
+      });
+      await audit(tx, {
+        action: AuditAction.CREATE,
+        entityType: 'VendorProduct',
+        entityId: created.id,
+        after: created,
+        ctx: { ...ctx, reason: 'set as primary vendor for product' },
+      });
+    }
+
+    return { vendorId: vendor.id, vendorName: vendor.name };
+  });
+}

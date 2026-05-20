@@ -1,5 +1,6 @@
-import { Prisma } from '@/generated/tenant';
+import { AuditAction, Prisma } from '@/generated/tenant';
 import type { PrismaClient, InventoryItem } from '@/generated/tenant';
+import { audit, type AuditContext } from '@/lib/audit/audit';
   // Read-only in this slice. Movement APIs (receive, consume, adjust)
   // land with the costing engine.
 
@@ -66,4 +67,38 @@ export async function getLineEntryStock(
   const rawAvail = onHand.minus(reserved);
   const available = rawAvail.lessThan(0) ? zero : rawAvail;
   return { onHand, reserved, available };
+}
+
+/**
+ * Set (or clear) the free-text bin location on an InventoryItem. No
+ * inventory impact — operator-maintained location label. Empty/blank
+ * input clears it to null. Audited as an UPDATE.
+ */
+export async function updateInventoryBin(
+  db: PrismaClient,
+  inventoryItemId: string,
+  binLocation: string | null,
+  ctx?: AuditContext,
+): Promise<InventoryItem> {
+  const normalized =
+    binLocation == null || binLocation.trim() === '' ? null : binLocation.trim();
+  return db.$transaction(async (tx) => {
+    const before = await tx.inventoryItem.findUnique({
+      where: { id: inventoryItemId },
+    });
+    if (!before) throw new Error(`InventoryItem not found: ${inventoryItemId}`);
+    const after = await tx.inventoryItem.update({
+      where: { id: inventoryItemId },
+      data: { binLocation: normalized },
+    });
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'InventoryItem',
+      entityId: inventoryItemId,
+      before: { binLocation: before.binLocation },
+      after: { binLocation: after.binLocation },
+      ctx,
+    });
+    return after;
+  });
 }

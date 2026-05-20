@@ -30,6 +30,7 @@ type ExportProduct = {
   active: boolean;
   type: string;
   imageUrl: string | null;
+  tags: string;
 };
 
 const COLUMNS: Array<{ header: string; value: (p: ExportProduct) => string }> = [
@@ -52,6 +53,7 @@ const COLUMNS: Array<{ header: string; value: (p: ExportProduct) => string }> = 
   { header: 'Active', value: (p) => (p.active ? 'Yes' : 'No') },
   { header: 'Product type', value: (p) => p.type },
   { header: 'Image URL', value: (p) => p.imageUrl ?? '' },
+  { header: 'Tags', value: (p) => p.tags },
 ];
 
 function today(): string {
@@ -71,7 +73,7 @@ export function ExportButton() {
       // Carry the current list filters through to the export query so the
       // file matches what the operator is looking at.
       const qs = new URLSearchParams();
-      for (const key of ['q', 'status', 'brand', 'category']) {
+      for (const key of ['q', 'status', 'brand', 'category', 'tags']) {
         const v = params.get(key);
         if (v) qs.set(key, v);
       }

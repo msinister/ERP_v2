@@ -7,6 +7,7 @@ import {
   listProductsPaged,
   type ProductStatusFilter,
 } from '@/server/services/products';
+import { listAllTags } from '@/server/services/productTags';
 import { Button } from '@/components/ui/button';
 import { ProductsFilters } from './_components/filters';
 import { ProductsTable, type ProductRowData } from './_components/table';
@@ -39,21 +40,29 @@ export default async function ProductsPage({
   const status: ProductStatusFilter = isStatus(statusRaw) ? statusRaw : 'active';
   const brand = pickString(sp.brand);
   const category = pickString(sp.category);
+  const tagsParam = pickString(sp.tags);
+  const tagIds = tagsParam ? tagsParam.split(',').filter(Boolean) : undefined;
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const [brands, categories, page] = await Promise.all([
+  const [brands, categories, allTags, page] = await Promise.all([
     listProductBrands(db),
     listProductCategories(db),
-    listProductsPaged(db, { q, status, brand, category, skip, take }),
+    listAllTags(db),
+    listProductsPaged(db, { q, status, brand, category, tagIds, skip, take }),
   ]);
+
+  const tagOptions = allTags.map((t) => ({ id: t.id, name: t.name }));
 
   const tableRows: ProductRowData[] = page.rows.map((p) => ({
     id: p.id,
     sku: p.sku,
     name: p.name,
     brand: p.brand,
+    vendorName: p.vendorName,
     category: p.category,
+    tags: p.tags,
+    binLocation: p.binLocation,
     basePrice: p.basePrice,
     onHand: p.inventoryAgg.onHand,
     available: p.inventoryAgg.available,
@@ -89,7 +98,11 @@ export default async function ProductsPage({
         </div>
       </div>
 
-      <ProductsFilters brands={brands} categories={categories} />
+      <ProductsFilters
+        brands={brands}
+        categories={categories}
+        tags={tagOptions}
+      />
 
       <ProductsTable rows={tableRows} />
 

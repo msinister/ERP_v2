@@ -331,6 +331,7 @@ model Product {
 
   variants                 ProductVariant[]
   images                   ProductImage[]
+  tags                     ProductTag[]
   bomLines                 BomLine[]        @relation("ProductBomLines")
   workOrders               WorkOrder[]      @relation("WorkOrderProduct")
   // Back-relations for the bundle-explode flow: SalesOrderLine and
@@ -480,6 +481,10 @@ model InventoryItem {
   warehouseId String
   onHand      Decimal  @default(0) @db.Decimal(18, 5)
   reserved    Decimal  @default(0) @db.Decimal(18, 5)
+  // Free-text bin/shelf location for this variant in this warehouse
+  // (e.g. "A-12-3", "Shelf B Row 4"). Operator-maintained; no inventory
+  // impact.
+  binLocation String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1433,6 +1438,30 @@ model CustomerTagAssignment {
   tag      CustomerTag @relation(fields: [tagId], references: [id])
 
   @@id([customerId, tagId])
+  @@index([tagId])
+}
+
+// Global product tags — shared across all products, created lazily on
+// first use via the autocomplete editor. Name is CITEXT so "Organic"
+// and "organic" collide in the unique index.
+model Tag {
+  id        String       @id @default(cuid())
+  name      String       @unique @db.Citext
+  createdAt DateTime     @default(now())
+
+  products  ProductTag[]
+}
+
+model ProductTag {
+  id        String   @id @default(cuid())
+  productId String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id])
+  tag     Tag     @relation(fields: [tagId], references: [id])
+
+  @@unique([productId, tagId])
   @@index([tagId])
 }
 

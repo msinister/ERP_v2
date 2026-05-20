@@ -129,10 +129,12 @@ export async function listProducts(
 export type ProductStatusFilter = 'active' | 'all' | 'archived';
 
 export type ProductListFilters = {
-  q?: string; // substring on name OR sku (case-insensitive)
+  q?: string; // substring on name / sku / tag name / vendor name
   status?: ProductStatusFilter; // default 'active'
   brand?: string;
   category?: string;
+  // Filter to products carrying ANY of these tag ids.
+  tagIds?: string[];
   skip?: number;
   take?: number;
 };
@@ -148,12 +150,18 @@ export type ProductListRow = Product & {
   // smallest sortOrder). Null when the product has no images. Drives
   // the thumbnail column on the products list.
   primaryImageUrl: string | null;
+  tags: Array<{ id: string; name: string }>;
+  // Name of the primary vendor (VendorProduct.isPrimary on any variant),
+  // or null. binLocation is the first non-empty bin across the product's
+  // inventory rows — the list shows one representative bin.
+  vendorName: string | null;
+  binLocation: string | null;
 };
 
 function productWhere(
   filters: Omit<ProductListFilters, 'skip' | 'take'>,
 ): Prisma.ProductWhereInput {
-  const { q, status = 'active', brand, category } = filters;
+  const { q, status = 'active', brand, category, tagIds } = filters;
   // Status maps directly to a (deletedAt, active) pair:
   //   active   → not archived, active=true (default UX)
   //   all      → not archived, no active filter (inactive but live OK)
@@ -172,11 +180,35 @@ function productWhere(
     ...(category
       ? { category: { equals: category, mode: 'insensitive' as const } }
       : {}),
+    ...(tagIds && tagIds.length > 0
+      ? { tags: { some: { tagId: { in: tagIds } } } }
+      : {}),
     ...(q
       ? {
           OR: [
             { name: { contains: q, mode: 'insensitive' as const } },
             { sku: { contains: q, mode: 'insensitive' as const } },
+            {
+              tags: {
+                some: {
+                  tag: { name: { contains: q, mode: 'insensitive' as const } },
+                },
+              },
+            },
+            {
+              variants: {
+                some: {
+                  vendorProducts: {
+                    some: {
+                      deletedAt: null,
+                      vendor: {
+                        name: { contains: q, mode: 'insensitive' as const },
+                      },
+                    },
+                  },
+                },
+              },
+            },
           ],
         }
       : {}),
@@ -197,8 +229,20 @@ export async function listProductsPaged(
           where: { deletedAt: null },
           select: {
             id: true,
-            inventory: { select: { onHand: true, reserved: true } },
+            inventory: {
+              select: { onHand: true, reserved: true, binLocation: true },
+            },
+            vendorProducts: {
+              where: { isPrimary: true, deletedAt: null },
+              select: { vendor: { select: { name: true } } },
+              orderBy: { createdAt: 'asc' },
+              take: 1,
+            },
           },
+        },
+        tags: {
+          select: { tag: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
         },
         // Primary image only — one row at most, surfaced as the
         // products-list thumbnail. Non-primary + soft-deleted rows
@@ -224,19 +268,36 @@ export async function listProductsPaged(
   const rows: ProductListRow[] = products.map((p) => {
     let onHand = zero;
     let reserved = zero;
+    let vendorName: string | null = null;
+    let binLocation: string | null = null;
     for (const v of p.variants) {
       for (const inv of v.inventory) {
         onHand = onHand.plus(inv.onHand);
         reserved = reserved.plus(inv.reserved);
+        if (binLocation == null && inv.binLocation) {
+          binLocation = inv.binLocation;
+        }
+      }
+      if (vendorName == null && v.vendorProducts[0]) {
+        vendorName = v.vendorProducts[0].vendor.name;
       }
     }
     const rawAvailable = onHand.minus(reserved);
     const available = rawAvailable.lessThan(0) ? zero : rawAvailable;
+    // Strip the relation fields off the spread so the row shape matches
+    // ProductListRow (scalar product fields + the derived extras).
+    const { variants: _v, images: _i, tags: _t, ...scalar } = p;
+    void _v;
+    void _i;
+    void _t;
     return {
-      ...p,
+      ...scalar,
       inventoryAgg: { onHand, reserved, available },
       variantCount: p.variants.length,
       primaryImageUrl: p.images[0]?.url ?? null,
+      tags: p.tags.map((pt) => pt.tag),
+      vendorName,
+      binLocation,
     };
   });
 
@@ -270,6 +331,8 @@ export type ProductExportRow = {
   type: Product['type'];
   // Primary image URL (ProductImage where isPrimary), or null.
   imageUrl: string | null;
+  // Comma-separated tag names (alphabetical), '' when none.
+  tags: string;
 };
 
 export async function listProductsForExport(
@@ -303,13 +366,18 @@ export async function listProductsForExport(
         select: { url: true },
         take: 1,
       },
+      tags: { select: { tag: { select: { name: true } } } },
     },
     orderBy: [{ active: 'desc' }, { name: 'asc' }],
     take: 50000,
   });
-  return rows.map(({ images, ...rest }) => ({
+  return rows.map(({ images, tags, ...rest }) => ({
     ...rest,
     imageUrl: images[0]?.url ?? null,
+    tags: tags
+      .map((pt) => pt.tag.name)
+      .sort((a, b) => a.localeCompare(b))
+      .join(', '),
   }));
 }
 

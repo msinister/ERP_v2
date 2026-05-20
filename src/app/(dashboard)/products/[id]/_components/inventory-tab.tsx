@@ -9,12 +9,15 @@ import {
 } from '@/components/ui/table';
 import { formatCurrency } from '@/lib/format';
 import { TabEmpty, TabShell } from './tab-shell';
+import { BinCell } from './bin-cell';
 
 export type InventoryRow = {
+  inventoryItemId: string;
   variantSku: string;
   variantName: string | null;
   warehouseCode: string;
   warehouseName: string;
+  binLocation: string | null;
   onHand: Prisma.Decimal;
   reserved: Prisma.Decimal;
   available: Prisma.Decimal;
@@ -43,6 +46,7 @@ export function InventoryTab({ rows }: { rows: InventoryRow[] }) {
             <TableRow className="bg-muted/30 hover:bg-muted/30">
               <TableHead>SKU</TableHead>
               <TableHead>Warehouse</TableHead>
+              <TableHead>Bin</TableHead>
               <TableHead className="text-right">On hand</TableHead>
               <TableHead className="text-right">Reserved</TableHead>
               <TableHead className="text-right">Available</TableHead>
@@ -66,6 +70,12 @@ export function InventoryTab({ rows }: { rows: InventoryRow[] }) {
                     {row.warehouseCode}
                   </span>{' '}
                   {row.warehouseName}
+                </TableCell>
+                <TableCell>
+                  <BinCell
+                    inventoryItemId={row.inventoryItemId}
+                    binLocation={row.binLocation}
+                  />
                 </TableCell>
                 <TableCell className="text-right tabular-nums">
                   {formatQty(row.onHand)}

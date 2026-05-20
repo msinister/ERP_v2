@@ -34,6 +34,7 @@ const rowSchema = z.object({
   active: z.string().optional(),
   type: z.string().optional(),
   imageUrl: z.string().optional(),
+  tags: z.string().optional(),
 });
 
 const bodySchema = z.object({
