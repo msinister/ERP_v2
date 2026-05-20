@@ -64,6 +64,7 @@ export default async function PaymentDetailPage({
       amount: a.amount,
       appliedAt: a.appliedAt,
       reversedAt: a.reversedAt,
+      kind: a.kind,
     }),
   );
 
@@ -118,7 +119,11 @@ export default async function PaymentDetailPage({
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
-          <ApplicationsCard rows={applicationRows} />
+          <ApplicationsCard
+            paymentId={payment.id}
+            paymentStatus={payment.status}
+            rows={applicationRows}
+          />
 
           <PaymentInfoCard
             method={payment.method}

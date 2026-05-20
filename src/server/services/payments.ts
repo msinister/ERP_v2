@@ -189,6 +189,101 @@ export async function applyPaymentToInvoice(
 }
 
 // ---------------------------------------------------------------------------
+// unapplyPaymentFromInvoice
+// ---------------------------------------------------------------------------
+
+/**
+ * Reverse a single PAYMENT_TO_INVOICE application: the money stays
+ * received (the payment + its cash-receipt JE are untouched) but the
+ * internal allocation to one invoice is undone. The application is
+ * soft-reversed (reversedAt stamped, never hard-deleted, to preserve the
+ * audit trail), the invoice's amountPaid/status are recomputed, and the
+ * amount returns to the payment's unapplied balance.
+ *
+ * No JE and no commission change — this is the inverse of the standalone
+ * applyPaymentToInvoice, which likewise touches neither (commission is
+ * handled only at recordPayment / reversePayment granularity).
+ *
+ * Only direct payment applications are unappliable here. CREDIT_TO_INVOICE
+ * rows (the APPLIED_CREDIT path) draw from a CreditMemo, not the payment's
+ * own balance, and are rejected.
+ */
+export async function unapplyPaymentFromInvoice(
+  db: PrismaClient,
+  paymentId: string,
+  applicationId: string,
+  ctx?: AuditContext,
+): Promise<CreditApplication> {
+  return db.$transaction(async (tx) => {
+    await lockPayment(tx, paymentId);
+    const payment = await tx.payment.findUnique({ where: { id: paymentId } });
+    if (!payment) throw new Error(`Payment not found: ${paymentId}`);
+    if (payment.deletedAt) throw new Error('Payment is soft-deleted');
+    if (payment.status !== PaymentStatus.RECORDED) {
+      throw new Error(
+        `Cannot unapply from a payment in status ${payment.status}`,
+      );
+    }
+
+    const app = await tx.creditApplication.findUnique({
+      where: { id: applicationId },
+    });
+    if (!app) throw new Error(`Application not found: ${applicationId}`);
+    if (app.paymentId !== paymentId) {
+      throw new Error('Application does not belong to this payment');
+    }
+    if (app.kind !== CreditApplicationKind.PAYMENT_TO_INVOICE) {
+      throw new Error(
+        'Only direct payment applications can be unapplied (credit-funded applications draw from a credit memo)',
+      );
+    }
+    if (app.reversedAt != null) {
+      throw new Error('Application is already unapplied');
+    }
+
+    const invoice = await tx.invoice.findUnique({
+      where: { id: app.invoiceId },
+      select: { number: true },
+    });
+
+    const now = new Date();
+    await tx.creditApplication.update({
+      where: { id: app.id },
+      data: { reversedAt: now },
+    });
+
+    // Return the amount to the payment's unapplied balance. Floor at 0
+    // defensively against denorm drift.
+    const newApplied = payment.appliedAmount.minus(app.amount);
+    await tx.payment.update({
+      where: { id: paymentId },
+      data: {
+        appliedAmount: newApplied.lessThan(0)
+          ? new Prisma.Decimal(0)
+          : newApplied,
+      },
+    });
+
+    // Recompute invoice amountPaid + status (PAID → PARTIAL / OPEN).
+    await recomputeAmountPaidForInvoice(tx, app.invoiceId);
+
+    const reason =
+      ctx?.reason ??
+      `Unapplied ${app.amount.toString()} from invoice ${invoice?.number ?? app.invoiceId}`;
+    await audit(tx, {
+      action: AuditAction.REVERSE,
+      entityType: 'CreditApplication',
+      entityId: app.id,
+      before: { reversedAt: null },
+      after: { reversedAt: now },
+      ctx: { ...ctx, reason },
+    });
+
+    return tx.creditApplication.findUniqueOrThrow({ where: { id: app.id } });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // applyCreditToInvoice (Tx variant + public wrapper)
 // ---------------------------------------------------------------------------
 

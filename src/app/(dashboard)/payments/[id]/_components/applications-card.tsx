@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatCurrency } from '@/lib/format';
+import { UnapplyButton } from './unapply-button';
 
 export type PaymentApplicationRow = {
   id: string;
@@ -25,13 +26,25 @@ export type PaymentApplicationRow = {
   amount: Prisma.Decimal;
   appliedAt: Date;
   reversedAt: Date | null;
+  // Only direct payment applications can be unapplied here; CREDIT_TO_INVOICE
+  // (APPLIED_CREDIT) rows draw from a credit memo, not the payment.
+  kind: string;
 };
 
 export function ApplicationsCard({
+  paymentId,
+  paymentStatus,
   rows,
 }: {
+  paymentId: string;
+  paymentStatus: string;
   rows: PaymentApplicationRow[];
 }) {
+  // The Unapply action is only meaningful while the payment is live and
+  // for live direct-payment allocations.
+  const canUnapplyAny =
+    paymentStatus === 'RECORDED' &&
+    rows.some((r) => !r.reversedAt && r.kind === 'PAYMENT_TO_INVOICE');
   return (
     <Card>
       <CardHeader>
@@ -54,7 +67,8 @@ export function ApplicationsCard({
                 <TableHead className="pl-6">Invoice</TableHead>
                 <TableHead>Date applied</TableHead>
                 <TableHead className="text-right">Amount applied</TableHead>
-                <TableHead className="pr-6">Status</TableHead>
+                <TableHead>Status</TableHead>
+                {canUnapplyAny ? <TableHead className="pr-6 w-0" /> : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -80,18 +94,30 @@ export function ApplicationsCard({
                     <TableCell className="text-right tabular-nums">
                       {formatCurrency(r.amount)}
                     </TableCell>
-                    <TableCell className="pr-6">
+                    <TableCell>
                       {reversed ? (
                         <Badge
                           variant="outline"
                           className="text-muted-foreground"
                         >
-                          Reversed
+                          Unapplied
                         </Badge>
                       ) : (
                         <Badge variant="secondary">Applied</Badge>
                       )}
                     </TableCell>
+                    {canUnapplyAny ? (
+                      <TableCell className="pr-6 text-right">
+                        {!reversed && r.kind === 'PAYMENT_TO_INVOICE' ? (
+                          <UnapplyButton
+                            paymentId={paymentId}
+                            applicationId={r.id}
+                            invoiceNumber={r.invoiceNumber}
+                            amount={r.amount.toString()}
+                          />
+                        ) : null}
+                      </TableCell>
+                    ) : null}
                   </TableRow>
                 );
               })}
