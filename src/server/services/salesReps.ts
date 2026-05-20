@@ -263,7 +263,7 @@ export function deriveSalesRepCodeBase(
  * base, then base+2, base+3, … against existing SalesRep.code (globally
  * unique). Matches the manual code convention.
  */
-async function generateSalesRepCode(
+export async function generateSalesRepCode(
   tx: Prisma.TransactionClient,
   name: string,
   email: string | null,
