@@ -28,6 +28,7 @@ export type StatusEntityType =
   | 'Bill'
   | 'BillPaymentStatus'
   | 'CreditMemo'
+  | 'Payment'
   | 'Rma'
   | 'VendorCredit'
   | 'WorkOrder';
@@ -93,6 +94,12 @@ const STATUS_TONES: Record<StatusEntityType, Record<string, StatusTone>> = {
     DRAFT: 'grey',
     CONFIRMED: 'green',
     VOIDED: 'outline',
+  },
+  // Customer payment lifecycle. RECORDED is live (money received);
+  // REVERSED is unwound (terminal-unhappy, like a void).
+  Payment: {
+    RECORDED: 'green',
+    REVERSED: 'outline',
   },
   Rma: {
     PENDING: 'grey',

@@ -19,7 +19,7 @@ import {
 import {
   JournalEntriesCard,
   type JournalEntryRow,
-} from './_components/journal-entries-card';
+} from '@/components/shared/journal-entries-card';
 import { journalEntriesForInvoice } from '@/server/services/reports/financial';
 
 // Always live (no caching) — SO lifecycle / reservations / invoice

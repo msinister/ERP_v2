@@ -638,3 +638,96 @@ export async function listPayments(
     take: Math.min(take, 500),
   });
 }
+
+// ---------------------------------------------------------------------------
+// listPaymentsPaged — list-page read with total count, method filter,
+// customer join, and sortable date/amount. Mirrors listCreditMemosPaged.
+// ---------------------------------------------------------------------------
+
+export type PaymentSortField = 'receivedAt' | 'amount';
+export type SortDir = 'asc' | 'desc';
+
+export type PaymentListPagedFilters = {
+  customerId?: string;
+  status?: PaymentStatus;
+  method?: PaymentMethod;
+  receivedAtFrom?: Date;
+  receivedAtTo?: Date;
+  q?: string;
+  sort?: PaymentSortField;
+  dir?: SortDir;
+  skip?: number;
+  take?: number;
+};
+
+// Each row carries the customer (for the Customer column) and its
+// applications enriched with the invoice + SO link so the list can
+// compute applied/unapplied and navigate a row to the source SO.
+export type PaymentListPagedRow = Payment & {
+  customer: { id: string; code: string; name: string };
+  applications: Array<
+    CreditApplication & {
+      invoice: { id: string; number: string; salesOrderId: string | null };
+    }
+  >;
+};
+
+export async function listPaymentsPaged(
+  db: PrismaClient,
+  filters: PaymentListPagedFilters = {},
+): Promise<{ rows: PaymentListPagedRow[]; total: number }> {
+  const {
+    customerId,
+    status,
+    method,
+    receivedAtFrom,
+    receivedAtTo,
+    q,
+    sort = 'receivedAt',
+    dir = 'desc',
+    skip = 0,
+    take = 20,
+  } = filters;
+
+  const dateFilter: { gte?: Date; lte?: Date } = {};
+  if (receivedAtFrom) dateFilter.gte = receivedAtFrom;
+  if (receivedAtTo) dateFilter.lte = receivedAtTo;
+
+  const where: Prisma.PaymentWhereInput = {
+    deletedAt: null,
+    ...(customerId ? { customerId } : {}),
+    ...(status ? { status } : {}),
+    ...(method ? { method } : {}),
+    ...(receivedAtFrom || receivedAtTo ? { receivedAt: dateFilter } : {}),
+    ...(q
+      ? {
+          OR: [
+            { number: { contains: q, mode: 'insensitive' as const } },
+            { reference: { contains: q, mode: 'insensitive' as const } },
+          ],
+        }
+      : {}),
+  };
+
+  const [rows, total] = await Promise.all([
+    db.payment.findMany({
+      where,
+      include: {
+        customer: { select: { id: true, code: true, name: true } },
+        applications: {
+          include: {
+            invoice: {
+              select: { id: true, number: true, salesOrderId: true },
+            },
+          },
+        },
+      },
+      orderBy: { [sort]: dir },
+      skip,
+      take: Math.min(take, 200),
+    }),
+    db.payment.count({ where }),
+  ]);
+
+  return { rows, total };
+}

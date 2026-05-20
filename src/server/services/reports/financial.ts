@@ -601,6 +601,43 @@ export async function journalEntriesForInvoice(
 }
 
 // ---------------------------------------------------------------------------
+// journalEntriesForEntity — all JEs posted under a single (entityType,
+// entityId). Used by detail pages whose JEs post under the entity's own
+// id (e.g. Payment detail: entityType='Payment', entityId=paymentId —
+// covers both the cash-receipt JE and any reversal JE).
+// ---------------------------------------------------------------------------
+
+export async function journalEntriesForEntity(
+  db: PrismaClient,
+  entityType: string,
+  entityId: string,
+): Promise<JournalReportEntry[]> {
+  const jes = await db.journalEntry.findMany({
+    where: { deletedAt: null, entityType, entityId },
+    include: {
+      lines: { include: { account: { select: { code: true, name: true } } } },
+    },
+    orderBy: [{ postedAt: 'asc' }, { number: 'asc' }],
+  });
+  return jes.map((je) => ({
+    id: je.id,
+    number: je.number,
+    postedAt: je.postedAt,
+    description: je.description,
+    entityType: je.entityType,
+    entityId: je.entityId,
+    reversedAt: je.reversedAt,
+    lines: je.lines.map((l) => ({
+      accountCode: l.account.code,
+      accountName: l.account.name,
+      debit: l.debit,
+      credit: l.credit,
+      memo: l.memo,
+    })),
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // balanceSheet (slice C)
 // ---------------------------------------------------------------------------
 
