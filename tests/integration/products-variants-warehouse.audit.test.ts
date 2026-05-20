@@ -41,6 +41,7 @@ const buildProductInput = (sku: string, name: string) => ({
   type: 'SIMPLE' as const,
   tracksInventory: true,
   active: true,
+  hazmat: false,
 });
 const buildVariantInput = (productId: string, sku: string) => ({
   productId,

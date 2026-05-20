@@ -84,6 +84,9 @@ const formSchema = z.object({
   widthDim: nonNegDecimal,
   heightDim: nonNegDecimal,
   dimensionUnit: dimensionUnitEnum,
+  countryOfOrigin: z.string().max(120).optional(),
+  hsCode: z.string().max(64).optional(),
+  hazmat: z.boolean(),
   shopifyProductId: z.string().max(64).optional(),
 });
 
@@ -110,6 +113,9 @@ const DEFAULT_VALUES: ProductFormValues = {
   widthDim: '',
   heightDim: '',
   dimensionUnit: 'in',
+  countryOfOrigin: '',
+  hsCode: '',
+  hazmat: false,
   shopifyProductId: '',
 };
 
@@ -180,6 +186,9 @@ export function ProductForm({
         widthDim: nullEmpty(values.widthDim),
         heightDim: nullEmpty(values.heightDim),
         dimensionUnit: values.dimensionUnit,
+        countryOfOrigin: nullEmpty(values.countryOfOrigin),
+        hsCode: nullEmpty(values.hsCode),
+        hazmat: values.hazmat,
         shopifyProductId: nullEmpty(values.shopifyProductId),
       };
       // Always seed a default variant on create so the product appears
@@ -499,6 +508,53 @@ export function ProductForm({
                   )}
                 />
                 <FieldError errors={[errors.dimensionUnit]} />
+              </Field>
+            </div>
+          </FieldGroup>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Compliance</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="countryOfOrigin">
+                  Country of origin
+                </FieldLabel>
+                <Input
+                  id="countryOfOrigin"
+                  aria-invalid={!!errors.countryOfOrigin}
+                  {...register('countryOfOrigin')}
+                />
+                <FieldError errors={[errors.countryOfOrigin]} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="hsCode">HS code</FieldLabel>
+                <Input
+                  id="hsCode"
+                  className="font-mono"
+                  aria-invalid={!!errors.hsCode}
+                  {...register('hsCode')}
+                />
+                <FieldError errors={[errors.hsCode]} />
+              </Field>
+              <Field orientation="horizontal" className="md:items-start md:pt-2">
+                <Controller
+                  control={control}
+                  name="hazmat"
+                  render={({ field }) => (
+                    <Checkbox
+                      id="hazmat"
+                      checked={field.value}
+                      onCheckedChange={(v) => field.onChange(v === true)}
+                    />
+                  )}
+                />
+                <FieldLabel htmlFor="hazmat">Hazmat</FieldLabel>
               </Field>
             </div>
           </FieldGroup>

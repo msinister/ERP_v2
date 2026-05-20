@@ -56,6 +56,9 @@ export default async function EditProductPage({
     widthDim: product.widthDim?.toString() ?? '',
     heightDim: product.heightDim?.toString() ?? '',
     dimensionUnit: asDimensionUnit(product.dimensionUnit),
+    countryOfOrigin: product.countryOfOrigin ?? '',
+    hsCode: product.hsCode ?? '',
+    hazmat: product.hazmat,
     shopifyProductId: product.shopifyProductId ?? '',
   };
 

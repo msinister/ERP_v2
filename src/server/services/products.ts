@@ -243,6 +243,64 @@ export async function listProductsPaged(
   return { rows, total };
 }
 
+// ---------------------------------------------------------------------------
+// Export — all products matching the list filters (no pagination), lean
+// select of just the CSV-export columns. Drives the products-list "Export"
+// button. The cap is a safety ceiling; pilot catalogs are far smaller.
+// ---------------------------------------------------------------------------
+
+export type ProductExportRow = {
+  sku: string;
+  name: string;
+  shortDescription: string | null;
+  longDescription: string | null;
+  brand: string | null;
+  category: string | null;
+  basePrice: Prisma.Decimal | null;
+  weight: Prisma.Decimal | null;
+  weightUnit: string | null;
+  lengthDim: Prisma.Decimal | null;
+  widthDim: Prisma.Decimal | null;
+  heightDim: Prisma.Decimal | null;
+  dimensionUnit: string | null;
+  countryOfOrigin: string | null;
+  hsCode: string | null;
+  hazmat: boolean;
+  active: boolean;
+  type: Product['type'];
+};
+
+export async function listProductsForExport(
+  db: PrismaClient,
+  filters: Omit<ProductListFilters, 'skip' | 'take'> = {},
+): Promise<ProductExportRow[]> {
+  return db.product.findMany({
+    where: productWhere(filters),
+    select: {
+      sku: true,
+      name: true,
+      shortDescription: true,
+      longDescription: true,
+      brand: true,
+      category: true,
+      basePrice: true,
+      weight: true,
+      weightUnit: true,
+      lengthDim: true,
+      widthDim: true,
+      heightDim: true,
+      dimensionUnit: true,
+      countryOfOrigin: true,
+      hsCode: true,
+      hazmat: true,
+      active: true,
+      type: true,
+    },
+    orderBy: [{ active: 'desc' }, { name: 'asc' }],
+    take: 50000,
+  });
+}
+
 // Distinct brand / category values from existing products. Powers the
 // filter dropdowns without an admin-managed lookup table — pilot data
 // volume is small enough that DISTINCT is cheap.

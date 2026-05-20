@@ -310,6 +310,13 @@ model Product {
   widthDim         Decimal?    @db.Decimal(18, 5)
   heightDim        Decimal?    @db.Decimal(18, 5)
   dimensionUnit    String?     @default("in")
+  // Trade-compliance master data (no inventory impact). Free-text by
+  // design: countryOfOrigin is an ISO-ish label, hsCode is the
+  // Harmonized System tariff code. hazmat flags dangerous-goods
+  // handling for shipping/labeling downstream.
+  countryOfOrigin  String?
+  hsCode           String?
+  hazmat           Boolean     @default(false)
   shopifyProductId String?
   active           Boolean     @default(true)
   // Flat-dollar labor cost rolled into the cost of every finished

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Plus } from 'lucide-react';
+import { Plus, Upload } from 'lucide-react';
 import { db } from '@/lib/db';
 import {
   listProductBrands,
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { ProductsFilters } from './_components/filters';
 import { ProductsTable, type ProductRowData } from './_components/table';
 import { ProductsPagination } from './_components/pagination';
+import { ExportButton } from './_components/export-button';
 
 export const revalidate = 0;
 
@@ -75,10 +76,17 @@ export default async function ProductsPage({
             Catalog, variants, inventory, and FIFO/WAC costing.
           </p>
         </div>
-        <Button render={<Link href="/products/new" />}>
-          <Plus />
-          New product
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportButton />
+          <Button variant="outline" render={<Link href="/products/import" />}>
+            <Upload />
+            Import
+          </Button>
+          <Button render={<Link href="/products/new" />}>
+            <Plus />
+            New product
+          </Button>
+        </div>
       </div>
 
       <ProductsFilters brands={brands} categories={categories} />
