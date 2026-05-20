@@ -1,7 +1,9 @@
 import { Suspense } from 'react';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { db } from '@/lib/db';
 import { getCustomer } from '@/server/services/customers';
+import { getActor } from '@/lib/permissions/getActor';
+import { customerScopeWhere } from '@/lib/permissions/scope';
 import {
   Tabs,
   TabsContent,
@@ -35,7 +37,11 @@ export default async function CustomerDetailPage({
 }) {
   const { id } = await params;
   const sp = await searchParams;
-  const customer = await getCustomer(db, id);
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+  // Out-of-scope customers resolve to null → not-found, so a "view own"
+  // user can't open another rep's customer by guessing the URL.
+  const customer = await getCustomer(db, id, customerScopeWhere(actor));
   if (!customer) notFound();
 
   return (

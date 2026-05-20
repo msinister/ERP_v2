@@ -659,10 +659,32 @@ model AuditLog {
 // not interfere with BetterAuth's reads. See src/lib/auth/auth.ts for
 // the matching `additionalFields` declaration.
 //
-// Pilot RBAC model: a single `isSuperAdmin` boolean. Role/Permission
-// tables are deferred per slice plan — they will land additively post
-// pilot without disturbing this section.
+// RBAC model: a Super Admin boolean (bypasses all checks) PLUS optional
+// custom Roles. A Role carries a sparse JSON permission map; a User
+// references at most one Role via `roleId`. Super Admin has no role and
+// needs none — `isSuperAdmin` short-circuits every permission check. See
+// src/lib/permissions/ for the catalog + check/scope helpers.
 // =========================================================================
+
+// Custom role — a named bundle of granular permissions. `permissions` is
+// a sparse JSON map of PermissionKey -> true (absent key = not granted),
+// validated against src/lib/permissions/constants.ts in the service layer.
+// We store JSON rather than a normalized RolePermission table by design:
+// the permission set is small, always read whole, and edited as one form.
+// Soft-delete refuses while any User still references the role.
+model Role {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String?
+  permissions Json      @default("{}")
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  users User[]
+
+  @@index([deletedAt])
+}
 
 model User {
   // BetterAuth core fields ------------------------------------------------
@@ -677,9 +699,12 @@ model User {
   department         String?
   warehouseId        String?
   salesRepId         String?   @unique
-  // Two-tier RBAC for pilot: Super Admin vs. everyone else. Custom roles
-  // land in a future slice as additive Role / RolePermission / UserRole
-  // tables — no migration of this column required.
+  // Optional custom role. NULL for Super Admins (they bypass checks) and
+  // for users granted no role yet. Permission checks read role.permissions
+  // via lib/permissions/loadActor.
+  roleId             String?
+  // Super Admin bypasses every permission + scope check. Distinct from a
+  // role: it's an all-access flag, not a permission bundle.
   isSuperAdmin       Boolean   @default(false)
   // Disabling a user prevents login but preserves audit trail. Distinct
   // from soft-delete (deletedAt) — a disabled-but-not-deleted account
@@ -693,11 +718,13 @@ model User {
 
   warehouse Warehouse? @relation(fields: [warehouseId], references: [id])
   salesRep  SalesRep?  @relation(fields: [salesRepId], references: [id])
+  role      Role?      @relation(fields: [roleId], references: [id])
   sessions  Session[]
   accounts  Account[]
 
   @@index([enabled, deletedAt])
   @@index([warehouseId])
+  @@index([roleId])
 }
 
 model Session {

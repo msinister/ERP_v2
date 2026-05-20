@@ -7,6 +7,8 @@ import {
   CalendarClock,
   CalendarCheck2,
   ScrollText,
+  ShieldCheck,
+  BadgeDollarSign,
   type LucideIcon,
 } from 'lucide-react';
 import { getCurrentUser } from '@/lib/auth/getCurrentUser';
@@ -37,6 +39,18 @@ const TILES: AdminTile[] = [
     title: 'Users',
     description: 'People with access, roles, password resets.',
     icon: Users,
+  },
+  {
+    href: '/admin/roles',
+    title: 'Roles',
+    description: 'Custom permission bundles assigned to users.',
+    icon: ShieldCheck,
+  },
+  {
+    href: '/admin/sales-reps',
+    title: 'Sales reps',
+    description: 'Commission rate + basis; link reps to logins.',
+    icon: BadgeDollarSign,
   },
   {
     href: '/admin/settings',

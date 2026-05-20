@@ -18,12 +18,20 @@ import {
   FieldLabel,
 } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 // ===========================================================================
 // Form schema — mirrors the POST /api/admin/users + PATCH endpoints.
 // Password policy matches the create-first-super-admin script (8+ chars,
 // upper/lower/digit/special). Email + password are create-only; the
-// edit path PATCHes name + role + enabled + forcePasswordReset.
+// edit path PATCHes name + role + enabled + forcePasswordReset, plus the
+// custom-role assignment and the sales-rep link + commission fields.
 // ===========================================================================
 
 const passwordSchema = z
@@ -34,13 +42,15 @@ const passwordSchema = z
   .refine((v) => /\d/.test(v), 'Must include a digit')
   .refine((v) => /[^A-Za-z0-9]/.test(v), 'Must include a special character');
 
-// Both schemas resolve to the same TS shape so RHF's Resolver type
-// stays consistent across create/edit. Email + password validate
-// strictly in create mode; in edit mode email is read-only (disabled
-// input) and password is carrier-only — both get stripped from the
-// PATCH payload (the endpoint rejects them anyway). `enabled` is
-// always present in the shape; on create the API defaults it to true
-// and ignores the payload value.
+// Sentinel for the "no role" Select option (empty string values aren't
+// allowed by the Select primitive).
+const NO_ROLE = '__none__';
+
+// Both schemas resolve to the same TS shape so RHF's Resolver type stays
+// consistent across create/edit. Email + password validate strictly in
+// create mode; in edit mode email is read-only and password is carrier-
+// only — both get stripped from the PATCH payload. Role + sales-rep fields
+// are edit-only (the create endpoint ignores them).
 const createSchema = z.object({
   name: z.string().min(1, 'Required').max(255),
   email: z.string().email().max(255),
@@ -48,6 +58,11 @@ const createSchema = z.object({
   enabled: z.boolean(),
   isSuperAdmin: z.boolean(),
   forcePasswordReset: z.boolean(),
+  roleId: z.string(),
+  isSalesRep: z.boolean(),
+  commissionEnabled: z.boolean(),
+  commissionBasis: z.enum(['REVENUE', 'MARGIN']),
+  commissionPercent: z.string(),
 });
 
 const editSchema = z.object({
@@ -57,6 +72,16 @@ const editSchema = z.object({
   enabled: z.boolean(),
   isSuperAdmin: z.boolean(),
   forcePasswordReset: z.boolean(),
+  roleId: z.string(),
+  isSalesRep: z.boolean(),
+  commissionEnabled: z.boolean(),
+  commissionBasis: z.enum(['REVENUE', 'MARGIN']),
+  commissionPercent: z
+    .string()
+    .refine(
+      (v) => v.trim() === '' || (!Number.isNaN(Number(v)) && Number(v) >= 0),
+      'Must be a number ≥ 0',
+    ),
 });
 
 export type UserFormValues = z.infer<typeof createSchema>;
@@ -65,6 +90,8 @@ export type UserFormMode =
   | { kind: 'create' }
   | { kind: 'edit'; userId: string; isSelf: boolean };
 
+export type RoleOption = { id: string; name: string };
+
 const DEFAULT_VALUES: UserFormValues = {
   name: '',
   email: '',
@@ -72,12 +99,19 @@ const DEFAULT_VALUES: UserFormValues = {
   enabled: true,
   isSuperAdmin: false,
   forcePasswordReset: false,
+  roleId: NO_ROLE,
+  isSalesRep: false,
+  commissionEnabled: false,
+  commissionBasis: 'REVENUE',
+  commissionPercent: '',
 };
 
 type ApiErrorBody = {
   error?: string;
   issues?: Array<{ path?: Array<string | number>; message?: string }>;
 };
+
+type ApiOkBody = { unlinkWarning?: { assignedCustomerCount: number } };
 
 async function readApiError(res: Response): Promise<string> {
   try {
@@ -96,9 +130,11 @@ async function readApiError(res: Response): Promise<string> {
 export function UserForm({
   mode,
   defaultValues,
+  roles = [],
 }: {
   mode: UserFormMode;
   defaultValues?: Partial<UserFormValues>;
+  roles?: RoleOption[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -111,8 +147,11 @@ export function UserForm({
     register,
     handleSubmit,
     control,
+    watch,
     formState: { errors },
   } = form;
+
+  const isSalesRep = watch('isSalesRep');
 
   function submit(values: UserFormValues) {
     startTransition(async () => {
@@ -146,6 +185,20 @@ export function UserForm({
             name: values.name.trim(),
             isSuperAdmin: values.isSuperAdmin,
             forcePasswordReset: values.forcePasswordReset,
+            roleId: values.roleId === NO_ROLE ? null : values.roleId,
+            salesRep: {
+              isSalesRep: values.isSalesRep,
+              ...(values.isSalesRep
+                ? {
+                    commissionEnabled: values.commissionEnabled,
+                    commissionBasis: values.commissionBasis,
+                    commissionPercent:
+                      values.commissionPercent.trim() === ''
+                        ? null
+                        : values.commissionPercent.trim(),
+                  }
+                : {}),
+            },
           };
           if (!mode.isSelf) {
             payload.enabled = values.enabled;
@@ -159,7 +212,14 @@ export function UserForm({
             toast.error(await readApiError(res));
             return;
           }
-          toast.success('Saved');
+          const body = (await res.json().catch(() => ({}))) as ApiOkBody;
+          if (body.unlinkWarning) {
+            toast.warning(
+              `Unlinked — the sales rep still has ${body.unlinkWarning.assignedCustomerCount} assigned customer(s). Reassign them so orders stay scoped correctly.`,
+            );
+          } else {
+            toast.success('Saved');
+          }
           router.push('/admin/users');
           router.refresh();
         }
@@ -257,10 +317,44 @@ export function UserForm({
                   Full access to every page, including this one.{' '}
                   {isSelf
                     ? "You can't demote your own account."
-                    : 'Demoting a user keeps their audit history.'}
+                    : 'Demoting a user keeps their audit history. Super admins bypass roles entirely.'}
                 </p>
               </div>
             </Field>
+            {!isCreate ? (
+              <Field>
+                <FieldLabel htmlFor="roleId">Role</FieldLabel>
+                <Controller
+                  control={control}
+                  name="roleId"
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger id="roleId" className="w-full">
+                        <SelectValue placeholder="No role">
+                          {(v) =>
+                            v === NO_ROLE
+                              ? 'No role'
+                              : (roles.find((r) => r.id === v)?.name ?? v)
+                          }
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NO_ROLE}>No role</SelectItem>
+                        {roles.map((r) => (
+                          <SelectItem key={r.id} value={r.id}>
+                            {r.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Custom role granting granular permissions. Ignored while
+                  Super admin is on.
+                </p>
+              </Field>
+            ) : null}
             {!isCreate ? (
               <Field orientation="horizontal">
                 <Controller
@@ -310,6 +404,113 @@ export function UserForm({
           </FieldGroup>
         </CardContent>
       </Card>
+
+      {!isCreate ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm">Sales rep</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <FieldGroup>
+              <Field orientation="horizontal">
+                <Controller
+                  control={control}
+                  name="isSalesRep"
+                  render={({ field }) => (
+                    <Checkbox
+                      id="isSalesRep"
+                      checked={field.value}
+                      onCheckedChange={(v) => field.onChange(v === true)}
+                    />
+                  )}
+                />
+                <div>
+                  <FieldLabel htmlFor="isSalesRep">
+                    This user is a sales rep
+                  </FieldLabel>
+                  <p className="text-xs text-muted-foreground">
+                    Links the user to a sales-rep record (created on demand).
+                    Customers can then be assigned to them, and “view own”
+                    scoping resolves through this link. Turning it off removes
+                    the assignment — you’ll be warned if customers are still
+                    assigned.
+                  </p>
+                </div>
+              </Field>
+
+              {isSalesRep ? (
+                <>
+                  <Field orientation="horizontal">
+                    <Controller
+                      control={control}
+                      name="commissionEnabled"
+                      render={({ field }) => (
+                        <Checkbox
+                          id="commissionEnabled"
+                          checked={field.value}
+                          onCheckedChange={(v) => field.onChange(v === true)}
+                        />
+                      )}
+                    />
+                    <div>
+                      <FieldLabel htmlFor="commissionEnabled">
+                        Earns commission
+                      </FieldLabel>
+                      <p className="text-xs text-muted-foreground">
+                        Off for salaried reps — the commission engine skips
+                        them.
+                      </p>
+                    </div>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="commissionBasis">
+                      Commission basis
+                    </FieldLabel>
+                    <Controller
+                      control={control}
+                      name="commissionBasis"
+                      render={({ field }) => (
+                        <Select
+                          value={field.value}
+                          onValueChange={field.onChange}
+                        >
+                          <SelectTrigger
+                            id="commissionBasis"
+                            className="w-full"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="REVENUE">Revenue</SelectItem>
+                            <SelectItem value="MARGIN">
+                              Margin (revenue − COGS)
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="commissionPercent">
+                      Commission rate (%)
+                    </FieldLabel>
+                    <Input
+                      id="commissionPercent"
+                      inputMode="decimal"
+                      placeholder="e.g. 5"
+                      aria-invalid={!!errors.commissionPercent}
+                      {...register('commissionPercent')}
+                    />
+                    <FieldError errors={[errors.commissionPercent]} />
+                  </Field>
+                </>
+              ) : null}
+            </FieldGroup>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="flex items-center justify-end gap-2">
         <Button

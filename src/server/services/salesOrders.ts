@@ -1717,9 +1717,12 @@ export async function softDeleteSalesOrder(
 export async function getSalesOrder(
   db: PrismaClient,
   id: string,
+  // Optional data-scope fragment (lib/permissions/scope.salesOrderScopeWhere).
+  // Out-of-scope SOs resolve to null. Omitted by unscoped/internal callers.
+  scope?: Prisma.SalesOrderWhereInput,
 ): Promise<SalesOrderWithLines | null> {
   return db.salesOrder.findFirst({
-    where: { id, deletedAt: null },
+    where: { AND: [{ id, deletedAt: null }, scope ?? {}] },
     include: { lines: { where: { deletedAt: null } } },
   });
 }
@@ -1759,6 +1762,8 @@ export type SalesOrderListFilters = {
   // Substring match on SO number (case-insensitive). Numbers look like
   // SO-2026-00001 so partial matches are useful.
   q?: string;
+  // Data-scope fragment from lib/permissions/scope.salesOrderScopeWhere.
+  scope?: Prisma.SalesOrderWhereInput;
   skip?: number;
   take?: number;
 };
@@ -1766,7 +1771,7 @@ export type SalesOrderListFilters = {
 function salesOrderWhere(
   filters: Omit<SalesOrderListFilters, 'skip' | 'take'>,
 ): Prisma.SalesOrderWhereInput {
-  const { status, customerId, salesRepId, dateFrom, dateTo, q } = filters;
+  const { status, customerId, salesRepId, dateFrom, dateTo, q, scope } = filters;
   const dateClause: Prisma.DateTimeFilter | undefined =
     dateFrom || dateTo
       ? {
@@ -1774,7 +1779,7 @@ function salesOrderWhere(
           ...(dateTo ? { lte: dateTo } : {}),
         }
       : undefined;
-  return {
+  const base: Prisma.SalesOrderWhereInput = {
     deletedAt: null,
     ...(status ? { status } : {}),
     ...(customerId ? { customerId } : {}),
@@ -1782,6 +1787,8 @@ function salesOrderWhere(
     ...(dateClause ? { orderDate: dateClause } : {}),
     ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
   };
+  // AND so an explicit salesRepId filter can't widen past the scope.
+  return scope ? { AND: [base, scope] } : base;
 }
 
 // Paginated list with customer (id, code, name, salesRepId) eager-

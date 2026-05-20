@@ -6,12 +6,21 @@ import { audit } from '@/lib/audit/audit';
 import { requireSuperAdmin } from '@/lib/auth/requireAuth';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
+import { decimalString } from '@/lib/validation/common';
+import {
+  linkUserAsSalesRep,
+  unlinkUserSalesRep,
+} from '@/server/services/salesReps';
 
 // Admin user-update endpoint. Covers the fields a super-admin can flip:
 //   - name           (display name; email is immutable)
 //   - enabled        (block login without losing audit trail)
 //   - isSuperAdmin   (role flip — PERMISSION_CHANGE audit row)
 //   - forcePasswordReset (flag the user to rotate on next login)
+//   - roleId         (custom-role assignment; null = unassign)
+//   - salesRep       (flag/unflag as sales rep + commission fields; the
+//                     link is owned by User.salesRepId → a SalesRep row,
+//                     created on demand — see linkUserAsSalesRep)
 //
 // No DELETE — users own audit-trail dependencies. Disabling is the
 // supported way to revoke access.
@@ -24,6 +33,19 @@ const updateUserSchema = z.object({
   enabled: z.boolean().optional(),
   isSuperAdmin: z.boolean().optional(),
   forcePasswordReset: z.boolean().optional(),
+  // null = unassign role. Absent = leave unchanged.
+  roleId: z.string().min(1).nullable().optional(),
+  salesRep: z
+    .object({
+      isSalesRep: z.boolean(),
+      commissionEnabled: z.boolean().optional(),
+      commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
+      commissionPercent: decimalString
+        .refine((v) => Number(v) >= 0, 'Must be >= 0')
+        .nullable()
+        .optional(),
+    })
+    .optional(),
 });
 
 export async function PATCH(
@@ -58,6 +80,8 @@ export async function PATCH(
         isSuperAdmin: true,
         enabled: true,
         forcePasswordReset: true,
+        roleId: true,
+        salesRepId: true,
         deletedAt: true,
       },
     });
@@ -89,6 +113,18 @@ export async function PATCH(
       }
     }
 
+    // Validate role assignment up front — connecting to a missing/deleted
+    // role would otherwise throw an opaque FK error.
+    if (parsed.data.roleId) {
+      const role = await db.role.findFirst({
+        where: { id: parsed.data.roleId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!role) {
+        return NextResponse.json({ error: 'Role not found' }, { status: 400 });
+      }
+    }
+
     const data: Prisma.UserUpdateInput = {};
     if (parsed.data.name !== undefined) data.name = parsed.data.name;
     if (parsed.data.enabled !== undefined) data.enabled = parsed.data.enabled;
@@ -96,14 +132,48 @@ export async function PATCH(
       data.isSuperAdmin = parsed.data.isSuperAdmin;
     if (parsed.data.forcePasswordReset !== undefined)
       data.forcePasswordReset = parsed.data.forcePasswordReset;
+    if ('roleId' in parsed.data) {
+      data.role = parsed.data.roleId
+        ? { connect: { id: parsed.data.roleId } }
+        : { disconnect: true };
+    }
 
-    if (Object.keys(data).length === 0) {
+    const hasCoreChange = Object.keys(data).length > 0;
+    const hasSalesRepChange = parsed.data.salesRep !== undefined;
+    if (!hasCoreChange && !hasSalesRepChange) {
       return NextResponse.json(before);
     }
 
-    const after = await db.user.update({
+    if (hasCoreChange) {
+      await db.user.update({ where: { id }, data });
+    }
+
+    // Sales-rep link/unlink runs in its own transaction (creates/updates a
+    // SalesRep + flips User.salesRepId) and writes its own audit rows.
+    // Unlink warns-not-blocks when the rep still owns customers.
+    let unlinkWarning: { assignedCustomerCount: number } | null = null;
+    if (parsed.data.salesRep) {
+      if (parsed.data.salesRep.isSalesRep) {
+        await linkUserAsSalesRep(
+          db,
+          id,
+          {
+            commissionEnabled: parsed.data.salesRep.commissionEnabled,
+            commissionBasis: parsed.data.salesRep.commissionBasis,
+            commissionPercent: parsed.data.salesRep.commissionPercent,
+          },
+          auditCtx,
+        );
+      } else {
+        const res = await unlinkUserSalesRep(db, id, auditCtx);
+        if (res.assignedCustomerCount > 0) {
+          unlinkWarning = { assignedCustomerCount: res.assignedCustomerCount };
+        }
+      }
+    }
+
+    const after = await db.user.findUniqueOrThrow({
       where: { id },
-      data,
       select: {
         id: true,
         email: true,
@@ -111,38 +181,49 @@ export async function PATCH(
         isSuperAdmin: true,
         enabled: true,
         forcePasswordReset: true,
+        roleId: true,
+        salesRepId: true,
       },
     });
 
-    // PERMISSION_CHANGE for role flips, UPDATE for everything else.
-    // Matches the convention used by the bootstrap script.
-    const isPermissionChange =
-      (parsed.data.isSuperAdmin !== undefined &&
-        parsed.data.isSuperAdmin !== before.isSuperAdmin) ||
-      (parsed.data.enabled !== undefined &&
-        parsed.data.enabled !== before.enabled);
-    await audit(db, {
-      action: isPermissionChange
-        ? AuditAction.PERMISSION_CHANGE
-        : AuditAction.UPDATE,
-      entityType: 'User',
-      entityId: id,
-      before: {
-        name: before.name,
-        isSuperAdmin: before.isSuperAdmin,
-        enabled: before.enabled,
-        forcePasswordReset: before.forcePasswordReset,
-      },
-      after: {
-        name: after.name,
-        isSuperAdmin: after.isSuperAdmin,
-        enabled: after.enabled,
-        forcePasswordReset: after.forcePasswordReset,
-      },
-      ctx: auditCtx,
-    });
+    // PERMISSION_CHANGE when access-defining fields move (super-admin,
+    // enabled, role); UPDATE otherwise. Sales-rep linkage already audited
+    // itself in the service, so only the core update writes a row here.
+    if (hasCoreChange) {
+      const isPermissionChange =
+        (parsed.data.isSuperAdmin !== undefined &&
+          parsed.data.isSuperAdmin !== before.isSuperAdmin) ||
+        (parsed.data.enabled !== undefined &&
+          parsed.data.enabled !== before.enabled) ||
+        after.roleId !== before.roleId;
+      await audit(db, {
+        action: isPermissionChange
+          ? AuditAction.PERMISSION_CHANGE
+          : AuditAction.UPDATE,
+        entityType: 'User',
+        entityId: id,
+        before: {
+          name: before.name,
+          isSuperAdmin: before.isSuperAdmin,
+          enabled: before.enabled,
+          forcePasswordReset: before.forcePasswordReset,
+          roleId: before.roleId,
+        },
+        after: {
+          name: after.name,
+          isSuperAdmin: after.isSuperAdmin,
+          enabled: after.enabled,
+          forcePasswordReset: after.forcePasswordReset,
+          roleId: after.roleId,
+        },
+        ctx: auditCtx,
+      });
+    }
 
-    return NextResponse.json(after);
+    return NextResponse.json({
+      ...after,
+      ...(unlinkWarning ? { unlinkWarning } : {}),
+    });
   } catch (e) {
     const authResp = authErrorResponse(e);
     if (authResp) return authResp;

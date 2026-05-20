@@ -15,6 +15,9 @@ export const createSalesRepInputSchema = z.object({
   name: z.string().min(1).max(255),
   email: z.string().email().max(255).optional(),
   active: z.boolean().optional(),
+  // Per-rep commission gate. When false the commission engine skips the
+  // rep entirely (salaried reps); basis/percent are only meaningful when on.
+  commissionEnabled: z.boolean().optional(),
   commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
   commissionPercent: nonNegativeDecimal.nullable().optional(),
   groupId: z.string().min(1).nullable().optional(),
@@ -24,6 +27,7 @@ export const updateSalesRepInputSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   email: z.string().email().max(255).nullable().optional(),
   active: z.boolean().optional(),
+  commissionEnabled: z.boolean().optional(),
   commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
   commissionPercent: nonNegativeDecimal.nullable().optional(),
   groupId: z.string().min(1).nullable().optional(),

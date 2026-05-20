@@ -88,6 +88,7 @@ export const auth = betterAuth({
       department: { type: 'string', required: false, input: false },
       warehouseId: { type: 'string', required: false, input: false },
       salesRepId: { type: 'string', required: false, input: false },
+      roleId: { type: 'string', required: false, input: false },
       isSuperAdmin: { type: 'boolean', required: false, input: false, defaultValue: false },
       enabled: { type: 'boolean', required: false, input: false, defaultValue: true },
       forcePasswordReset: {

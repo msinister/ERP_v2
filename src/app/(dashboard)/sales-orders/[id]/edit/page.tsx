@@ -1,9 +1,11 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { listCustomers } from '@/server/services/customers';
 import { listWarehouses } from '@/server/services/warehouse';
+import { getActor } from '@/lib/permissions/getActor';
+import { salesOrderScopeWhere } from '@/lib/permissions/scope';
 import {
   Card,
   CardContent,
@@ -26,8 +28,10 @@ export default async function EditSalesOrderPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const actor = await getActor();
+  if (!actor) redirect('/login');
   const so = await db.salesOrder.findFirst({
-    where: { id, deletedAt: null },
+    where: { AND: [{ id, deletedAt: null }, salesOrderScopeWhere(actor)] },
     include: {
       lines: {
         where: { deletedAt: null },

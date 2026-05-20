@@ -283,8 +283,14 @@ export async function softDeleteCustomer(
 export async function getCustomer(
   db: PrismaClient,
   id: string,
+  // Optional data-scope fragment (lib/permissions/scope.customerScopeWhere).
+  // When the customer falls outside the actor's scope this returns null —
+  // detail pages render not-found. Omitted by unscoped/internal callers.
+  scope?: Prisma.CustomerWhereInput,
 ): Promise<Customer | null> {
-  return db.customer.findFirst({ where: { id, deletedAt: null } });
+  return db.customer.findFirst({
+    where: { AND: [{ id, deletedAt: null }, scope ?? {}] },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +304,10 @@ export type CustomerListFilters = {
   tagId?: string;
   categoryId?: string;
   q?: string; // case-insensitive substring on display name (citext)
+  // Data-scope fragment from lib/permissions/scope.customerScopeWhere.
+  // ANDed into the where so a "view own" actor only sees their reps'
+  // customers; a "view all" actor passes {} (no restriction).
+  scope?: Prisma.CustomerWhereInput;
   skip?: number;
   take?: number;
 };
@@ -307,8 +317,8 @@ export type CustomerListFilters = {
 function customerWhere(
   filters: Omit<CustomerListFilters, 'skip' | 'take'>,
 ): Prisma.CustomerWhereInput {
-  const { active, type, salesRepId, tagId, categoryId, q } = filters;
-  return {
+  const { active, type, salesRepId, tagId, categoryId, q, scope } = filters;
+  const base: Prisma.CustomerWhereInput = {
     deletedAt: null,
     ...(active !== undefined ? { active } : {}),
     ...(type ? { type } : {}),
@@ -319,6 +329,9 @@ function customerWhere(
     // mode: 'insensitive' which produces ILIKE on Postgres.
     ...(q ? { name: { contains: q, mode: 'insensitive' as const } } : {}),
   };
+  // AND (not spread) so the scope can't be clobbered by an explicit
+  // salesRepId filter — both must hold.
+  return scope ? { AND: [base, scope] } : base;
 }
 
 export async function listCustomers(

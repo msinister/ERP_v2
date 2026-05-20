@@ -1,10 +1,13 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { db } from '@/lib/db';
 import { SalesOrderStatus } from '@/generated/tenant';
 import { listSalesOrdersPaged } from '@/server/services/salesOrders';
 import { listSalesReps } from '@/server/services/salesReps';
 import { computeSalesOrderTotal } from '@/lib/ar/openSos';
+import { getActor } from '@/lib/permissions/getActor';
+import { salesOrderScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
 import {
   SalesOrdersFilters,
@@ -63,6 +66,10 @@ export default async function SalesOrdersPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+  const scope = salesOrderScopeWhere(actor);
+
   const [salesReps, page] = await Promise.all([
     listSalesReps(db, { active: true }),
     listSalesOrdersPaged(db, {
@@ -71,6 +78,7 @@ export default async function SalesOrdersPage({
       salesRepId,
       dateFrom,
       dateTo,
+      scope,
       skip,
       take,
     }),

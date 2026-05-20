@@ -1,10 +1,13 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { db } from '@/lib/db';
 import { CustomerType } from '@/generated/tenant';
 import { listCustomersPaged } from '@/server/services/customers';
 import { listSalesReps } from '@/server/services/salesReps';
 import { arBalanceForCustomer } from '@/server/services/ar';
+import { getActor } from '@/lib/permissions/getActor';
+import { customerScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
 import { CustomersFilters, type SalesRepOption } from './_components/filters';
 import { CustomersTable, type CustomerRowData } from './_components/table';
@@ -50,9 +53,13 @@ export default async function CustomersPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+  const scope = customerScopeWhere(actor);
+
   const [salesReps, page] = await Promise.all([
     listSalesReps(db, { active: true }),
-    listCustomersPaged(db, { q, type, active, salesRepId, skip, take }),
+    listCustomersPaged(db, { q, type, active, salesRepId, scope, skip, take }),
   ]);
 
   // Resolve sales-rep names off the rep list rather than re-querying

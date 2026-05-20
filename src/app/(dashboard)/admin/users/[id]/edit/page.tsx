@@ -19,19 +19,36 @@ export default async function EditUserPage({
   if (!me?.isSuperAdmin) redirect('/dashboard');
 
   const { id } = await params;
-  const user = await db.user.findFirst({
-    where: { id, deletedAt: null },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      isSuperAdmin: true,
-      enabled: true,
-      forcePasswordReset: true,
-    },
-  });
+  const [user, roles] = await Promise.all([
+    db.user.findFirst({
+      where: { id, deletedAt: null },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        isSuperAdmin: true,
+        enabled: true,
+        forcePasswordReset: true,
+        roleId: true,
+        salesRep: {
+          select: {
+            commissionEnabled: true,
+            commissionBasis: true,
+            commissionPercent: true,
+          },
+        },
+      },
+    }),
+    db.role.findMany({
+      where: { deletedAt: null },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    }),
+  ]);
   if (!user) notFound();
 
+  // Omit roleId / sales-rep keys when absent so the form's defaults
+  // ("__none__" role, not-a-sales-rep) apply cleanly.
   const defaults: Partial<UserFormValues> = {
     name: user.name,
     email: user.email,
@@ -40,6 +57,14 @@ export default async function EditUserPage({
     isSuperAdmin: user.isSuperAdmin,
     forcePasswordReset: user.forcePasswordReset,
   };
+  if (user.roleId) defaults.roleId = user.roleId;
+  if (user.salesRep) {
+    defaults.isSalesRep = true;
+    defaults.commissionEnabled = user.salesRep.commissionEnabled;
+    defaults.commissionBasis = user.salesRep.commissionBasis ?? 'REVENUE';
+    defaults.commissionPercent =
+      user.salesRep.commissionPercent?.toString() ?? '';
+  }
 
   return (
     <div className="space-y-6">
@@ -62,6 +87,7 @@ export default async function EditUserPage({
       <UserForm
         mode={{ kind: 'edit', userId: user.id, isSelf: me.id === user.id }}
         defaultValues={defaults}
+        roles={roles}
       />
     </div>
   );

@@ -1,7 +1,9 @@
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { Prisma, SalesOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { computeSalesOrderTotal } from '@/lib/ar/openSos';
+import { getActor } from '@/lib/permissions/getActor';
+import { salesOrderScopeWhere } from '@/lib/permissions/scope';
 import {
   lineItemImageVariantSelect,
   resolveLineImageUrl,
@@ -32,8 +34,12 @@ export default async function SalesOrderDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const actor = await getActor();
+  if (!actor) redirect('/login');
   const so = await db.salesOrder.findFirst({
-    where: { id, deletedAt: null },
+    // AND the data-scope fragment so a "view own" user can't open an SO
+    // for another rep's customer by URL.
+    where: { AND: [{ id, deletedAt: null }, salesOrderScopeWhere(actor)] },
     include: {
       lines: {
         where: { deletedAt: null },
