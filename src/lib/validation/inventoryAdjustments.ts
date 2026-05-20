@@ -25,5 +25,23 @@ export const voidAdjustmentInputSchema = z.object({
   reason: z.string().min(1).max(2000),
 });
 
+// Batch: one header (warehouse + category + reason) with many lines, each
+// a variant + signed qty + optional per-line note.
+export const batchAdjustmentLineSchema = z.object({
+  variantId: z.string().min(1),
+  qtyChange: nonZeroDecimal,
+  notes: z.string().max(2000).optional(),
+});
+
+export const batchAdjustmentInputSchema = z.object({
+  warehouseId: z.string().min(1),
+  category: adjustmentCategorySchema,
+  reason: z.string().min(1).max(2000),
+  internalNotes: z.string().max(2000).optional(),
+  adjustmentDate: z.coerce.date().optional(),
+  lines: z.array(batchAdjustmentLineSchema).min(1, 'Add at least one line'),
+});
+
 export type QuickAdjustmentInput = z.infer<typeof quickAdjustmentInputSchema>;
 export type VoidAdjustmentInput = z.infer<typeof voidAdjustmentInputSchema>;
+export type BatchAdjustmentInput = z.infer<typeof batchAdjustmentInputSchema>;

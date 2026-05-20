@@ -31,7 +31,8 @@ export type StatusEntityType =
   | 'Payment'
   | 'Rma'
   | 'VendorCredit'
-  | 'WorkOrder';
+  | 'WorkOrder'
+  | 'InventoryAdjustment';
 
 export type StatusTone =
   | 'grey'
@@ -120,6 +121,11 @@ const STATUS_TONES: Record<StatusEntityType, Record<string, StatusTone>> = {
     IN_PROGRESS: 'yellow',
     COMPLETED: 'blue',
     CANCELLED: 'outline',
+  },
+  InventoryAdjustment: {
+    DRAFT: 'grey',
+    POSTED: 'green',
+    VOIDED: 'outline',
   },
 };
 

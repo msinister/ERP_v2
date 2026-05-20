@@ -5,6 +5,7 @@ import {
   Prisma,
 } from '@/generated/tenant';
 import type {
+  AdjustmentCategory,
   InventoryAdjustment,
   InventoryAdjustmentLine,
   PrismaClient,
@@ -19,8 +20,10 @@ import { recomputeOnHand } from '@/server/services/movements';
 import { computeWac, getLastPurchaseCost } from '@/server/services/wac';
 import { getNextSequence } from '@/lib/sequences/sequences';
 import {
+  batchAdjustmentInputSchema,
   quickAdjustmentInputSchema,
   voidAdjustmentInputSchema,
+  type BatchAdjustmentInput,
   type QuickAdjustmentInput,
   type VoidAdjustmentInput,
 } from '@/lib/validation/inventoryAdjustments';
@@ -403,5 +406,175 @@ export async function voidAdjustment(
       where: { id: adj.id },
       include: { lines: true },
     });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// postBatchAdjustment — one header, many lines; posts immediately.
+// ---------------------------------------------------------------------------
+
+export async function postBatchAdjustment(
+  db: PrismaClient,
+  input: BatchAdjustmentInput,
+  ctx?: AuditContext,
+): Promise<InventoryAdjustmentWithLines> {
+  const data = batchAdjustmentInputSchema.parse(input);
+  return db.$transaction(async (tx) => {
+    const warehouse = await tx.warehouse.findUnique({
+      where: { id: data.warehouseId },
+      select: { code: true, inventoryAccount: { select: { code: true } } },
+    });
+    if (!warehouse) throw new Error(`Warehouse not found: ${data.warehouseId}`);
+    if (!warehouse.inventoryAccount?.code) {
+      throw new Error(
+        `Warehouse '${warehouse.code}' has no inventory GL account — link one before posting adjustments`,
+      );
+    }
+    const inventoryAccountCode = warehouse.inventoryAccount.code;
+
+    const seq = await getNextSequence(tx, {
+      name: SEQUENCE_NAME,
+      prefix: SEQUENCE_PREFIX,
+      useYear: true,
+    });
+    const adjustment = await tx.inventoryAdjustment.create({
+      data: {
+        number: seq.formatted,
+        warehouseId: data.warehouseId,
+        adjustmentDate: data.adjustmentDate ?? new Date(),
+        category: data.category,
+        reason: data.reason,
+        internalNotes: data.internalNotes ?? null,
+        status: AdjustmentStatus.POSTED,
+        postedAt: new Date(),
+        createdById: ctx?.userId ?? null,
+      },
+    });
+    await audit(tx, {
+      action: AuditAction.CREATE,
+      entityType: 'InventoryAdjustment',
+      entityId: adjustment.id,
+      after: adjustment,
+      ctx: { ...ctx, reason: data.reason },
+    });
+
+    for (const line of data.lines) {
+      const variant = await tx.productVariant.findUnique({
+        where: { id: line.variantId },
+        select: { sku: true },
+      });
+      if (!variant) throw new Error(`Variant not found: ${line.variantId}`);
+      const qtyChange = new Prisma.Decimal(line.qtyChange);
+      const { unitCost } = await applyAdjustmentLineTx(tx, {
+        adjustmentId: adjustment.id,
+        reference: adjustment.number,
+        warehouseId: data.warehouseId,
+        variantId: line.variantId,
+        qtyChange,
+        inventoryAccountCode,
+        variantSku: variant.sku,
+        warehouseCode: warehouse.code,
+        notes: line.notes ?? null,
+        ctx,
+      });
+      await tx.inventoryAdjustmentLine.create({
+        data: {
+          adjustmentId: adjustment.id,
+          variantId: line.variantId,
+          qtyChange,
+          unitCost,
+          notes: line.notes ?? null,
+        },
+      });
+    }
+
+    return tx.inventoryAdjustment.findUniqueOrThrow({
+      where: { id: adjustment.id },
+      include: { lines: true },
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Read paths (list + detail)
+// ---------------------------------------------------------------------------
+
+export type AdjustmentListFilters = {
+  status?: AdjustmentStatus;
+  warehouseId?: string;
+  category?: AdjustmentCategory;
+  from?: Date;
+  to?: Date;
+  skip?: number;
+  take?: number;
+};
+
+export type AdjustmentListRow = InventoryAdjustment & {
+  warehouse: { code: string; name: string };
+  lines: Array<{ qtyChange: Prisma.Decimal; unitCost: Prisma.Decimal }>;
+};
+
+export async function listAdjustmentsPaged(
+  db: PrismaClient,
+  filters: AdjustmentListFilters = {},
+): Promise<{ rows: AdjustmentListRow[]; total: number }> {
+  const { status, warehouseId, category, from, to, skip = 0, take = 25 } =
+    filters;
+  const dateFilter: { gte?: Date; lte?: Date } = {};
+  if (from) dateFilter.gte = from;
+  if (to) dateFilter.lte = to;
+  const where: Prisma.InventoryAdjustmentWhereInput = {
+    deletedAt: null,
+    ...(status ? { status } : {}),
+    ...(warehouseId ? { warehouseId } : {}),
+    ...(category ? { category } : {}),
+    ...(from || to ? { adjustmentDate: dateFilter } : {}),
+  };
+  const [rows, total] = await Promise.all([
+    db.inventoryAdjustment.findMany({
+      where,
+      include: {
+        warehouse: { select: { code: true, name: true } },
+        lines: { select: { qtyChange: true, unitCost: true } },
+      },
+      orderBy: { adjustmentDate: 'desc' },
+      skip,
+      take: Math.min(take, 200),
+    }),
+    db.inventoryAdjustment.count({ where }),
+  ]);
+  return { rows, total };
+}
+
+export type AdjustmentDetail = InventoryAdjustment & {
+  warehouse: { id: string; code: string; name: string };
+  lines: Array<
+    InventoryAdjustmentLine & {
+      variant: { sku: string; name: string | null; product: { name: string } };
+    }
+  >;
+};
+
+export async function getAdjustment(
+  db: PrismaClient,
+  id: string,
+): Promise<AdjustmentDetail | null> {
+  return db.inventoryAdjustment.findFirst({
+    where: { id, deletedAt: null },
+    include: {
+      warehouse: { select: { id: true, code: true, name: true } },
+      lines: {
+        include: {
+          variant: {
+            select: {
+              sku: true,
+              name: true,
+              product: { select: { name: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+      },
+    },
   });
 }
