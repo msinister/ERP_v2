@@ -21,41 +21,136 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { PermissionKey, PermissionMap } from '@/lib/permissions/constants';
 
 type NavItem = {
   label: string;
   href: string;
   icon: LucideIcon;
-  superAdminOnly?: boolean;
+  // Visible when the user holds ANY of these permissions. Omit (Dashboard)
+  // = always visible. Super Admin sees every item regardless.
+  anyOf?: PermissionKey[];
 };
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Customers', href: '/customers', icon: Users },
-  { label: 'Sales Orders', href: '/sales-orders', icon: ShoppingCart },
-  { label: 'Credit Memos', href: '/credit-memos', icon: Undo2 },
-  { label: 'Payments', href: '/payments', icon: Banknote },
-  { label: 'RMAs', href: '/rmas', icon: RotateCcw },
-  { label: 'Products', href: '/products', icon: Package },
-  { label: 'Inventory Adjustments', href: '/inventory-adjustments', icon: SlidersHorizontal },
-  { label: 'Work Orders', href: '/work-orders', icon: Wrench },
-  { label: 'Vendors', href: '/vendors', icon: Building2 },
-  { label: 'Purchase Orders', href: '/purchase-orders', icon: Truck },
-  { label: 'Bills', href: '/bills', icon: FileText },
-  { label: 'Vendor Credits', href: '/vendor-credits', icon: CreditCard },
-  { label: 'Reports', href: '/reports', icon: BarChart3 },
-  { label: 'Admin', href: '/admin', icon: Settings, superAdminOnly: true },
+  {
+    label: 'Customers',
+    href: '/customers',
+    icon: Users,
+    anyOf: ['customers.view_all', 'customers.view_own'],
+  },
+  {
+    label: 'Sales Orders',
+    href: '/sales-orders',
+    icon: ShoppingCart,
+    anyOf: ['sales_orders.view_all', 'sales_orders.view_own'],
+  },
+  {
+    label: 'Credit Memos',
+    href: '/credit-memos',
+    icon: Undo2,
+    anyOf: ['credit_memos.view_all', 'credit_memos.view_own'],
+  },
+  {
+    label: 'Payments',
+    href: '/payments',
+    icon: Banknote,
+    anyOf: ['payments.view_all', 'payments.view_own'],
+  },
+  {
+    label: 'RMAs',
+    href: '/rmas',
+    icon: RotateCcw,
+    anyOf: ['rmas.view_all', 'rmas.view_own'],
+  },
+  {
+    label: 'Products',
+    href: '/products',
+    icon: Package,
+    anyOf: ['products.view'],
+  },
+  {
+    label: 'Inventory Adjustments',
+    href: '/inventory-adjustments',
+    icon: SlidersHorizontal,
+    anyOf: ['inventory.view'],
+  },
+  {
+    label: 'Work Orders',
+    href: '/work-orders',
+    icon: Wrench,
+    anyOf: ['work_orders.view'],
+  },
+  {
+    label: 'Vendors',
+    href: '/vendors',
+    icon: Building2,
+    anyOf: ['vendors.view'],
+  },
+  {
+    // POs are part of the vendor/purchasing module.
+    label: 'Purchase Orders',
+    href: '/purchase-orders',
+    icon: Truck,
+    anyOf: ['vendors.view'],
+  },
+  {
+    label: 'Bills',
+    href: '/bills',
+    icon: FileText,
+    anyOf: ['bills.view'],
+  },
+  {
+    // Vendor credits are part of the AP (bills) module.
+    label: 'Vendor Credits',
+    href: '/vendor-credits',
+    icon: CreditCard,
+    anyOf: ['bills.view'],
+  },
+  {
+    label: 'Reports',
+    href: '/reports',
+    icon: BarChart3,
+    anyOf: ['reports.view_financial', 'reports.view_operational'],
+  },
+  {
+    label: 'Admin',
+    href: '/admin',
+    icon: Settings,
+    anyOf: [
+      'admin.edit_settings',
+      'admin.edit_users',
+      'admin.edit_roles',
+      'admin.view_audit_log',
+    ],
+  },
 ];
+
+// UX-only visibility check (the security boundary is the page/route, not
+// this). No anyOf → always shown; Super Admin → everything; otherwise the
+// user must hold at least one of the item's permissions.
+function canSee(
+  item: NavItem,
+  isSuperAdmin: boolean,
+  permissions: PermissionMap,
+): boolean {
+  if (!item.anyOf || item.anyOf.length === 0) return true;
+  if (isSuperAdmin) return true;
+  return item.anyOf.some((key) => permissions[key] === true);
+}
 
 export function SidebarNav({
   isSuperAdmin,
+  permissions,
   onNavigate,
 }: {
   isSuperAdmin: boolean;
+  permissions: PermissionMap;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
-  const items = NAV_ITEMS.filter((i) => !i.superAdminOnly || isSuperAdmin);
+  const items = NAV_ITEMS.filter((i) => canSee(i, isSuperAdmin, permissions));
 
   return (
     <nav className="flex flex-col gap-0.5 p-3">

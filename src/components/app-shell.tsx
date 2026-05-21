@@ -14,12 +14,16 @@ import { SidebarNav } from '@/components/sidebar-nav';
 import { UserMenu } from '@/components/user-menu';
 import { Toaster } from '@/components/ui/sonner';
 import type { AuthedUser } from '@/lib/auth/getCurrentUser';
+import type { PermissionMap } from '@/lib/permissions/constants';
 
 export function AppShell({
   user,
+  permissions,
   children,
 }: {
   user: AuthedUser;
+  // The current user's permission grant — drives sidebar visibility.
+  permissions: PermissionMap;
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -34,7 +38,10 @@ export function AppShell({
           </span>
         </div>
         <div className="flex-1 overflow-y-auto">
-          <SidebarNav isSuperAdmin={user.isSuperAdmin} />
+          <SidebarNav
+            isSuperAdmin={user.isSuperAdmin}
+            permissions={permissions}
+          />
         </div>
       </aside>
 
@@ -63,6 +70,7 @@ export function AppShell({
                 <div className="flex-1 overflow-y-auto bg-sidebar">
                   <SidebarNav
                     isSuperAdmin={user.isSuperAdmin}
+                    permissions={permissions}
                     onNavigate={() => setMobileOpen(false)}
                   />
                 </div>
