@@ -101,20 +101,20 @@ export function paymentScopeWhere(actor: Actor): Prisma.PaymentWhereInput {
 
 /**
  * The customer.salesRepId a dashboard widget should scope to for this
- * actor, gated on their sales-order view scope:
- *   - 'all' (Super Admin / sales_orders.view_all) → null (no scope)
- *   - 'none' (no SO view perm — e.g. an accountant role) → null
+ * actor, gated on a view-all/view-own pair (defaults to sales orders;
+ * pass SCOPE_PAIRS.payments etc. for module-specific widgets):
+ *   - 'all' (Super Admin / *.view_all) → null (no scope)
+ *   - 'none' (no view perm — e.g. an accountant role) → null
  *     (don't regress non-rep roles; the feature targets sales reps)
  *   - 'own' → the actor's linked salesRepId, or MATCH_NONE when they have
  *             view_own but no linked rep (sees nothing, mirroring the lists)
  * Widgets treat null as unscoped and a string as `customer.salesRepId == it`.
  */
-export function dashboardScopeSalesRepId(actor: Actor): string | null {
-  const mode = resolveScope(
-    actor,
-    SCOPE_PAIRS.salesOrders.all,
-    SCOPE_PAIRS.salesOrders.own,
-  );
+export function dashboardScopeSalesRepId(
+  actor: Actor,
+  pair: { all: PermissionKey; own: PermissionKey } = SCOPE_PAIRS.salesOrders,
+): string | null {
+  const mode = resolveScope(actor, pair.all, pair.own);
   if (mode !== 'own') return null;
   return actor.salesRepId ?? MATCH_NONE;
 }

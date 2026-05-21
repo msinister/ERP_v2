@@ -3,6 +3,7 @@ import {
   countGranted,
   isPermissionKey,
   sanitizePermissionMap,
+  SCOPE_PAIRS,
 } from '@/lib/permissions/constants';
 import { hasPermission, type Actor } from '@/lib/permissions/actor';
 import {
@@ -295,5 +296,16 @@ describe('dashboardScopeSalesRepId', () => {
         actor({ permissions: { 'sales_orders.view_own': true } }),
       ),
     ).toBe(MATCH_NONE);
+  });
+
+  it('resolves on the supplied pair (payments) independently of the SO pair', () => {
+    // A payments-only "view own" rep: unscoped on the default (SO) pair,
+    // scoped to their customers on the payments pair.
+    const a = actor({
+      permissions: { 'payments.view_own': true },
+      salesRepId: 'rep-5',
+    });
+    expect(dashboardScopeSalesRepId(a)).toBeNull();
+    expect(dashboardScopeSalesRepId(a, SCOPE_PAIRS.payments)).toBe('rep-5');
   });
 });

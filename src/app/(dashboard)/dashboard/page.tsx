@@ -1,7 +1,9 @@
 import { Suspense } from 'react';
 import { redirect } from 'next/navigation';
 import { getActor } from '@/lib/permissions/getActor';
+import { hasPermission } from '@/lib/permissions/actor';
 import { dashboardScopeSalesRepId } from '@/lib/permissions/scope';
+import { SCOPE_PAIRS, type PermissionKey } from '@/lib/permissions/constants';
 import { TodaysSalesWidget } from './_widgets/todays-sales';
 import { ArAgingWidget } from './_widgets/ar-aging';
 import { ApAgingWidget } from './_widgets/ap-aging';
@@ -21,10 +23,26 @@ export const revalidate = 0;
 export default async function DashboardPage() {
   const actor = await getActor();
   if (!actor) redirect('/login');
+
   // A "view own" sales rep sees the sales/AR widgets scoped to their own
   // customers; managers/admins (view_all / super) and non-rep roles see
   // the unscoped, company-wide numbers. null = unscoped.
   const repScope = dashboardScopeSalesRepId(actor);
+  // Unapplied Payments scopes on the PAYMENTS view pair, not sales orders.
+  const paymentScope = dashboardScopeSalesRepId(actor, SCOPE_PAIRS.payments);
+
+  // Per-widget visibility (UX — pages remain the security boundary).
+  // hasPermission short-circuits true for Super Admin.
+  const can = (...keys: PermissionKey[]) =>
+    keys.some((k) => hasPermission(actor, k));
+  const canSO = can('sales_orders.view_all', 'sales_orders.view_own');
+  const canBills = can('bills.view');
+  const canVendors = can('vendors.view');
+  const canInventory = can('inventory.view');
+  const canPayments = can('payments.view_all', 'payments.view_own');
+  const canAudit = can('admin.view_audit_log');
+  const canGl = can('gl.view');
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
@@ -33,46 +51,66 @@ export default async function DashboardPage() {
           Live snapshot of operations.
         </p>
       </div>
+      {/* Widgets the user has no permission for are skipped entirely (no
+          empty card); the grid reflows to fill the gaps. */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Suspense fallback={<WidgetSkeleton title="Today's Sales" />}>
-          <TodaysSalesWidget customerSalesRepId={repScope} />
-        </Suspense>
-        <Suspense
-          fallback={<WidgetSkeleton title="AR Aging" bodyClassName="h-20" />}
-        >
-          <ArAgingWidget customerSalesRepId={repScope} />
-        </Suspense>
-        <Suspense
-          fallback={<WidgetSkeleton title="AP Aging" bodyClassName="h-20" />}
-        >
-          <ApAgingWidget />
-        </Suspense>
-        <Suspense fallback={<WidgetSkeleton title="Open Sales Orders" />}>
-          <OpenSosWidget customerSalesRepId={repScope} />
-        </Suspense>
-        <Suspense fallback={<WidgetSkeleton title="Open Purchase Orders" />}>
-          <OpenPosWidget />
-        </Suspense>
-        <Suspense
-          fallback={
-            <WidgetSkeleton title="Low Stock Alerts" bodyClassName="h-40" />
-          }
-        >
-          <LowStockWidget />
-        </Suspense>
-        <Suspense fallback={<WidgetSkeleton title="Unapplied Payments" />}>
-          <UnappliedPaymentsWidget />
-        </Suspense>
-        <Suspense
-          fallback={
-            <WidgetSkeleton title="Recent Activity" bodyClassName="h-40" />
-          }
-        >
-          <RecentActivityWidget />
-        </Suspense>
-        <Suspense fallback={<WidgetSkeleton title="Cash Position" />}>
-          <CashPositionWidget />
-        </Suspense>
+        {canSO ? (
+          <Suspense fallback={<WidgetSkeleton title="Today's Sales" />}>
+            <TodaysSalesWidget customerSalesRepId={repScope} />
+          </Suspense>
+        ) : null}
+        {canSO ? (
+          <Suspense
+            fallback={<WidgetSkeleton title="AR Aging" bodyClassName="h-20" />}
+          >
+            <ArAgingWidget customerSalesRepId={repScope} />
+          </Suspense>
+        ) : null}
+        {canBills ? (
+          <Suspense
+            fallback={<WidgetSkeleton title="AP Aging" bodyClassName="h-20" />}
+          >
+            <ApAgingWidget />
+          </Suspense>
+        ) : null}
+        {canSO ? (
+          <Suspense fallback={<WidgetSkeleton title="Open Sales Orders" />}>
+            <OpenSosWidget customerSalesRepId={repScope} />
+          </Suspense>
+        ) : null}
+        {canVendors ? (
+          <Suspense fallback={<WidgetSkeleton title="Open Purchase Orders" />}>
+            <OpenPosWidget />
+          </Suspense>
+        ) : null}
+        {canInventory ? (
+          <Suspense
+            fallback={
+              <WidgetSkeleton title="Low Stock Alerts" bodyClassName="h-40" />
+            }
+          >
+            <LowStockWidget />
+          </Suspense>
+        ) : null}
+        {canPayments ? (
+          <Suspense fallback={<WidgetSkeleton title="Unapplied Payments" />}>
+            <UnappliedPaymentsWidget customerSalesRepId={paymentScope} />
+          </Suspense>
+        ) : null}
+        {canAudit ? (
+          <Suspense
+            fallback={
+              <WidgetSkeleton title="Recent Activity" bodyClassName="h-40" />
+            }
+          >
+            <RecentActivityWidget />
+          </Suspense>
+        ) : null}
+        {canGl ? (
+          <Suspense fallback={<WidgetSkeleton title="Cash Position" />}>
+            <CashPositionWidget />
+          </Suspense>
+        ) : null}
       </div>
     </div>
   );

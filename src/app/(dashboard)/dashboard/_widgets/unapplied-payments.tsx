@@ -7,8 +7,12 @@ import { WidgetCard } from './widget-card';
 // (deferred slice). Surfaces customer cash sitting on account that
 // hasn't been matched to an invoice.
 
-export async function UnappliedPaymentsWidget() {
-  const data = await unappliedPaymentsWidget(db);
+export async function UnappliedPaymentsWidget({
+  customerSalesRepId,
+}: {
+  customerSalesRepId?: string | null;
+} = {}) {
+  const data = await unappliedPaymentsWidget(db, { customerSalesRepId });
   return (
     <WidgetCard
       title="Unapplied Payments"

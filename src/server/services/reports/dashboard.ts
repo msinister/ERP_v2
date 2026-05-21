@@ -377,11 +377,15 @@ export type UnappliedPaymentsWidget = {
  */
 export async function unappliedPaymentsWidget(
   db: PrismaClient,
+  opts: WidgetScopeOpts = {},
 ): Promise<UnappliedPaymentsWidget> {
   const rows = await db.payment.findMany({
     where: {
       deletedAt: null,
       status: PaymentStatus.RECORDED,
+      ...(opts.customerSalesRepId
+        ? { customer: { salesRepId: opts.customerSalesRepId } }
+        : {}),
     },
     select: { amount: true, appliedAmount: true },
   });
