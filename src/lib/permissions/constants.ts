@@ -196,6 +196,10 @@ type GroupPermission<G> = G extends { permissions: readonly (infer P)[] } ? P : 
 type PermissionKeyOf<P> = P extends { key: infer K } ? K : never;
 export type PermissionKey = PermissionKeyOf<GroupPermission<Groups[number]>>;
 
+// Module ids — the prefix every key in a group shares (keys are
+// `${id}.${action}`). Used for module-level checks like sidebar visibility.
+export type PermissionModuleId = Groups[number]['id'];
+
 // A role's permission grant: a sparse map of granted keys. An absent key
 // (or a non-true value) means "not granted".
 export type PermissionMap = Partial<Record<PermissionKey, boolean>>;
@@ -237,4 +241,23 @@ export function sanitizePermissionMap(input: unknown): PermissionMap {
 
 export function countGranted(map: PermissionMap): number {
   return Object.values(map).filter((v) => v === true).length;
+}
+
+/**
+ * True when the map grants ANY permission in `module` — i.e. any key
+ * `${module}.<action>` is true. The trailing dot prevents prefix
+ * collisions: module "inventory" does NOT match "inventory_adjustments.*".
+ * Used for module-level sidebar visibility (show the link if the user has
+ * any permission in the module, not just a view permission). The
+ * Super-Admin bypass is the caller's responsibility.
+ */
+export function permissionMapHasModule(
+  permissions: PermissionMap,
+  module: string,
+): boolean {
+  const prefix = `${module}.`;
+  for (const [key, granted] of Object.entries(permissions)) {
+    if (granted === true && key.startsWith(prefix)) return true;
+  }
+  return false;
 }

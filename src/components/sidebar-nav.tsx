@@ -21,123 +21,83 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { PermissionKey, PermissionMap } from '@/lib/permissions/constants';
+import {
+  permissionMapHasModule,
+  type PermissionMap,
+  type PermissionModuleId,
+} from '@/lib/permissions/constants';
 
 type NavItem = {
   label: string;
   href: string;
   icon: LucideIcon;
-  // Visible when the user holds ANY of these permissions. Omit (Dashboard)
-  // = always visible. Super Admin sees every item regardless.
-  anyOf?: PermissionKey[];
+  // Visible when the user holds ANY permission in this module (any
+  // `${module}.*` key — view OR create/edit/etc.). Omit (Dashboard) =
+  // always visible. Super Admin sees every item regardless.
+  module?: PermissionModuleId;
 };
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  {
-    label: 'Customers',
-    href: '/customers',
-    icon: Users,
-    anyOf: ['customers.view_all', 'customers.view_own'],
-  },
+  { label: 'Customers', href: '/customers', icon: Users, module: 'customers' },
   {
     label: 'Sales Orders',
     href: '/sales-orders',
     icon: ShoppingCart,
-    anyOf: ['sales_orders.view_all', 'sales_orders.view_own'],
+    module: 'sales_orders',
   },
   {
     label: 'Credit Memos',
     href: '/credit-memos',
     icon: Undo2,
-    anyOf: ['credit_memos.view_all', 'credit_memos.view_own'],
+    module: 'credit_memos',
   },
-  {
-    label: 'Payments',
-    href: '/payments',
-    icon: Banknote,
-    anyOf: ['payments.view_all', 'payments.view_own'],
-  },
-  {
-    label: 'RMAs',
-    href: '/rmas',
-    icon: RotateCcw,
-    anyOf: ['rmas.view_all', 'rmas.view_own'],
-  },
-  {
-    label: 'Products',
-    href: '/products',
-    icon: Package,
-    anyOf: ['products.view'],
-  },
+  { label: 'Payments', href: '/payments', icon: Banknote, module: 'payments' },
+  { label: 'RMAs', href: '/rmas', icon: RotateCcw, module: 'rmas' },
+  { label: 'Products', href: '/products', icon: Package, module: 'products' },
   {
     label: 'Inventory Adjustments',
     href: '/inventory-adjustments',
     icon: SlidersHorizontal,
-    anyOf: ['inventory.view'],
+    module: 'inventory',
   },
   {
     label: 'Work Orders',
     href: '/work-orders',
     icon: Wrench,
-    anyOf: ['work_orders.view'],
+    module: 'work_orders',
   },
-  {
-    label: 'Vendors',
-    href: '/vendors',
-    icon: Building2,
-    anyOf: ['vendors.view'],
-  },
+  { label: 'Vendors', href: '/vendors', icon: Building2, module: 'vendors' },
   {
     // POs are part of the vendor/purchasing module.
     label: 'Purchase Orders',
     href: '/purchase-orders',
     icon: Truck,
-    anyOf: ['vendors.view'],
+    module: 'vendors',
   },
-  {
-    label: 'Bills',
-    href: '/bills',
-    icon: FileText,
-    anyOf: ['bills.view'],
-  },
+  { label: 'Bills', href: '/bills', icon: FileText, module: 'bills' },
   {
     // Vendor credits are part of the AP (bills) module.
     label: 'Vendor Credits',
     href: '/vendor-credits',
     icon: CreditCard,
-    anyOf: ['bills.view'],
+    module: 'bills',
   },
-  {
-    label: 'Reports',
-    href: '/reports',
-    icon: BarChart3,
-    anyOf: ['reports.view_financial', 'reports.view_operational'],
-  },
-  {
-    label: 'Admin',
-    href: '/admin',
-    icon: Settings,
-    anyOf: [
-      'admin.edit_settings',
-      'admin.edit_users',
-      'admin.edit_roles',
-      'admin.view_audit_log',
-    ],
-  },
+  { label: 'Reports', href: '/reports', icon: BarChart3, module: 'reports' },
+  { label: 'Admin', href: '/admin', icon: Settings, module: 'admin' },
 ];
 
 // UX-only visibility check (the security boundary is the page/route, not
-// this). No anyOf → always shown; Super Admin → everything; otherwise the
-// user must hold at least one of the item's permissions.
+// this). No module → always shown; Super Admin → everything; otherwise the
+// user must hold ANY permission in the item's module.
 function canSee(
   item: NavItem,
   isSuperAdmin: boolean,
   permissions: PermissionMap,
 ): boolean {
-  if (!item.anyOf || item.anyOf.length === 0) return true;
+  if (!item.module) return true;
   if (isSuperAdmin) return true;
-  return item.anyOf.some((key) => permissions[key] === true);
+  return permissionMapHasModule(permissions, item.module);
 }
 
 export function SidebarNav({

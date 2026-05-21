@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   countGranted,
   isPermissionKey,
+  permissionMapHasModule,
   sanitizePermissionMap,
   SCOPE_PAIRS,
 } from '@/lib/permissions/constants';
@@ -57,6 +58,50 @@ describe('sanitizePermissionMap', () => {
     expect(sanitizePermissionMap(null)).toEqual({});
     expect(sanitizePermissionMap('nope')).toEqual({});
     expect(sanitizePermissionMap(42)).toEqual({});
+  });
+});
+
+describe('permissionMapHasModule', () => {
+  it('is true for ANY permission in the module — not just view', () => {
+    // A user with create but no view should still match (the bug this fixed).
+    expect(
+      permissionMapHasModule({ 'sales_orders.create': true }, 'sales_orders'),
+    ).toBe(true);
+    expect(
+      permissionMapHasModule({ 'bills.record_payment': true }, 'bills'),
+    ).toBe(true);
+  });
+
+  it('is false when the module has no granted permission', () => {
+    expect(
+      permissionMapHasModule({ 'customers.view_all': true }, 'sales_orders'),
+    ).toBe(false);
+    expect(permissionMapHasModule({}, 'products')).toBe(false);
+  });
+
+  it('ignores false-valued keys', () => {
+    expect(
+      permissionMapHasModule({ 'products.view': false }, 'products'),
+    ).toBe(false);
+  });
+
+  it('the trailing dot prevents the inventory / inventory_adjustments collision', () => {
+    // inventory_adjustments.* must NOT satisfy the "inventory" module.
+    expect(
+      permissionMapHasModule(
+        { 'inventory_adjustments.create': true },
+        'inventory',
+      ),
+    ).toBe(false);
+    expect(
+      permissionMapHasModule({ 'inventory.adjust': true }, 'inventory'),
+    ).toBe(true);
+    expect(
+      permissionMapHasModule(
+        { 'inventory_adjustments.create': true },
+        'inventory_adjustments',
+      ),
+    ).toBe(true);
   });
 });
 
