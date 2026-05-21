@@ -35,6 +35,7 @@ import {
   isPositiveDecimalInput,
   normalizeDecimalForSubmit,
 } from '@/lib/decimal-input';
+import { useAutoAppendLine } from '@/lib/forms/useAutoAppendLine';
 
 // =============================================================================
 // CONFIRMED-status edit surface — add-only on lines. Existing lines render
@@ -126,6 +127,12 @@ export function AddLinesForm({
     Array<Partial<Record<keyof DraftLine, string>>>
   >([]);
   const [block, setBlock] = useState<Block>(null);
+
+  // Fill the variant on the last draft → a fresh blank draft appears.
+  useAutoAppendLine(
+    drafts[drafts.length - 1]?.variantId,
+    () => setDrafts((ds) => [...ds, emptyDraft()]),
+  );
 
   function patch(key: string, patch: Partial<DraftLine>) {
     setDrafts((ds) => ds.map((d) => (d.key === key ? { ...d, ...patch } : d)));

@@ -34,6 +34,7 @@ import {
   isPositiveDecimalInput,
   normalizeDecimalForSubmit,
 } from '@/lib/decimal-input';
+import { useAutoAppendLine } from '@/lib/forms/useAutoAppendLine';
 
 // =============================================================================
 // PO add-lines form. Mirrors the SO add-lines pattern at
@@ -135,6 +136,12 @@ export function AddLinesForm({
   const [errors, setErrors] = useState<
     Array<Partial<Record<keyof DraftLine, string>>>
   >([]);
+
+  // Fill the variant on the last draft → a fresh blank draft appears.
+  useAutoAppendLine(
+    drafts[drafts.length - 1]?.variantId,
+    () => setDrafts((ds) => [...ds, emptyDraft(defaultWarehouseId)]),
+  );
 
   // Catalog hints keyed by variantId — already pre-filtered to this
   // PO's vendor at the page level. Used by VariantPicker to extend

@@ -39,6 +39,7 @@ import {
   isPositiveDecimalInput,
   normalizeDecimalForSubmit,
 } from '@/lib/decimal-input';
+import { useAutoAppendLine } from '@/lib/forms/useAutoAppendLine';
 
 // ===========================================================================
 // Lookup option shapes (kept narrow so the server fetches stay shallow)
@@ -271,6 +272,13 @@ export function OrderForm({
 
   const customerId = watch('customerId');
   const warehouseId = watch('warehouseId');
+
+  // Fill the SKU on the last line → a fresh blank line appears below it.
+  const watchedLines = watch('lines') ?? [];
+  useAutoAppendLine(
+    watchedLines[watchedLines.length - 1]?.variantId,
+    () => append(emptyLine()),
+  );
 
   function submit(values: OrderFormValues) {
     startTransition(async () => {

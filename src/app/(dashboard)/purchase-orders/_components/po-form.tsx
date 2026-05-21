@@ -43,6 +43,7 @@ import {
   isPositiveDecimalInput,
   normalizeDecimalForSubmit,
 } from '@/lib/decimal-input';
+import { useAutoAppendLine } from '@/lib/forms/useAutoAppendLine';
 
 // ===========================================================================
 // Lookup option shapes — narrow so server fetches stay shallow.
@@ -234,6 +235,14 @@ export function PoForm({
 
   const vendorId = watch('vendorId');
   const warehouseId = watch('warehouseId');
+
+  // Fill the SKU on the last line → a fresh blank line appears below it.
+  const watchedLines = watch('lines') ?? [];
+  useAutoAppendLine(
+    watchedLines[watchedLines.length - 1]?.variantId,
+    () => append(emptyLine()),
+  );
+
   const selectedVendor = useMemo(
     () => vendors.find((v) => v.id === vendorId) ?? null,
     [vendors, vendorId],

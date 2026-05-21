@@ -38,6 +38,7 @@ import {
   isPositiveDecimalInput,
   normalizeDecimalForSubmit,
 } from '@/lib/decimal-input';
+import { useAutoAppendLine } from '@/lib/forms/useAutoAppendLine';
 
 // ===========================================================================
 // Lookup option shapes
@@ -253,6 +254,12 @@ export function CmForm({
   const categoryId = watch('categoryId');
   const restockingFee = watch('restockingFee');
   const lines = watch('lines');
+
+  // Fill the SKU on the last line → a fresh blank line appears below it.
+  useAutoAppendLine(
+    lines[lines.length - 1]?.variantId,
+    () => append(emptyLine()),
+  );
 
   // Fetch invoices for the selected customer. Fired after customer
   // picks and cleared when the customer changes. Pilot scale: load all

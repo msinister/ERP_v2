@@ -42,6 +42,7 @@ import {
   isPositiveDecimalInput,
   normalizeDecimalForSubmit,
 } from '@/lib/decimal-input';
+import { useAutoAppendLine } from '@/lib/forms/useAutoAppendLine';
 
 // ===========================================================================
 // Lookup option shapes
@@ -266,6 +267,15 @@ export function BillForm({
 
   const vendorId = watch('vendorId');
   const source = watch('source');
+
+  // Fill the variant on the last PRODUCT line → a fresh blank appears.
+  // EXPENSE bills pick an account (no VariantPicker), so they're not
+  // auto-appended — consistent with the "select a SKU/variant" rule.
+  const watchedLines = watch('lines') ?? [];
+  useAutoAppendLine(
+    watchedLines[watchedLines.length - 1]?.variantId,
+    () => append(emptyLine(source)),
+  );
   const selectedVendor = useMemo(
     () => vendors.find((v) => v.id === vendorId) ?? null,
     [vendors, vendorId],
