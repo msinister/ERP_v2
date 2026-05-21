@@ -105,9 +105,9 @@ export const updateSalesOrderInputSchema = z
   })
   .superRefine(orderDiscountExclusive);
 
-// Dedicated sales-rep change for the SO detail inline edit. Works on
-// Draft/Confirmed/Dispatched (service gates Closed/Cancelled). null =
-// inherit the customer's rep.
+// Dedicated sales-rep change for the SO detail inline edit. Allowed on
+// any status (incl. Closed); not retroactive to already-accrued
+// commission. null = inherit the customer's rep.
 export const setSalesOrderSalesRepInputSchema = z.object({
   salesRepId: z.string().min(1).nullable(),
 });

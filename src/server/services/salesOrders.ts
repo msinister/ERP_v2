@@ -340,10 +340,12 @@ export async function updateSalesOrder(
 
 /**
  * Change (or clear) the per-order sales-rep override. Unlike
- * updateSalesOrder (DRAFT-only), this is allowed on DRAFT, CONFIRMED, and
- * DISPATCHED — operators routinely reassign in-flight orders. CLOSED and
- * CANCELLED are rejected: a closed order may already have accrued
- * commission to the old rep, and reassigning would silently mis-credit it.
+ * updateSalesOrder (DRAFT-only), this is allowed on ANY status, including
+ * CLOSED — operators reassign in-flight AND closed orders. The override is
+ * NOT retroactive: commission already accrued under a prior rep stays put
+ * (the SO detail UI warns about this); only FUTURE accruals follow the new
+ * effective rep. CANCELLED is editable here too but the detail UI keeps it
+ * read-only (a cancelled order has no commission to move).
  *
  * salesRepId = null clears the override → the order inherits the
  * customer's rep again. A non-null id must reference a live SalesRep.
@@ -364,14 +366,6 @@ export async function setSalesOrderSalesRep(
     });
     if (!before || before.deletedAt) {
       throw new Error(`SalesOrder not found: ${id}`);
-    }
-    if (
-      before.status === SalesOrderStatus.CLOSED ||
-      before.status === SalesOrderStatus.CANCELLED
-    ) {
-      throw new Error(
-        `Cannot change the sales rep on a ${before.status} order`,
-      );
     }
     if (data.salesRepId) {
       const rep = await tx.salesRep.findFirst({

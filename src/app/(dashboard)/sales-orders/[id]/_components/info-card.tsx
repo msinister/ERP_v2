@@ -17,6 +17,10 @@ export type SalesRepEdit = {
   reps: RepOption[];
   overrideRepId: string | null;
   customerDefaultName: string | null;
+  // Distinct names of reps commission was already accrued under for this
+  // order (via its invoice). Non-empty → render the "won't recalculate"
+  // warning. Empty for orders with no accrued commission.
+  accruedRepNames: string[];
 };
 
 export function SalesOrderInfoCard({
@@ -63,6 +67,13 @@ export function SalesOrderInfoCard({
               ) : (
                 repName
               )}
+              {repEdit && repEdit.accruedRepNames.length > 0 ? (
+                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                  Commission was accrued under{' '}
+                  {repEdit.accruedRepNames.join(', ')}. Changing the rep will
+                  not automatically recalculate past commissions.
+                </p>
+              ) : null}
             </dd>
           </div>
           <Row

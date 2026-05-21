@@ -119,32 +119,44 @@ export default async function SalesOrderDetailPage({
   if (!so) notFound();
 
   // Effective rep = per-order override (so.salesRepId) when set, else the
-  // customer's default. Resolve names for both, plus the active-rep list
-  // for the inline picker.
+  // customer's default. Also fetch the active-rep list for the inline
+  // picker and any commission already accrued on this order's invoice —
+  // if a prior rep was credited, the UI warns that a reassignment won't
+  // recalculate those past commissions.
   const effectiveRepId = so.salesRepId ?? so.customer.salesRepId;
-  const [activeReps, repNameRows] = await Promise.all([
+  const [activeReps, accruals] = await Promise.all([
     db.salesRep.findMany({
       where: { active: true, deletedAt: null },
       select: { id: true, name: true },
       orderBy: { name: 'asc' },
     }),
-    db.salesRep.findMany({
-      where: { id: { in: [effectiveRepId, so.customer.salesRepId] } },
-      select: { id: true, name: true },
-    }),
+    so.invoice
+      ? db.commissionAccrual.findMany({
+          where: { invoiceId: so.invoice.id },
+          select: { salesRepId: true },
+        })
+      : Promise.resolve([] as { salesRepId: string }[]),
   ]);
+  const accruedRepIds = [...new Set(accruals.map((a) => a.salesRepId))];
+  const repNameRows = await db.salesRep.findMany({
+    where: {
+      id: { in: [...new Set([effectiveRepId, so.customer.salesRepId, ...accruedRepIds])] },
+    },
+    select: { id: true, name: true },
+  });
   const repNameById = new Map(repNameRows.map((r) => [r.id, r.name]));
   const salesRep = {
     id: effectiveRepId,
     name: repNameById.get(effectiveRepId) ?? '—',
   };
   const customerDefaultName = repNameById.get(so.customer.salesRepId) ?? null;
-  // The rep is reassignable until the order closes (post-close changes
-  // would affect already-accrued commission).
-  const repEditable =
-    so.status === 'DRAFT' ||
-    so.status === 'CONFIRMED' ||
-    so.status === 'DISPATCHED';
+  const accruedRepNames = accruedRepIds.map(
+    (id) => repNameById.get(id) ?? 'a former rep',
+  );
+  // The rep is reassignable on every status except CANCELLED. On Closed
+  // orders the change is allowed but not retroactive — accruedRepNames
+  // drives the "past commission won't recalculate" warning.
+  const repEditable = so.status !== 'CANCELLED';
 
   // Fetch the tenant-wide over-shipping policy once per page render —
   // QtyShippedInput uses it to decide whether to save immediately,
@@ -401,6 +413,7 @@ export default async function SalesOrderDetailPage({
                     reps: activeReps,
                     overrideRepId: so.salesRepId,
                     customerDefaultName,
+                    accruedRepNames,
                   }
                 : null
             }
