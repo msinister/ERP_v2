@@ -419,3 +419,116 @@ export async function agingSummary(
 
   return rows.slice(offset, offset + limit);
 }
+
+// ---------------------------------------------------------------------------
+// availableFundsForCustomer — a customer's unapplied cash + available
+// credit-memo balances, for the "apply to invoice" UI on the SO detail.
+// Mirrors the unapplied math in agingSummary:
+//   payment unapplied = amount − appliedAmount  (RECORDED, non-APPLIED_CREDIT)
+//   credit available  = netCredit − appliedAmount  (CONFIRMED)
+// Only rows with a positive remainder are returned; totalAvailable sums
+// both (the "Available credit" indicator). Read-only.
+// ---------------------------------------------------------------------------
+
+export type CustomerAvailablePayment = {
+  id: string;
+  number: string;
+  receivedAt: Date;
+  method: PaymentMethod;
+  amount: Prisma.Decimal;
+  unapplied: Prisma.Decimal;
+};
+
+export type CustomerAvailableCreditMemo = {
+  id: string;
+  number: string;
+  date: Date;
+  categoryLabel: string;
+  netCredit: Prisma.Decimal;
+  available: Prisma.Decimal;
+};
+
+export type CustomerAvailableFunds = {
+  payments: CustomerAvailablePayment[];
+  creditMemos: CustomerAvailableCreditMemo[];
+  totalAvailable: Prisma.Decimal;
+};
+
+export async function availableFundsForCustomer(
+  db: PrismaClient,
+  customerId: string,
+): Promise<CustomerAvailableFunds> {
+  const [paymentRows, cmRows] = await Promise.all([
+    db.payment.findMany({
+      where: {
+        customerId,
+        deletedAt: null,
+        status: PaymentStatus.RECORDED,
+        // APPLIED_CREDIT payments are CM-funded, not cash on account.
+        method: { not: PaymentMethod.APPLIED_CREDIT },
+      },
+      select: {
+        id: true,
+        number: true,
+        receivedAt: true,
+        method: true,
+        amount: true,
+        appliedAmount: true,
+      },
+      orderBy: { receivedAt: 'asc' },
+    }),
+    db.creditMemo.findMany({
+      where: {
+        customerId,
+        deletedAt: null,
+        status: CreditMemoStatus.CONFIRMED,
+      },
+      select: {
+        id: true,
+        number: true,
+        issuedAt: true,
+        createdAt: true,
+        netCredit: true,
+        appliedAmount: true,
+        category: { select: { label: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    }),
+  ]);
+
+  let totalAvailable = new Prisma.Decimal(0);
+
+  const payments: CustomerAvailablePayment[] = [];
+  for (const p of paymentRows) {
+    const unapplied = p.amount.minus(p.appliedAmount);
+    if (unapplied.greaterThan(0)) {
+      payments.push({
+        id: p.id,
+        number: p.number,
+        receivedAt: p.receivedAt,
+        method: p.method,
+        amount: p.amount,
+        unapplied,
+      });
+      totalAvailable = totalAvailable.plus(unapplied);
+    }
+  }
+
+  const creditMemos: CustomerAvailableCreditMemo[] = [];
+  for (const c of cmRows) {
+    const available = c.netCredit.minus(c.appliedAmount);
+    if (available.greaterThan(0)) {
+      creditMemos.push({
+        id: c.id,
+        number: c.number,
+        date: c.issuedAt ?? c.createdAt,
+        categoryLabel: c.category.label,
+        netCredit: c.netCredit,
+        available,
+      });
+      totalAvailable = totalAvailable.plus(available);
+    }
+  }
+
+  return { payments, creditMemos, totalAvailable };
+}

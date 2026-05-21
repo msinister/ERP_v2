@@ -20,6 +20,7 @@ export function SalesOrderTotalsCard({
   total,
   status,
   invoiceAmounts,
+  availableCredit,
 }: {
   lines: SalesOrderLine[];
   orderDiscountAmount: Prisma.Decimal | null;
@@ -37,6 +38,9 @@ export function SalesOrderTotalsCard({
     amountCredited: Prisma.Decimal;
     balance: Prisma.Decimal;
   } | null;
+  /** Customer-level unapplied payments + available credit memos — an
+   * at-a-glance "money to apply" indicator. Null when not loaded. */
+  availableCredit: Prisma.Decimal | null;
 }) {
   // CLOSED orders bill on qtyShipped (matches the invoice). Pre-CLOSED
   // shows the order commitment basis (qtyOrdered). Same switch as
@@ -130,6 +134,14 @@ export function SalesOrderTotalsCard({
                 }
               />
             </>
+          ) : null}
+          {availableCredit != null && availableCredit.greaterThan(0) ? (
+            <div className="flex items-center justify-between gap-3 text-emerald-600 dark:text-emerald-400">
+              <dt>Available credit</dt>
+              <dd className="tabular-nums font-medium">
+                {formatCurrency(availableCredit)}
+              </dd>
+            </div>
           ) : null}
         </dl>
       </CardContent>

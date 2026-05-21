@@ -19,11 +19,13 @@ import {
   PaymentsAppliedCard,
   type AppliedRow,
 } from './_components/payments-applied-card';
+import { AvailableFundsCard } from './_components/available-funds-card';
 import {
   JournalEntriesCard,
   type JournalEntryRow,
 } from '@/components/shared/journal-entries-card';
 import { journalEntriesForInvoice } from '@/server/services/reports/financial';
+import { availableFundsForCustomer } from '@/server/services/ar';
 
 // Always live (no caching) — SO lifecycle / reservations / invoice
 // linkage change frequently. Same convention as customer detail.
@@ -337,6 +339,51 @@ export default async function SalesOrderDetailPage({
       })
     : [];
 
+  // Customer funds available to apply to this invoice. Fetched only for
+  // orders with a live invoice. The "Available on account" section excludes
+  // sources already (non-reversed) applied to THIS invoice — they can't be
+  // applied again here; the Totals "Available credit" indicator uses the
+  // full customer-level total.
+  const availableFunds = so.invoice
+    ? await availableFundsForCustomer(db, so.customer.id)
+    : null;
+  const appliedPaymentIds = new Set<string>();
+  const appliedCreditMemoIds = new Set<string>();
+  if (so.invoice) {
+    for (const a of so.invoice.applications) {
+      if (a.reversedAt) continue;
+      if (a.paymentId) appliedPaymentIds.add(a.paymentId);
+      if (a.creditMemoId) appliedCreditMemoIds.add(a.creditMemoId);
+    }
+  }
+  const availablePaymentRows = (availableFunds?.payments ?? [])
+    .filter((p) => !appliedPaymentIds.has(p.id))
+    .map((p) => ({
+      id: p.id,
+      number: p.number,
+      date: p.receivedAt.toISOString(),
+      method: p.method,
+      total: p.amount.toString(),
+      unapplied: p.unapplied.toString(),
+    }));
+  const availableCreditMemoRows = (availableFunds?.creditMemos ?? [])
+    .filter((c) => !appliedCreditMemoIds.has(c.id))
+    .map((c) => ({
+      id: c.id,
+      number: c.number,
+      date: c.date.toISOString(),
+      categoryLabel: c.categoryLabel,
+      total: c.netCredit.toString(),
+      available: c.available.toString(),
+    }));
+  // Only offer the apply section when there's a balance to pay down AND
+  // there's something applyable to this invoice.
+  const showAvailableFunds =
+    so.invoice != null &&
+    invoiceAmounts != null &&
+    invoiceAmounts.balance.greaterThan(0) &&
+    (availablePaymentRows.length > 0 || availableCreditMemoRows.length > 0);
+
   return (
     <div className="space-y-6">
       <SalesOrderHeader
@@ -448,6 +495,19 @@ export default async function SalesOrderDetailPage({
             />
           ) : null}
 
+          {/* Available on account — unapplied payments + credit memos for
+              this customer, applyable to the invoice. Shown only when the
+              invoice has a balance and there's something to apply. */}
+          {showAvailableFunds && so.invoice && invoiceAmounts ? (
+            <AvailableFundsCard
+              invoiceId={so.invoice.id}
+              invoiceNumber={so.invoice.number}
+              invoiceBalance={invoiceAmounts.balance.toString()}
+              payments={availablePaymentRows}
+              creditMemos={availableCreditMemoRows}
+            />
+          ) : null}
+
           {/* GL visibility — only meaningful once the invoice exists
               (close has fired). Pre-CLOSED: no JEs to show. */}
           {so.invoice ? <JournalEntriesCard entries={journalRows} /> : null}
@@ -467,6 +527,7 @@ export default async function SalesOrderDetailPage({
             total={displayTotal}
             status={so.status}
             invoiceAmounts={invoiceAmounts}
+            availableCredit={availableFunds?.totalAvailable ?? null}
           />
         </div>
       </div>
