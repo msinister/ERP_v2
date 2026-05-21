@@ -3,6 +3,7 @@ import { Prisma, SalesOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { computeSalesOrderTotal } from '@/lib/ar/openSos';
 import { getActor } from '@/lib/permissions/getActor';
+import { hasPermission } from '@/lib/permissions/actor';
 import { salesOrderScopeWhere } from '@/lib/permissions/scope';
 import {
   lineItemImageVariantSelect,
@@ -153,10 +154,14 @@ export default async function SalesOrderDetailPage({
   const accruedRepNames = accruedRepIds.map(
     (id) => repNameById.get(id) ?? 'a former rep',
   );
-  // The rep is reassignable on every status except CANCELLED. On Closed
+  // The rep is reassignable on every status except CANCELLED, AND only
+  // for users holding sales_orders.change_rep (Super Admin bypasses).
+  // Without the permission the field renders as read-only text. On Closed
   // orders the change is allowed but not retroactive — accruedRepNames
   // drives the "past commission won't recalculate" warning.
-  const repEditable = so.status !== 'CANCELLED';
+  const repEditable =
+    so.status !== 'CANCELLED' &&
+    hasPermission(actor, 'sales_orders.change_rep');
 
   // Fetch the tenant-wide over-shipping policy once per page render —
   // QtyShippedInput uses it to decide whether to save immediately,

@@ -2,21 +2,22 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { setSalesOrderSalesRepInputSchema } from '@/lib/validation/sales';
 import { setSalesOrderSalesRep } from '@/server/services/salesOrders';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 // Change (or clear) the per-order sales-rep override. Used by the SO
-// detail page's inline edit. Allowed on Draft/Confirmed/Dispatched; the
-// service rejects Closed/Cancelled. Body: { salesRepId: string | null }
-// (null = inherit the customer's rep).
+// detail page's inline edit. Requires the sales_orders.change_rep
+// permission (Super Admin bypasses) → 403 otherwise. Allowed on any
+// status; the change is not retroactive to accrued commission. Body:
+// { salesRepId: string | null } (null = inherit the customer's rep).
 export async function PATCH(
   req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireAuth(req);
-    const auditCtx = auditCtxFromRequest(req, user);
+    const actor = await requirePermission(req, 'sales_orders.change_rep');
+    const auditCtx = auditCtxFromRequest(req, actor);
     const { id } = await ctx.params;
 
     let body: unknown;

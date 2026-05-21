@@ -49,6 +49,7 @@ export const PERMISSION_GROUPS = [
       { key: 'sales_orders.edit', label: 'Edit' },
       { key: 'sales_orders.cancel', label: 'Cancel' },
       { key: 'sales_orders.change_price', label: 'Change price' },
+      { key: 'sales_orders.change_rep', label: 'Change sales rep', hint: 'Reassign an order to a different rep.' },
       { key: 'sales_orders.override_credit_limit', label: 'Override credit limit' },
     ],
   },

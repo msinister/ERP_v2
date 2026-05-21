@@ -3,8 +3,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 
 // =============================================================================
-// Static-analysis sweep: every /api/*/route.ts must call requireAuth (or
-// requireSuperAdmin). The single exception is BetterAuth's catch-all
+// Static-analysis sweep: every /api/*/route.ts must call requireAuth,
+// requireSuperAdmin, or requirePermission (the latter wraps requireAuth +
+// a permission check). The single exception is BetterAuth's catch-all
 // handler at /api/auth/[...all]/route.ts which deliberately stays
 // reachable without a session — it's where users sign in.
 //
@@ -66,13 +67,16 @@ describe('Route handlers — auth coverage', () => {
       continue;
     }
 
-    it(`${relativePath} — calls requireAuth or requireSuperAdmin`, () => {
+    it(`${relativePath} — calls requireAuth, requireSuperAdmin, or requirePermission`, () => {
       const contents = readFileSync(file, 'utf8');
       const hasAuthCall =
-        /\b(requireAuth|requireSuperAdmin)\s*\(/.test(contents);
-      expect(hasAuthCall, `route handler must gate via requireAuth or requireSuperAdmin`).toBe(
-        true,
-      );
+        /\b(requireAuth|requireSuperAdmin|requirePermission)\s*\(/.test(
+          contents,
+        );
+      expect(
+        hasAuthCall,
+        `route handler must gate via requireAuth, requireSuperAdmin, or requirePermission`,
+      ).toBe(true);
     });
   }
 });

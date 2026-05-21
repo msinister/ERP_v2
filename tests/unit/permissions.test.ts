@@ -81,6 +81,35 @@ describe('hasPermission', () => {
   });
 });
 
+describe('sales_orders.change_rep', () => {
+  it('is a recognized catalog key', () => {
+    expect(isPermissionKey('sales_orders.change_rep')).toBe(true);
+  });
+
+  it('Super Admin can change rep without an explicit grant', () => {
+    expect(
+      hasPermission(actor({ isSuperAdmin: true }), 'sales_orders.change_rep'),
+    ).toBe(true);
+  });
+
+  it('a "view own" rep without the grant cannot change rep', () => {
+    const selfRep = actor({
+      permissions: { 'sales_orders.view_own': true },
+      salesRepId: 'rep-1',
+    });
+    expect(hasPermission(selfRep, 'sales_orders.change_rep')).toBe(false);
+  });
+
+  it('grants when the role includes it', () => {
+    expect(
+      hasPermission(
+        actor({ permissions: { 'sales_orders.change_rep': true } }),
+        'sales_orders.change_rep',
+      ),
+    ).toBe(true);
+  });
+});
+
 describe('resolveScope', () => {
   const allKey = 'customers.view_all';
   const ownKey = 'customers.view_own';

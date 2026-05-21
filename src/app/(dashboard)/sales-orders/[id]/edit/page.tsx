@@ -6,6 +6,7 @@ import { listCustomers } from '@/server/services/customers';
 import { listWarehouses } from '@/server/services/warehouse';
 import { listSalesReps } from '@/server/services/salesReps';
 import { getActor } from '@/lib/permissions/getActor';
+import { hasPermission } from '@/lib/permissions/actor';
 import { salesOrderScopeWhere } from '@/lib/permissions/scope';
 import {
   Card,
@@ -203,6 +204,7 @@ export default async function EditSalesOrderPage({
           inventoryByWarehouse: stockByVariant.get(v.id) ?? {},
         }))}
         salesReps={salesReps.map((r) => ({ id: r.id, name: r.name }))}
+        canChangeRep={hasPermission(actor, 'sales_orders.change_rep')}
         defaultValues={defaults}
       />
     </div>

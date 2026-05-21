@@ -1,5 +1,4 @@
 import type { AuditContext } from '@/lib/audit/audit';
-import type { AuthedUser } from './getCurrentUser';
 
 // =============================================================================
 // Build an AuditContext from an authenticated request. Wires userId +
@@ -37,9 +36,13 @@ function extractIpAddress(req: Request): string | null {
   return null;
 }
 
-export function auditCtxFromRequest(
+// Generic over anything carrying an `id` — AuthedUser (requireAuth /
+// requireSuperAdmin) and Actor (requirePermission) both satisfy it. The
+// type parameter (rather than a fixed `{ id: string }`) avoids excess-
+// property errors when callers pass a wider object literal directly.
+export function auditCtxFromRequest<U extends { id: string }>(
   req: Request,
-  user: AuthedUser,
+  user: U,
 ): AuditContext {
   return {
     userId: user.id,

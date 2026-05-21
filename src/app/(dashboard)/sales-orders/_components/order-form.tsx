@@ -227,6 +227,7 @@ export function OrderForm({
   warehouses,
   variants,
   salesReps = [],
+  canChangeRep = false,
   defaultValues,
 }: {
   mode: OrderFormMode;
@@ -235,6 +236,10 @@ export function OrderForm({
   variants: VariantOption[];
   // Active reps for the edit-mode rep override picker. Omitted on create.
   salesReps?: SalesRepOption[];
+  // Gates the rep override field (UI + payload) on sales_orders.change_rep.
+  // The server (PATCH route) re-checks; this just hides the control and
+  // omits salesRepId from the request for users without the permission.
+  canChangeRep?: boolean;
   defaultValues?: Partial<OrderFormValues>;
 }) {
   const router = useRouter();
@@ -309,14 +314,19 @@ export function OrderForm({
             : (() => {
                 const { customerId: _c, ...rest } = payload;
                 void _c;
-                // Edit-only: include the per-order rep override. NO_REP
-                // sentinel clears it (inherit the customer's rep).
+                // Edit-only: include the per-order rep override only when
+                // the user can change it (the field is hidden otherwise).
+                // NO_REP sentinel clears it (inherit the customer's rep).
                 return {
                   ...rest,
-                  salesRepId:
-                    values.salesRepId && values.salesRepId !== NO_REP
-                      ? values.salesRepId
-                      : null,
+                  ...(canChangeRep
+                    ? {
+                        salesRepId:
+                          values.salesRepId && values.salesRepId !== NO_REP
+                            ? values.salesRepId
+                            : null,
+                      }
+                    : {}),
                 };
               })();
         const res = await fetch(endpoint, {
@@ -454,7 +464,7 @@ export function OrderForm({
               <FieldError errors={[errors.warehouseId]} />
             </Field>
           </div>
-          {mode.kind === 'edit' ? (
+          {mode.kind === 'edit' && canChangeRep ? (
             <div className="mt-4 md:max-w-[calc(50%-0.5rem)]">
               <Field>
                 <FieldLabel htmlFor="salesRepId">Sales rep</FieldLabel>

@@ -7,6 +7,7 @@ import {
   updateSalesOrder,
 } from '@/server/services/salesOrders';
 import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -44,6 +45,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         { error: 'validation', issues: parsed.error.issues },
         { status: 400 },
       );
+    }
+    // The DRAFT edit form can carry a per-order rep override; changing it
+    // requires sales_orders.change_rep (Super Admin bypasses) → 403.
+    // Other fields aren't gated by this permission.
+    if (parsed.data.salesRepId !== undefined) {
+      await requirePermission(req, 'sales_orders.change_rep');
     }
     const so = await updateSalesOrder(db, id, parsed.data, auditCtx);
     return NextResponse.json(so);
