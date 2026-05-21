@@ -40,11 +40,15 @@ export default async function AdminUsersPage({
   const where: Prisma.UserWhereInput = {
     deletedAt: null,
     ...(enabled !== undefined ? { enabled } : {}),
+    // Role filter: 'super' = super admins; 'none' = non-super with no role
+    // (matches the column's "No role"); any other value is a role id.
     ...(role === 'super'
       ? { isSuperAdmin: true }
-      : role === 'regular'
-        ? { isSuperAdmin: false }
-        : {}),
+      : role === 'none'
+        ? { isSuperAdmin: false, roleId: null }
+        : role
+          ? { roleId: role }
+          : {}),
     ...(q
       ? {
           OR: [
@@ -55,7 +59,7 @@ export default async function AdminUsersPage({
       : {}),
   };
 
-  const [rows, total] = await Promise.all([
+  const [rows, total, roles] = await Promise.all([
     db.user.findMany({
       where,
       select: {
@@ -73,6 +77,11 @@ export default async function AdminUsersPage({
       take,
     }),
     db.user.count({ where }),
+    db.role.findMany({
+      where: { deletedAt: null },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    }),
   ]);
 
   const tableRows: UserRowData[] = rows.map((u) => ({
@@ -111,7 +120,7 @@ export default async function AdminUsersPage({
         </div>
       </div>
 
-      <UsersFilters />
+      <UsersFilters roles={roles} />
 
       <UsersTable rows={tableRows} />
 

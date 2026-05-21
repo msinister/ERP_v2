@@ -14,11 +14,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-const ROLE_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'super', label: 'Super admin' },
-  { value: 'regular', label: 'Regular' },
-];
-
 const ENABLED_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'true', label: 'Enabled' },
   { value: 'false', label: 'Disabled' },
@@ -27,10 +22,23 @@ const ENABLED_OPTIONS: Array<{ value: string; label: string }> = [
 
 const ALL_VALUE = '__all__';
 
-export function UsersFilters() {
+export function UsersFilters({
+  roles,
+}: {
+  roles: Array<{ id: string; name: string }>;
+}) {
   const router = useRouter();
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
+
+  // Role-filter options: special "super" / "none" values plus one per
+  // role. Value is the role id (or 'super' / 'none'); the page maps it
+  // back to a where clause.
+  const roleOptions: Array<{ value: string; label: string }> = [
+    { value: 'super', label: 'Super admin' },
+    ...roles.map((r) => ({ value: r.id, label: r.name })),
+    { value: 'none', label: 'No role' },
+  ];
 
   const currentQ = params.get('q') ?? '';
   const currentRole = params.get('role') ?? ALL_VALUE;
@@ -100,18 +108,18 @@ export function UsersFilters() {
           value={currentRole}
           onValueChange={(v) => apply({ role: v, skip: '0' })}
         >
-          <SelectTrigger id="user-role" className="w-40">
+          <SelectTrigger id="user-role" className="w-48">
             <SelectValue placeholder="All">
               {(v) =>
                 v === ALL_VALUE
                   ? 'All roles'
-                  : (ROLE_OPTIONS.find((r) => r.value === v)?.label ?? v)
+                  : (roleOptions.find((r) => r.value === v)?.label ?? v)
               }
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_VALUE}>All roles</SelectItem>
-            {ROLE_OPTIONS.map((r) => (
+            {roleOptions.map((r) => (
               <SelectItem key={r.value} value={r.value}>
                 {r.label}
               </SelectItem>
