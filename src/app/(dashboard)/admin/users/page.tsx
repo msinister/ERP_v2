@@ -66,6 +66,7 @@ export default async function AdminUsersPage({
         enabled: true,
         forcePasswordReset: true,
         lastLoginAt: true,
+        role: { select: { name: true } },
       },
       orderBy: { createdAt: 'desc' },
       skip,
@@ -82,6 +83,7 @@ export default async function AdminUsersPage({
     enabled: u.enabled,
     forcePasswordReset: u.forcePasswordReset,
     lastLoginAt: u.lastLoginAt,
+    roleName: u.role?.name ?? null,
   }));
 
   return (

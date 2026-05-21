@@ -14,6 +14,9 @@ export type UserRowData = {
   email: string;
   name: string;
   isSuperAdmin: boolean;
+  // Assigned custom-role name, or null when none. Super Admins bypass
+  // roles, so this is null for them and the column shows the Super badge.
+  roleName: string | null;
   enabled: boolean;
   forcePasswordReset: boolean;
   lastLoginAt: Date | null;
@@ -61,10 +64,10 @@ export function UsersTable({ rows }: { rows: UserRowData[] }) {
               <TableCell>
                 {row.isSuperAdmin ? (
                   <Badge>Super admin</Badge>
+                ) : row.roleName ? (
+                  <Badge variant="outline">{row.roleName}</Badge>
                 ) : (
-                  <Badge variant="outline" className="text-muted-foreground">
-                    Regular
-                  </Badge>
+                  <span className="text-sm text-muted-foreground">No role</span>
                 )}
               </TableCell>
               <TableCell className="space-x-1">
