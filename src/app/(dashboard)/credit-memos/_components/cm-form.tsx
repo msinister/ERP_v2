@@ -7,6 +7,7 @@ import {
   Controller,
   useFieldArray,
   useForm,
+  type Resolver,
   type UseFormReturn,
 } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -126,7 +127,18 @@ const formSchema = z.object({
     .union([z.literal(''), z.string().length(3, '3-letter ISO code')])
     .optional(),
   reason: z.string().max(2000).optional(),
-  lines: z.array(lineSchema).min(1, 'At least one line is required'),
+  // Drop fully-blank lines (e.g. the auto-appended trailing line) before
+  // validation so they never block submit; filled lines keep their strict
+  // validation and the resolver hands submit the filtered array.
+  lines: z.preprocess(
+    (val) =>
+      Array.isArray(val)
+        ? (val as Array<{ variantId?: string }>).filter(
+            (l) => (l.variantId ?? '').trim() !== '',
+          )
+        : val,
+    z.array(lineSchema).min(1, 'At least one line is required'),
+  ),
 });
 
 export type CmFormValues = z.infer<typeof formSchema>;
@@ -224,15 +236,26 @@ export function CmForm({
   const [pending, startTransition] = useTransition();
 
   const form = useForm<CmFormValues>({
-    resolver: zodResolver(formSchema),
+    // Cast: the lines z.preprocess makes the schema's INPUT type
+    // `lines: unknown`, which RHF's resolver typing rejects. The resolver
+    // still validates + returns CmFormValues at runtime.
+    resolver: zodResolver(formSchema) as unknown as Resolver<CmFormValues>,
     // creditDate defaults to today; caller-provided defaultValues may
     // override (e.g., the edit page passes the existing value). The
     // field is informational only — not sent to the server.
-    defaultValues: {
-      ...DEFAULT_VALUES,
-      creditDate: todayIso(),
-      ...defaultValues,
-    },
+    defaultValues: ((): CmFormValues => {
+      const base: CmFormValues = {
+        ...DEFAULT_VALUES,
+        creditDate: todayIso(),
+        ...defaultValues,
+      };
+      // Edit forms load with existing lines; add a trailing blank so the
+      // operator can start adding immediately (auto-append takes over).
+      if (mode.kind === 'edit') {
+        base.lines = [...base.lines, emptyLine()];
+      }
+      return base;
+    })(),
   });
 
   const {

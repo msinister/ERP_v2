@@ -20,6 +20,7 @@ import {
   VariantPicker,
   type VariantPickerOption,
 } from '@/components/shared/variant-picker';
+import { useAutoAppendLine } from '@/lib/forms/useAutoAppendLine';
 import { CATEGORY_OPTIONS } from '../../_components/categories';
 
 type WarehouseOption = { id: string; code: string; name: string };
@@ -55,6 +56,12 @@ export function BatchAdjustmentForm({
   const [lines, setLines] = useState<LineState[]>([newLine()]);
   const [pending, setPending] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
+
+  // Pick a variant on the last line → a fresh blank line appears below it.
+  useAutoAppendLine(
+    lines[lines.length - 1]?.variantId,
+    () => setLines((prev) => [...prev, newLine()]),
+  );
 
   function updateLine(key: string, patch: Partial<LineState>) {
     setLines((prev) =>

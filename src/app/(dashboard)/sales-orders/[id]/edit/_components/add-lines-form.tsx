@@ -154,15 +154,15 @@ export function AddLinesForm({
     setBlock(null);
     // Local validation — give the operator a focused error before the
     // server round-trip. The server is still the source of truth.
+    // Drop fully-blank drafts (e.g. the auto-appended trailing line) — they
+    // aren't validated or submitted.
+    const filled = drafts.filter((d) => d.variantId.trim() !== '');
     const nextErrors: Array<Partial<Record<keyof DraftLine, string>>> = drafts.map(
       () => ({}),
     );
     let hasError = false;
     drafts.forEach((d, i) => {
-      if (!d.variantId.trim()) {
-        nextErrors[i].variantId = 'Pick a product';
-        hasError = true;
-      }
+      if (!d.variantId.trim()) return;
       if (!isPositiveDecimalInput(d.qtyOrdered.trim())) {
         nextErrors[i].qtyOrdered = 'Must be > 0';
         hasError = true;
@@ -175,8 +175,8 @@ export function AddLinesForm({
     });
     setErrors(nextErrors);
     if (hasError) return;
-    if (drafts.length === 0) {
-      toast.error('Add at least one line');
+    if (filled.length === 0) {
+      toast.error('Add at least one line with a product');
       return;
     }
 
@@ -185,7 +185,7 @@ export function AddLinesForm({
         // Normalize loose-form input (".25" → "0.25") so the server's
         // strict decimalString validator accepts what the operator typed.
         const payload = {
-          lines: drafts.map((d) => ({
+          lines: filled.map((d) => ({
             variantId: d.variantId,
             // Pin every new line to the SO's warehouse. Multi-warehouse
             // SOs aren't supported in pilot — addSalesOrderLines's schema

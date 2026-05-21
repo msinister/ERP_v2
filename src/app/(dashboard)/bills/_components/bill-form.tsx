@@ -7,6 +7,7 @@ import {
   Controller,
   useFieldArray,
   useForm,
+  type Resolver,
   type UseFormReturn,
 } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -129,7 +130,23 @@ const formSchema = z
       .union([z.literal(''), z.string().length(3, '3-letter ISO code')])
       .optional(),
     notes: z.string().max(2000).optional(),
-    lines: z.array(lineSchema).min(1, 'At least one line is required'),
+    // Drop fully-blank lines (e.g. the auto-appended trailing line) before
+    // validation so they never block submit. A line is "blank" only when
+    // BOTH the variant (PRODUCT) and the expense account (EXPENSE) are
+    // empty. Filled lines keep their per-source validation below.
+    lines: z.preprocess(
+      (val) =>
+        Array.isArray(val)
+          ? (
+              val as Array<{ variantId?: string; expenseAccountId?: string }>
+            ).filter(
+              (l) =>
+                (l.variantId ?? '').trim() !== '' ||
+                (l.expenseAccountId ?? '').trim() !== '',
+            )
+          : val,
+      z.array(lineSchema).min(1, 'At least one line is required'),
+    ),
   })
   .superRefine((data, ctx) => {
     for (let i = 0; i < data.lines.length; i++) {
@@ -246,8 +263,19 @@ export function BillForm({
   }>({ open: false, lineIndex: 0, query: '' });
 
   const form = useForm<BillFormValues>({
-    resolver: zodResolver(formSchema),
-    defaultValues: { ...DEFAULT_VALUES, ...defaultValues },
+    // Cast: the lines z.preprocess makes the schema's INPUT type
+    // `lines: unknown`, which RHF's resolver typing rejects. The resolver
+    // still validates + returns BillFormValues at runtime.
+    resolver: zodResolver(formSchema) as unknown as Resolver<BillFormValues>,
+    defaultValues: ((): BillFormValues => {
+      const base: BillFormValues = { ...DEFAULT_VALUES, ...defaultValues };
+      // Edit forms load with existing lines; add a trailing blank (matching
+      // the bill's source) so the operator can start adding immediately.
+      if (mode.kind === 'edit') {
+        base.lines = [...base.lines, emptyLine(base.source)];
+      }
+      return base;
+    })(),
   });
 
   const {

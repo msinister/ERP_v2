@@ -8,6 +8,7 @@ import {
   Controller,
   useFieldArray,
   useForm,
+  type Resolver,
   type UseFormReturn,
 } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -138,9 +139,19 @@ const formSchema = z
     // Per-order rep override (edit mode only). NO_REP sentinel = inherit
     // the customer's rep; the submit handler maps it to null.
     salesRepId: z.string().optional(),
-    lines: z
-      .array(lineSchema)
-      .min(1, 'At least one line is required'),
+    // Drop fully-blank lines (e.g. the auto-appended trailing line)
+    // before validation so they never block submit; filled lines keep
+    // their strict per-line validation, and the resolver hands the submit
+    // handler the already-filtered array.
+    lines: z.preprocess(
+      (val) =>
+        Array.isArray(val)
+          ? (val as Array<{ variantId?: string }>).filter(
+              (l) => (l.variantId ?? '').trim() !== '',
+            )
+          : val,
+      z.array(lineSchema).min(1, 'At least one line is required'),
+    ),
   })
   .superRefine((data, ctx) => {
     if (data.orderDiscountPercent && data.orderDiscountAmount) {
@@ -247,15 +258,28 @@ export function OrderForm({
   const [pending, startTransition] = useTransition();
 
   const form = useForm<OrderFormValues>({
-    resolver: zodResolver(formSchema),
-    defaultValues: {
-      ...DEFAULT_VALUES,
-      // Pilot: one warehouse. Pre-select it so the operator doesn't
-      // have to. If/when there are multiple, the default falls through.
-      warehouseId:
-        warehouses.length === 1 ? warehouses[0].id : DEFAULT_VALUES.warehouseId,
-      ...defaultValues,
-    },
+    // Cast: the lines z.preprocess makes the schema's INPUT type
+    // `lines: unknown`, which RHF's resolver typing rejects. The resolver
+    // still validates + returns OrderFormValues at runtime.
+    resolver: zodResolver(formSchema) as unknown as Resolver<OrderFormValues>,
+    defaultValues: ((): OrderFormValues => {
+      const base: OrderFormValues = {
+        ...DEFAULT_VALUES,
+        // Pilot: one warehouse. Pre-select it so the operator doesn't
+        // have to. If/when there are multiple, the default falls through.
+        warehouseId:
+          warehouses.length === 1
+            ? warehouses[0].id
+            : DEFAULT_VALUES.warehouseId,
+        ...defaultValues,
+      };
+      // Edit forms load with existing lines; add a trailing blank so the
+      // operator can start adding immediately (auto-append takes over).
+      if (mode.kind === 'edit') {
+        base.lines = [...base.lines, emptyLine()];
+      }
+      return base;
+    })(),
   });
 
   const {
