@@ -292,7 +292,12 @@ export async function agingForCustomer(
 export async function agingSummary(
   db: PrismaClient,
   asOf: Date = new Date(),
-  opts: { limit?: number; offset?: number } = {},
+  opts: {
+    limit?: number;
+    offset?: number;
+    // When set, restrict to one rep's customers (dashboard "view own").
+    customerSalesRepId?: string | null;
+  } = {},
 ): Promise<AgingSummaryRow[]> {
   const limit = Math.min(opts.limit ?? 50, 500);
   const offset = opts.offset ?? 0;
@@ -301,6 +306,9 @@ export async function agingSummary(
     where: {
       deletedAt: null,
       status: { in: [InvoiceStatus.OPEN, InvoiceStatus.PARTIAL] },
+      ...(opts.customerSalesRepId
+        ? { customer: { salesRepId: opts.customerSalesRepId } }
+        : {}),
     },
     select: {
       customerId: true,

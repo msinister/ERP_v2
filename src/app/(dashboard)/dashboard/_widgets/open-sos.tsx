@@ -9,8 +9,12 @@ import { WidgetCard } from './widget-card';
 // rows are the actionable drill-down.
 const CLICKABLE_STATUSES = new Set(['CONFIRMED', 'DISPATCHED']);
 
-export async function OpenSosWidget() {
-  const data = await openSosWidget(db);
+export async function OpenSosWidget({
+  customerSalesRepId,
+}: {
+  customerSalesRepId?: string | null;
+} = {}) {
+  const data = await openSosWidget(db, { customerSalesRepId });
   const statuses = Object.entries(data.byStatus);
   return (
     <WidgetCard title="Open Sales Orders" subtitle="DRAFT, CONFIRMED, DISPATCHED">

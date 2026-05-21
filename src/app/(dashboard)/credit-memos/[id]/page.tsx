@@ -1,9 +1,11 @@
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { db } from '@/lib/db';
 import {
   lineItemImageVariantSelect,
   resolveLineImageUrl,
 } from '@/lib/products/lineItemImage';
+import { getActor } from '@/lib/permissions/getActor';
+import { creditMemoScopeWhere } from '@/lib/permissions/scope';
 import { CreditMemoHeader } from './_components/header';
 import {
   CreditMemoLinesTable,
@@ -24,9 +26,11 @@ export default async function CreditMemoDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const actor = await getActor();
+  if (!actor) redirect('/login');
 
   const cm = await db.creditMemo.findFirst({
-    where: { id, deletedAt: null },
+    where: { AND: [{ id, deletedAt: null }, creditMemoScopeWhere(actor)] },
     include: {
       customer: { select: { id: true, code: true, name: true } },
       category: {

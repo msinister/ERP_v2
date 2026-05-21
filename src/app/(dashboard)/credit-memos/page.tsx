@@ -1,10 +1,13 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { CreditMemoStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listCreditMemosPaged } from '@/server/services/creditMemos';
 import { listCustomers } from '@/server/services/customers';
 import { listCategories } from '@/server/services/creditMemoCategories';
+import { getActor } from '@/lib/permissions/getActor';
+import { creditMemoScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
 import {
   CreditMemosFilters,
@@ -49,6 +52,10 @@ export default async function CreditMemosPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+  const scope = creditMemoScopeWhere(actor);
+
   const [customers, categories, page] = await Promise.all([
     listCustomers(db, { active: true, take: 1000 }),
     listCategories(db, { active: true, take: 200 }),
@@ -61,6 +68,7 @@ export default async function CreditMemosPage({
       // "to" is a calendar date — extend to end-of-day so a same-day
       // filter doesn't exclude the day's own rows.
       createdAtTo: toParam ? new Date(`${toParam}T23:59:59.999Z`) : undefined,
+      scope,
       skip,
       take,
     }),

@@ -108,7 +108,8 @@ export const PERMISSION_GROUPS = [
     id: 'rmas',
     module: 'RMAs',
     permissions: [
-      { key: 'rmas.view', label: 'View' },
+      { key: 'rmas.view_all', label: 'View all' },
+      { key: 'rmas.view_own', label: 'View own', hint: 'See only RMAs for the user’s assigned customers.' },
       { key: 'rmas.approve', label: 'Approve' },
       { key: 'rmas.reject', label: 'Reject' },
       { key: 'rmas.receive', label: 'Receive' },
@@ -119,7 +120,8 @@ export const PERMISSION_GROUPS = [
     id: 'credit_memos',
     module: 'Credit Memos',
     permissions: [
-      { key: 'credit_memos.view', label: 'View' },
+      { key: 'credit_memos.view_all', label: 'View all' },
+      { key: 'credit_memos.view_own', label: 'View own', hint: 'See only credit memos for the user’s assigned customers.' },
       { key: 'credit_memos.create', label: 'Create' },
       { key: 'credit_memos.confirm', label: 'Confirm' },
       { key: 'credit_memos.void', label: 'Void' },
@@ -129,7 +131,8 @@ export const PERMISSION_GROUPS = [
     id: 'payments',
     module: 'Payments',
     permissions: [
-      { key: 'payments.view', label: 'View' },
+      { key: 'payments.view_all', label: 'View all' },
+      { key: 'payments.view_own', label: 'View own', hint: 'See only payments for the user’s assigned customers.' },
       { key: 'payments.record', label: 'Record' },
       { key: 'payments.reverse', label: 'Reverse' },
       { key: 'payments.apply', label: 'Apply' },
@@ -212,6 +215,9 @@ export function isPermissionKey(s: string): s is PermissionKey {
 export const SCOPE_PAIRS = {
   customers: { all: 'customers.view_all', own: 'customers.view_own' },
   salesOrders: { all: 'sales_orders.view_all', own: 'sales_orders.view_own' },
+  creditMemos: { all: 'credit_memos.view_all', own: 'credit_memos.view_own' },
+  rmas: { all: 'rmas.view_all', own: 'rmas.view_own' },
+  payments: { all: 'payments.view_all', own: 'payments.view_own' },
 } as const satisfies Record<string, { all: PermissionKey; own: PermissionKey }>;
 
 /**

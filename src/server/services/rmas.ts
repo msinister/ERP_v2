@@ -450,9 +450,12 @@ export async function creditFromRma(
 export async function getRma(
   db: PrismaClient,
   rmaId: string,
+  // Optional data-scope fragment (lib/permissions/scope.rmaScopeWhere).
+  // Out-of-scope RMAs resolve to null → caller renders not-found.
+  scope?: Prisma.RmaWhereInput,
 ): Promise<(RmaWithLines & { creditMemo: { id: string; number: string } | null }) | null> {
   return db.rma.findFirst({
-    where: { id: rmaId, deletedAt: null },
+    where: { AND: [{ id: rmaId, deletedAt: null }, scope ?? {}] },
     include: {
       lines: { where: { deletedAt: null } },
       creditMemo: { select: { id: true, number: true } },
@@ -466,6 +469,8 @@ export type RmaListFilters = {
   status?: RmaStatus | RmaStatus[];
   createdAtFrom?: Date;
   createdAtTo?: Date;
+  // Data-scope fragment from lib/permissions/scope.rmaScopeWhere.
+  scope?: Prisma.RmaWhereInput;
   skip?: number;
   take?: number;
 };
@@ -473,11 +478,12 @@ export type RmaListFilters = {
 function rmaWhere(
   filters: Omit<RmaListFilters, 'skip' | 'take'>,
 ): Prisma.RmaWhereInput {
-  const { customerId, invoiceId, status, createdAtFrom, createdAtTo } = filters;
+  const { customerId, invoiceId, status, createdAtFrom, createdAtTo, scope } =
+    filters;
   const dateFilter: { gte?: Date; lte?: Date } = {};
   if (createdAtFrom) dateFilter.gte = createdAtFrom;
   if (createdAtTo) dateFilter.lte = createdAtTo;
-  return {
+  const base: Prisma.RmaWhereInput = {
     deletedAt: null,
     ...(customerId ? { customerId } : {}),
     ...(invoiceId ? { invoiceId } : {}),
@@ -486,6 +492,7 @@ function rmaWhere(
       : {}),
     ...(createdAtFrom || createdAtTo ? { createdAt: dateFilter } : {}),
   };
+  return scope ? { AND: [base, scope] } : base;
 }
 
 export async function listRmas(

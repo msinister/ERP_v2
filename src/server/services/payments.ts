@@ -677,9 +677,12 @@ export async function reversePaymentTx(
 export async function getPayment(
   db: PrismaClient,
   paymentId: string,
+  // Optional data-scope fragment (lib/permissions/scope.paymentScopeWhere).
+  // Out-of-scope payments resolve to null → caller renders not-found.
+  scope?: Prisma.PaymentWhereInput,
 ): Promise<PaymentWithApplications | null> {
   return db.payment.findFirst({
-    where: { id: paymentId, deletedAt: null },
+    where: { AND: [{ id: paymentId, deletedAt: null }, scope ?? {}] },
     include: { applications: true },
   });
 }
@@ -749,6 +752,8 @@ export type PaymentListPagedFilters = {
   receivedAtFrom?: Date;
   receivedAtTo?: Date;
   q?: string;
+  // Data-scope fragment from lib/permissions/scope.paymentScopeWhere.
+  scope?: Prisma.PaymentWhereInput;
   sort?: PaymentSortField;
   dir?: SortDir;
   skip?: number;
@@ -778,6 +783,7 @@ export async function listPaymentsPaged(
     receivedAtFrom,
     receivedAtTo,
     q,
+    scope,
     sort = 'receivedAt',
     dir = 'desc',
     skip = 0,
@@ -788,7 +794,7 @@ export async function listPaymentsPaged(
   if (receivedAtFrom) dateFilter.gte = receivedAtFrom;
   if (receivedAtTo) dateFilter.lte = receivedAtTo;
 
-  const where: Prisma.PaymentWhereInput = {
+  const base: Prisma.PaymentWhereInput = {
     deletedAt: null,
     ...(customerId ? { customerId } : {}),
     ...(status ? { status } : {}),
@@ -803,6 +809,10 @@ export async function listPaymentsPaged(
         }
       : {}),
   };
+  // AND the scope so it can't be widened by the q OR-branch.
+  const where: Prisma.PaymentWhereInput = scope
+    ? { AND: [base, scope] }
+    : base;
 
   const [rows, total] = await Promise.all([
     db.payment.findMany({

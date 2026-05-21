@@ -5,6 +5,8 @@ import { db } from '@/lib/db';
 import { getCreditMemo } from '@/server/services/creditMemos';
 import { listCustomers } from '@/server/services/customers';
 import { listCategories } from '@/server/services/creditMemoCategories';
+import { getActor } from '@/lib/permissions/getActor';
+import { creditMemoScopeWhere } from '@/lib/permissions/scope';
 import {
   CmForm,
   type CustomerOption,
@@ -21,7 +23,9 @@ export default async function EditCreditMemoPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const cm = await getCreditMemo(db, id);
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+  const cm = await getCreditMemo(db, id, creditMemoScopeWhere(actor));
   if (!cm) notFound();
   // Only DRAFT is editable. Bounce to the detail page so the operator
   // doesn't get a half-broken form.

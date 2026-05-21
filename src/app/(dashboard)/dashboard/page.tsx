@@ -1,4 +1,7 @@
 import { Suspense } from 'react';
+import { redirect } from 'next/navigation';
+import { getActor } from '@/lib/permissions/getActor';
+import { dashboardScopeSalesRepId } from '@/lib/permissions/scope';
 import { TodaysSalesWidget } from './_widgets/todays-sales';
 import { ArAgingWidget } from './_widgets/ar-aging';
 import { ApAgingWidget } from './_widgets/ap-aging';
@@ -15,7 +18,13 @@ import { WidgetSkeleton } from './_widgets/widget-card';
 // none. revalidate = 0 forces re-fetch on every request.
 export const revalidate = 0;
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+  // A "view own" sales rep sees the sales/AR widgets scoped to their own
+  // customers; managers/admins (view_all / super) and non-rep roles see
+  // the unscoped, company-wide numbers. null = unscoped.
+  const repScope = dashboardScopeSalesRepId(actor);
   return (
     <div className="space-y-6">
       <div className="space-y-1">
@@ -26,12 +35,12 @@ export default function DashboardPage() {
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Suspense fallback={<WidgetSkeleton title="Today's Sales" />}>
-          <TodaysSalesWidget />
+          <TodaysSalesWidget customerSalesRepId={repScope} />
         </Suspense>
         <Suspense
           fallback={<WidgetSkeleton title="AR Aging" bodyClassName="h-20" />}
         >
-          <ArAgingWidget />
+          <ArAgingWidget customerSalesRepId={repScope} />
         </Suspense>
         <Suspense
           fallback={<WidgetSkeleton title="AP Aging" bodyClassName="h-20" />}
@@ -39,7 +48,7 @@ export default function DashboardPage() {
           <ApAgingWidget />
         </Suspense>
         <Suspense fallback={<WidgetSkeleton title="Open Sales Orders" />}>
-          <OpenSosWidget />
+          <OpenSosWidget customerSalesRepId={repScope} />
         </Suspense>
         <Suspense fallback={<WidgetSkeleton title="Open Purchase Orders" />}>
           <OpenPosWidget />

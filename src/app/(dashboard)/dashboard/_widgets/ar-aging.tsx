@@ -5,8 +5,12 @@ import { formatCount, formatCurrency } from '@/lib/format';
 import { WidgetCard } from './widget-card';
 import { AgingStrip } from './aging-strip';
 
-export async function ArAgingWidget() {
-  const data = await arAgingWidget(db);
+export async function ArAgingWidget({
+  customerSalesRepId,
+}: {
+  customerSalesRepId?: string | null;
+} = {}) {
+  const data = await arAgingWidget(db, undefined, { customerSalesRepId });
   return (
     <Link
       href="/reports"

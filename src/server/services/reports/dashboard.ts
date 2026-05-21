@@ -21,6 +21,13 @@ import { cashPosition } from './operational';
 
 const ZERO = new Prisma.Decimal(0);
 
+// Optional per-rep scoping for the sales/AR widgets. When customerSalesRepId
+// is set, the widget counts/sums only that rep's customers' records; null/
+// undefined leaves the widget unscoped (the default — managers/admins).
+export type WidgetScopeOpts = {
+  customerSalesRepId?: string | null;
+};
+
 // ---------------------------------------------------------------------------
 // openSosWidget
 // ---------------------------------------------------------------------------
@@ -38,7 +45,10 @@ export type OpenSosWidget = {
  * Count-only — SalesOrder has no subtotal denorm. Drill into the SO list
  * endpoint with status filters for amounts.
  */
-export async function openSosWidget(db: PrismaClient): Promise<OpenSosWidget> {
+export async function openSosWidget(
+  db: PrismaClient,
+  opts: WidgetScopeOpts = {},
+): Promise<OpenSosWidget> {
   const aggs = await db.salesOrder.groupBy({
     by: ['status'],
     where: {
@@ -50,6 +60,9 @@ export async function openSosWidget(db: PrismaClient): Promise<OpenSosWidget> {
           SalesOrderStatus.DISPATCHED,
         ],
       },
+      ...(opts.customerSalesRepId
+        ? { customer: { salesRepId: opts.customerSalesRepId } }
+        : {}),
     },
     _count: { _all: true },
   });
@@ -119,6 +132,7 @@ export type TodaysSalesWidget = {
 export async function todaysSalesWidget(
   db: PrismaClient,
   now: Date = new Date(),
+  opts: WidgetScopeOpts = {},
 ): Promise<TodaysSalesWidget> {
   const startOfDay = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
@@ -130,6 +144,9 @@ export async function todaysSalesWidget(
       deletedAt: null,
       status: { not: InvoiceStatus.VOIDED },
       invoiceDate: { gte: startOfDay, lt: startOfNextDay },
+      ...(opts.customerSalesRepId
+        ? { customer: { salesRepId: opts.customerSalesRepId } }
+        : {}),
     },
     _count: { _all: true },
     _sum: { total: true },
@@ -183,11 +200,16 @@ export type ArAgingWidget = {
 export async function arAgingWidget(
   db: PrismaClient,
   asOf: Date = new Date(),
+  opts: WidgetScopeOpts = {},
 ): Promise<ArAgingWidget> {
   // Pull a generous slice of the summary to roll up. limit=500 matches
   // the agingSummary helper's max — pilot tenants are small enough that
   // this fits in one call.
-  const rows = await agingSummary(db, asOf, { limit: 500, offset: 0 });
+  const rows = await agingSummary(db, asOf, {
+    limit: 500,
+    offset: 0,
+    customerSalesRepId: opts.customerSalesRepId,
+  });
   let current = ZERO;
   let b1to30 = ZERO;
   let b31to60 = ZERO;

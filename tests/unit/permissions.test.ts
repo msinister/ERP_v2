@@ -6,8 +6,12 @@ import {
 } from '@/lib/permissions/constants';
 import { hasPermission, type Actor } from '@/lib/permissions/actor';
 import {
+  creditMemoScopeWhere,
   customerScopeWhere,
+  dashboardScopeSalesRepId,
+  paymentScopeWhere,
   resolveScope,
+  rmaScopeWhere,
   salesOrderScopeWhere,
 } from '@/lib/permissions/scope';
 
@@ -185,5 +189,111 @@ describe('salesOrderScopeWhere', () => {
 
   it('no view permission → matches nothing', () => {
     expect(salesOrderScopeWhere(actor({}))).toEqual({ id: MATCH_NONE });
+  });
+});
+
+// The customer-relation scopers (Credit Memo, RMA, Payment) all resolve
+// through customer.salesRepId — identical shape, one block each (literal
+// keys keep the PermissionMap types happy).
+describe('creditMemoScopeWhere', () => {
+  it('all access → no restriction', () => {
+    expect(creditMemoScopeWhere(actor({ isSuperAdmin: true }))).toEqual({});
+    expect(
+      creditMemoScopeWhere(actor({ permissions: { 'credit_memos.view_all': true } })),
+    ).toEqual({});
+  });
+  it('view_own + linked rep → customer relation filter', () => {
+    expect(
+      creditMemoScopeWhere(
+        actor({ permissions: { 'credit_memos.view_own': true }, salesRepId: 'rep-9' }),
+      ),
+    ).toEqual({ customer: { salesRepId: 'rep-9' } });
+  });
+  it('view_own without a rep → matches nothing', () => {
+    expect(
+      creditMemoScopeWhere(actor({ permissions: { 'credit_memos.view_own': true } })),
+    ).toEqual({ id: MATCH_NONE });
+  });
+  it('no view permission → matches nothing', () => {
+    expect(creditMemoScopeWhere(actor({}))).toEqual({ id: MATCH_NONE });
+  });
+});
+
+describe('rmaScopeWhere', () => {
+  it('all access → no restriction', () => {
+    expect(rmaScopeWhere(actor({ isSuperAdmin: true }))).toEqual({});
+    expect(
+      rmaScopeWhere(actor({ permissions: { 'rmas.view_all': true } })),
+    ).toEqual({});
+  });
+  it('view_own + linked rep → customer relation filter', () => {
+    expect(
+      rmaScopeWhere(
+        actor({ permissions: { 'rmas.view_own': true }, salesRepId: 'rep-9' }),
+      ),
+    ).toEqual({ customer: { salesRepId: 'rep-9' } });
+  });
+  it('view_own without a rep → matches nothing', () => {
+    expect(
+      rmaScopeWhere(actor({ permissions: { 'rmas.view_own': true } })),
+    ).toEqual({ id: MATCH_NONE });
+  });
+  it('no view permission → matches nothing', () => {
+    expect(rmaScopeWhere(actor({}))).toEqual({ id: MATCH_NONE });
+  });
+});
+
+describe('paymentScopeWhere', () => {
+  it('all access → no restriction', () => {
+    expect(paymentScopeWhere(actor({ isSuperAdmin: true }))).toEqual({});
+    expect(
+      paymentScopeWhere(actor({ permissions: { 'payments.view_all': true } })),
+    ).toEqual({});
+  });
+  it('view_own + linked rep → customer relation filter', () => {
+    expect(
+      paymentScopeWhere(
+        actor({ permissions: { 'payments.view_own': true }, salesRepId: 'rep-9' }),
+      ),
+    ).toEqual({ customer: { salesRepId: 'rep-9' } });
+  });
+  it('view_own without a rep → matches nothing', () => {
+    expect(
+      paymentScopeWhere(actor({ permissions: { 'payments.view_own': true } })),
+    ).toEqual({ id: MATCH_NONE });
+  });
+  it('no view permission → matches nothing', () => {
+    expect(paymentScopeWhere(actor({}))).toEqual({ id: MATCH_NONE });
+  });
+});
+
+describe('dashboardScopeSalesRepId', () => {
+  it('all access (super / view_all) → unscoped (null)', () => {
+    expect(dashboardScopeSalesRepId(actor({ isSuperAdmin: true }))).toBeNull();
+    expect(
+      dashboardScopeSalesRepId(
+        actor({ permissions: { 'sales_orders.view_all': true } }),
+      ),
+    ).toBeNull();
+  });
+
+  it('no SO view perm → unscoped (null) so non-rep roles are unaffected', () => {
+    expect(dashboardScopeSalesRepId(actor({}))).toBeNull();
+  });
+
+  it('view_own with a linked rep → that salesRepId', () => {
+    expect(
+      dashboardScopeSalesRepId(
+        actor({ permissions: { 'sales_orders.view_own': true }, salesRepId: 'rep-3' }),
+      ),
+    ).toBe('rep-3');
+  });
+
+  it('view_own without a linked rep → no-match sentinel', () => {
+    expect(
+      dashboardScopeSalesRepId(
+        actor({ permissions: { 'sales_orders.view_own': true } }),
+      ),
+    ).toBe(MATCH_NONE);
   });
 });

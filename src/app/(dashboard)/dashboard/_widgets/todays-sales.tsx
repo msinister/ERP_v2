@@ -3,8 +3,12 @@ import { todaysSalesWidget } from '@/server/services/reports/dashboard';
 import { formatCount, formatCurrency } from '@/lib/format';
 import { WidgetCard } from './widget-card';
 
-export async function TodaysSalesWidget() {
-  const data = await todaysSalesWidget(db);
+export async function TodaysSalesWidget({
+  customerSalesRepId,
+}: {
+  customerSalesRepId?: string | null;
+} = {}) {
+  const data = await todaysSalesWidget(db, undefined, { customerSalesRepId });
   // Day boundary is UTC, matching the GL convention. Render the date
   // as a UTC-formatted string so the label can't drift by tz.
   const dateLabel = data.date.toLocaleDateString('en-US', {

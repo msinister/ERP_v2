@@ -645,6 +645,9 @@ export async function voidCreditMemo(
 export async function getCreditMemo(
   db: PrismaClient,
   creditMemoId: string,
+  // Optional data-scope fragment (lib/permissions/scope.creditMemoScopeWhere).
+  // Out-of-scope memos resolve to null → caller renders not-found.
+  scope?: Prisma.CreditMemoWhereInput,
 ): Promise<
   | (CreditMemoWithLines & {
       category: { id: string; code: string; label: string; affectsInventory: boolean };
@@ -652,7 +655,7 @@ export async function getCreditMemo(
   | null
 > {
   return db.creditMemo.findFirst({
-    where: { id: creditMemoId, deletedAt: null },
+    where: { AND: [{ id: creditMemoId, deletedAt: null }, scope ?? {}] },
     include: {
       lines: { where: { deletedAt: null } },
       category: {
@@ -669,6 +672,9 @@ export type CreditMemoListFilters = {
   createdAtFrom?: Date;
   createdAtTo?: Date;
   q?: string;
+  // Data-scope fragment from lib/permissions/scope.creditMemoScopeWhere.
+  // ANDed in so a "view own" actor only sees their customers' memos.
+  scope?: Prisma.CreditMemoWhereInput;
   skip?: number;
   take?: number;
 };
@@ -676,12 +682,12 @@ export type CreditMemoListFilters = {
 function creditMemoWhere(
   filters: Omit<CreditMemoListFilters, 'skip' | 'take'>,
 ): Prisma.CreditMemoWhereInput {
-  const { customerId, status, categoryId, createdAtFrom, createdAtTo, q } =
+  const { customerId, status, categoryId, createdAtFrom, createdAtTo, q, scope } =
     filters;
   const dateFilter: { gte?: Date; lte?: Date } = {};
   if (createdAtFrom) dateFilter.gte = createdAtFrom;
   if (createdAtTo) dateFilter.lte = createdAtTo;
-  return {
+  const base: Prisma.CreditMemoWhereInput = {
     deletedAt: null,
     ...(customerId ? { customerId } : {}),
     ...(status
@@ -691,6 +697,7 @@ function creditMemoWhere(
     ...(createdAtFrom || createdAtTo ? { createdAt: dateFilter } : {}),
     ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
   };
+  return scope ? { AND: [base, scope] } : base;
 }
 
 export async function listCreditMemos(

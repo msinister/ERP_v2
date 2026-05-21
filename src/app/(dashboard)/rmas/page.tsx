@@ -1,9 +1,12 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { Prisma, RmaStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listRmasPaged } from '@/server/services/rmas';
 import { listCustomers } from '@/server/services/customers';
+import { getActor } from '@/lib/permissions/getActor';
+import { rmaScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
 import {
   RmasFilters,
@@ -42,6 +45,10 @@ export default async function RmasPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+  const scope = rmaScopeWhere(actor);
+
   const [customers, page] = await Promise.all([
     listCustomers(db, { active: true, take: 1000 }),
     listRmasPaged(db, {
@@ -49,6 +56,7 @@ export default async function RmasPage({
       customerId,
       createdAtFrom: fromParam ? new Date(fromParam) : undefined,
       createdAtTo: toParam ? new Date(`${toParam}T23:59:59.999Z`) : undefined,
+      scope,
       skip,
       take,
     }),
