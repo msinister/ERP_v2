@@ -1,8 +1,11 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { listCustomers } from '@/server/services/customers';
 import { listCategories } from '@/server/services/creditMemoCategories';
+import { getActor } from '@/lib/permissions/getActor';
+import { customerScopeWhere } from '@/lib/permissions/scope';
 import {
   CmForm,
   type CustomerOption,
@@ -13,12 +16,19 @@ import {
 export const revalidate = 0;
 
 export default async function NewCreditMemoPage() {
+  const actor = await getActor();
+  if (!actor) redirect('/login');
   // Pilot scale: a few dozen customers, a few dozen variants. One fetch
   // each — no per-line API search. Invoices for the picked customer
   // load client-side via /api/invoices?customerId=… so we don't pull
-  // every invoice upfront.
+  // every invoice upfront. The customer picker is scoped to the rep's
+  // own customers under "view own".
   const [customers, categories, variants] = await Promise.all([
-    listCustomers(db, { active: true, take: 1000 }),
+    listCustomers(db, {
+      active: true,
+      take: 1000,
+      scope: customerScopeWhere(actor),
+    }),
     listCategories(db, { active: true, take: 200 }),
     db.productVariant.findMany({
       where: {

@@ -7,12 +7,17 @@ import {
   listCustomers,
 } from '@/server/services/customers';
 import { requireAuth } from '@/lib/auth/requireAuth';
+import { loadActor } from '@/lib/permissions/actor';
+import { customerScopeWhere } from '@/lib/permissions/scope';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 export async function GET(req: Request) {
   try {
-    await requireAuth(req);
+    const user = await requireAuth(req);
+    // Data-scope: a "view own" actor only gets their assigned customers.
+    const actor = await loadActor(db, user.id);
+    if (!actor) return NextResponse.json([], { status: 200 });
 
     const url = new URL(req.url);
     const activeParam = url.searchParams.get('active');
@@ -33,6 +38,7 @@ export async function GET(req: Request) {
       tagId,
       categoryId,
       q,
+      scope: customerScopeWhere(actor),
       skip,
       take,
     });

@@ -1,18 +1,28 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { listCustomers } from '@/server/services/customers';
 import { listWarehouses } from '@/server/services/warehouse';
+import { getActor } from '@/lib/permissions/getActor';
+import { customerScopeWhere } from '@/lib/permissions/scope';
 import { OrderForm } from '../_components/order-form';
 
 export const revalidate = 0;
 
 export default async function NewSalesOrderPage() {
+  const actor = await getActor();
+  if (!actor) redirect('/login');
   // Pilot scale: a few dozen customers, a few dozen variants. One fetch
   // each — no per-line API search. Both lookups exclude deleted /
-  // inactive records.
+  // inactive records. The customer picker is scoped: a "view own" rep
+  // only sees their assigned customers.
   const [customers, warehouses, variants, inventoryRows] = await Promise.all([
-    listCustomers(db, { active: true, take: 1000 }),
+    listCustomers(db, {
+      active: true,
+      take: 1000,
+      scope: customerScopeWhere(actor),
+    }),
     listWarehouses(db),
     db.productVariant.findMany({
       where: { active: true, deletedAt: null, product: { active: true, deletedAt: null } },

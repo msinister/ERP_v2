@@ -7,7 +7,7 @@ import {
 } from '@/server/services/payments';
 import { listCustomers } from '@/server/services/customers';
 import { getActor } from '@/lib/permissions/getActor';
-import { paymentScopeWhere } from '@/lib/permissions/scope';
+import { customerScopeWhere, paymentScopeWhere } from '@/lib/permissions/scope';
 import { redirect } from 'next/navigation';
 import { PaymentsFilters, type CustomerOption } from './_components/filters';
 import { PaymentsTable, type PaymentRowData } from './_components/table';
@@ -59,7 +59,13 @@ export default async function PaymentsPage({
   const scope = paymentScopeWhere(actor);
 
   const [customers, page] = await Promise.all([
-    listCustomers(db, { active: true, take: 1000 }),
+    // Record-payment dialog + filter picker — scoped to the rep's own
+    // customers under "view own".
+    listCustomers(db, {
+      active: true,
+      take: 1000,
+      scope: customerScopeWhere(actor),
+    }),
     listPaymentsPaged(db, {
       q,
       status,

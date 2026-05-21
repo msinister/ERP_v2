@@ -274,32 +274,35 @@ export function OrderForm({
 
   function submit(values: OrderFormValues) {
     startTransition(async () => {
-      const payload = {
-        customerId: values.customerId,
-        warehouseId: values.warehouseId,
-        customerPo: nullEmpty(values.customerPo),
-        promisedShipDate: nullEmpty(values.promisedShipDate),
-        shippingAddress: nullEmpty(values.shippingAddress),
-        customerNotes: nullEmpty(values.customerNotes),
-        internalNotes: nullEmpty(values.internalNotes),
-        orderDiscountPercent: nullEmptyDecimal(values.orderDiscountPercent),
-        orderDiscountAmount: nullEmptyDecimal(values.orderDiscountAmount),
-        shippingAmount: nullEmptyDecimal(values.shippingAmount),
-        handlingAmount: nullEmptyDecimal(values.handlingAmount),
-        lines: values.lines.map((l) => ({
-          variantId: l.variantId,
-          // Every line carries the SO-level warehouse for pilot. Multi-
-          // warehouse per-line lands in a later slice; the schema
-          // already supports it.
-          warehouseId: values.warehouseId,
-          qtyOrdered: normalizeDecimalForSubmit(l.qtyOrdered),
-          manualUnitPrice: nullEmptyDecimal(l.manualUnitPrice),
-          discountPercent: nullEmptyDecimal(l.discountPercent),
-          discountAmount: nullEmptyDecimal(l.discountAmount),
-          customerNote: nullEmpty(l.customerNote),
-        })),
-      };
+      // Whole body inside try so ANY failure (payload build, fetch,
+      // parse) lands in the catch → toast + the transition settles, so
+      // the button never sticks on "Saving…".
       try {
+        const payload = {
+          customerId: values.customerId,
+          warehouseId: values.warehouseId,
+          customerPo: nullEmpty(values.customerPo),
+          promisedShipDate: nullEmpty(values.promisedShipDate),
+          shippingAddress: nullEmpty(values.shippingAddress),
+          customerNotes: nullEmpty(values.customerNotes),
+          internalNotes: nullEmpty(values.internalNotes),
+          orderDiscountPercent: nullEmptyDecimal(values.orderDiscountPercent),
+          orderDiscountAmount: nullEmptyDecimal(values.orderDiscountAmount),
+          shippingAmount: nullEmptyDecimal(values.shippingAmount),
+          handlingAmount: nullEmptyDecimal(values.handlingAmount),
+          lines: values.lines.map((l) => ({
+            variantId: l.variantId,
+            // Every line carries the SO-level warehouse for pilot. Multi-
+            // warehouse per-line lands in a later slice; the schema
+            // already supports it.
+            warehouseId: values.warehouseId,
+            qtyOrdered: normalizeDecimalForSubmit(l.qtyOrdered),
+            manualUnitPrice: nullEmptyDecimal(l.manualUnitPrice),
+            discountPercent: nullEmptyDecimal(l.discountPercent),
+            discountAmount: nullEmptyDecimal(l.discountAmount),
+            customerNote: nullEmpty(l.customerNote),
+          })),
+        };
         const endpoint =
           mode.kind === 'create'
             ? '/api/sales-orders'
