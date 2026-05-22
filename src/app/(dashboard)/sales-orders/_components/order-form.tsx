@@ -54,7 +54,15 @@ import { useAutoAppendLine } from '@/lib/forms/useAutoAppendLine';
 // Lookup option shapes (kept narrow so the server fetches stay shallow)
 // ===========================================================================
 
-export type CustomerOption = { id: string; code: string; name: string };
+// salesRepId = the customer's assigned rep, used to auto-fill the order's
+// rep on the create form. Optional: inline-created customers omit it
+// (the order then inherits the customer's rep = saves null).
+export type CustomerOption = {
+  id: string;
+  code: string;
+  name: string;
+  salesRepId?: string;
+};
 export type WarehouseOption = { id: string; code: string; name: string };
 export type SalesRepOption = { id: string; name: string };
 
@@ -336,6 +344,7 @@ export function OrderForm({
     handleSubmit,
     control,
     watch,
+    setValue,
     formState: { errors },
   } = form;
   const { fields, append, remove } = useFieldArray({
@@ -394,7 +403,19 @@ export function OrderForm({
         // for both paths.
         const body =
           mode.kind === 'create'
-            ? payload
+            ? {
+                ...payload,
+                // Send the rep only when it's an explicit override of the
+                // customer's default; equal-to-default or the NO_REP
+                // sentinel → null (inherit the customer's rep).
+                salesRepId: (() => {
+                  const customerRep =
+                    customersState.find((c) => c.id === values.customerId)
+                      ?.salesRepId ?? null;
+                  const v = values.salesRepId;
+                  return v && v !== NO_REP && v !== customerRep ? v : null;
+                })(),
+              }
             : (() => {
                 const { customerId: _c, ...rest } = payload;
                 void _c;
@@ -455,7 +476,19 @@ export function OrderForm({
                   <CustomerPicker
                     id="customerId"
                     value={field.value || null}
-                    onValueChange={(v) => field.onChange(v ?? '')}
+                    onValueChange={(v) => {
+                      field.onChange(v ?? '');
+                      // Auto-fill the order's rep with the customer's
+                      // assigned rep (create only). The user can override
+                      // it; leaving it as the customer's rep saves null
+                      // (inherit) on submit.
+                      if (mode.kind === 'create') {
+                        const c = v
+                          ? customersState.find((x) => x.id === v)
+                          : null;
+                        setValue('salesRepId', c?.salesRepId ?? NO_REP);
+                      }
+                    }}
                     customers={customersState}
                     salesReps={salesReps}
                     paymentTerms={paymentTerms}
@@ -518,7 +551,7 @@ export function OrderForm({
               <FieldError errors={[errors.warehouseId]} />
             </Field>
           </div>
-          {mode.kind === 'edit' && canChangeRep ? (
+          {mode.kind === 'create' || canChangeRep ? (
             <div className="mt-4 md:max-w-[calc(50%-0.5rem)]">
               <Field>
                 <FieldLabel htmlFor="salesRepId">Sales rep</FieldLabel>
@@ -551,8 +584,9 @@ export function OrderForm({
                   )}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Overrides the rep for this order only — the customer&apos;s
-                  default is unchanged.
+                  {mode.kind === 'create'
+                    ? "Defaults to the customer's rep; pick another to override for this order."
+                    : "Overrides the rep for this order only — the customer's default is unchanged."}
                 </p>
               </Field>
             </div>

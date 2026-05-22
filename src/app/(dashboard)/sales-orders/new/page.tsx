@@ -100,6 +100,8 @@ export default async function NewSalesOrderPage() {
           id: c.id,
           code: c.code,
           name: c.name,
+          // Drives the order's rep auto-fill on customer select.
+          salesRepId: c.salesRepId,
         }))}
         salesReps={salesReps.map((r) => ({ id: r.id, name: r.name }))}
         paymentTerms={paymentTerms.map((t) => ({

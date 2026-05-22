@@ -78,6 +78,9 @@ export const createSalesOrderInputSchema = z
     customerNotes: z.string().max(2000).optional(),
     internalNotes: z.string().max(2000).optional(),
     createdById: z.string().optional(),
+    // Per-order rep at creation. null / absent = inherit the customer's
+    // rep (the default); a rep id pins this order to that rep.
+    salesRepId: z.string().min(1).nullable().optional(),
     lines: z.array(salesOrderLineInputSchema).min(1),
   })
   .superRefine(orderDiscountExclusive);

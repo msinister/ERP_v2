@@ -40,6 +40,7 @@ suite('SalesOrder lifecycle', () => {
   let warehouseId: string;
   let productId: string;
   let variantId: string;
+  let extraRepId: string; // a rep distinct from the customer's default
 
   beforeAll(async () => {
     db = makeClient();
@@ -73,6 +74,12 @@ suite('SalesOrder lifecycle', () => {
       update: { productId: product.id, active: true, deletedAt: null },
     });
     variantId = variant.id;
+    const rep = await db.salesRep.upsert({
+      where: { code: 'TEST-SR-SO-LC' },
+      create: { code: 'TEST-SR-SO-LC', name: 'SO LC Rep' },
+      update: { active: true, deletedAt: null },
+    });
+    extraRepId = rep.id;
   });
 
   beforeEach(async () => {
@@ -81,6 +88,8 @@ suite('SalesOrder lifecycle', () => {
 
   afterAll(async () => {
     await wipe(db, { customerId, variantId, warehouseId });
+    // After wipe removes the SOs referencing it, the test rep is safe to drop.
+    await db.salesRep.deleteMany({ where: { code: 'TEST-SR-SO-LC' } });
     await db.productVariant.deleteMany({ where: { id: variantId } });
     await db.product.deleteMany({ where: { id: productId } });
     await db.warehouse.deleteMany({ where: { id: warehouseId } });
@@ -128,6 +137,17 @@ suite('SalesOrder lifecycle', () => {
     const so = await createSalesOrder(db, createInput('3', '7.50'));
     expect(so.lines[0].priceRule).toBe(PriceResolutionRule.MANUAL_OVERRIDE);
     expect(so.lines[0].unitPrice.toString()).toBe(new Prisma.Decimal('7.50').toString());
+  });
+
+  it('createSalesOrder persists an explicit salesRepId; omitting it leaves null (inherit)', async () => {
+    const withRep = await createSalesOrder(db, {
+      ...createInput('1'),
+      salesRepId: extraRepId,
+    });
+    expect(withRep.salesRepId).toBe(extraRepId);
+
+    const withoutRep = await createSalesOrder(db, createInput('1'));
+    expect(withoutRep.salesRepId).toBeNull();
   });
 
   it('SO numbering is monotonic across two creates', async () => {

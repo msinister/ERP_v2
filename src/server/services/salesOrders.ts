@@ -186,6 +186,8 @@ export async function createSalesOrder(
         number: seq.formatted,
         customerId: data.customerId,
         warehouseId: data.warehouseId,
+        // Per-order rep override; null = inherit the customer's rep.
+        salesRepId: data.salesRepId ?? null,
         source: data.source ?? 'STAFF',
         currency: data.currency ?? 'USD',
         customerPo: data.customerPo,
