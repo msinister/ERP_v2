@@ -3,6 +3,10 @@
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import type {
+  SalesRepOption,
+  PaymentTermOption,
+} from '@/components/shared/customer-picker';
 import {
   RecordPaymentDialog,
   type CustomerOption,
@@ -10,8 +14,14 @@ import {
 
 export function RecordPaymentButton({
   customers,
+  salesReps,
+  paymentTerms,
+  defaultSalesRepId,
 }: {
   customers: CustomerOption[];
+  salesReps: SalesRepOption[];
+  paymentTerms: PaymentTermOption[];
+  defaultSalesRepId: string | null;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -22,6 +32,9 @@ export function RecordPaymentButton({
       </Button>
       <RecordPaymentDialog
         customers={customers}
+        salesReps={salesReps}
+        paymentTerms={paymentTerms}
+        defaultSalesRepId={defaultSalesRepId}
         open={open}
         onOpenChange={setOpen}
       />

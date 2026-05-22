@@ -4,6 +4,8 @@ import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { listCustomers } from '@/server/services/customers';
 import { getRestockingFeeDefault } from '@/server/services/restockingFee';
+import { listSalesReps } from '@/server/services/salesReps';
+import { listPaymentTerms } from '@/server/services/paymentTerms';
 import { getActor } from '@/lib/permissions/getActor';
 import { customerScopeWhere } from '@/lib/permissions/scope';
 import {
@@ -23,7 +25,8 @@ export default async function NewRmaPage() {
   // this cheap; if the catalog grows past ~5k variants this should move
   // to a /api/variants?ids= endpoint driven off the loaded invoice. The
   // customer picker is scoped to the rep's own customers under "view own".
-  const [customers, variants, restockingDefault] = await Promise.all([
+  const [customers, variants, restockingDefault, salesReps, paymentTerms] =
+    await Promise.all([
     listCustomers(db, {
       active: true,
       take: 1000,
@@ -41,6 +44,8 @@ export default async function NewRmaPage() {
       take: 5000,
     }),
     getRestockingFeeDefault(db),
+    listSalesReps(db, { active: true, take: 1000 }),
+    listPaymentTerms(db, { active: true }),
   ]);
 
   const customerOptions: CustomerOption[] = customers.map((c) => ({
@@ -83,6 +88,12 @@ export default async function NewRmaPage() {
         customers={customerOptions}
         variants={variantOptions}
         restockingFeeDefault={restockingFeeDefault}
+        salesReps={salesReps.map((r) => ({ id: r.id, name: r.name }))}
+        paymentTerms={paymentTerms.map((t) => ({
+          id: t.id,
+          label: t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
+        }))}
+        defaultSalesRepId={actor.salesRepId}
       />
     </div>
   );

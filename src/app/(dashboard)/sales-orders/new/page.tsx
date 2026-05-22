@@ -4,6 +4,8 @@ import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { listCustomers } from '@/server/services/customers';
 import { listWarehouses } from '@/server/services/warehouse';
+import { listSalesReps } from '@/server/services/salesReps';
+import { listPaymentTerms } from '@/server/services/paymentTerms';
 import { getActor } from '@/lib/permissions/getActor';
 import { customerScopeWhere } from '@/lib/permissions/scope';
 import { OrderForm } from '../_components/order-form';
@@ -17,7 +19,8 @@ export default async function NewSalesOrderPage() {
   // each — no per-line API search. Both lookups exclude deleted /
   // inactive records. The customer picker is scoped: a "view own" rep
   // only sees their assigned customers.
-  const [customers, warehouses, variants, inventoryRows] = await Promise.all([
+  const [customers, warehouses, variants, inventoryRows, salesReps, paymentTerms] =
+    await Promise.all([
     listCustomers(db, {
       active: true,
       take: 1000,
@@ -50,6 +53,8 @@ export default async function NewSalesOrderPage() {
         reserved: true,
       },
     }),
+    listSalesReps(db, { active: true, take: 1000 }),
+    listPaymentTerms(db, { active: true }),
   ]);
 
   // variantId → { warehouseId → { onHand, reserved } } as on-disk
@@ -96,6 +101,12 @@ export default async function NewSalesOrderPage() {
           code: c.code,
           name: c.name,
         }))}
+        salesReps={salesReps.map((r) => ({ id: r.id, name: r.name }))}
+        paymentTerms={paymentTerms.map((t) => ({
+          id: t.id,
+          label: t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
+        }))}
+        defaultSalesRepId={actor.salesRepId}
         warehouses={warehouses.map((w) => ({
           id: w.id,
           code: w.code,

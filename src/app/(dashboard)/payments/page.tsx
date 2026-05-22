@@ -6,6 +6,8 @@ import {
   type SortDir,
 } from '@/server/services/payments';
 import { listCustomers } from '@/server/services/customers';
+import { listSalesReps } from '@/server/services/salesReps';
+import { listPaymentTerms } from '@/server/services/paymentTerms';
 import { getActor } from '@/lib/permissions/getActor';
 import { customerScopeWhere, paymentScopeWhere } from '@/lib/permissions/scope';
 import { redirect } from 'next/navigation';
@@ -58,7 +60,7 @@ export default async function PaymentsPage({
   if (!actor) redirect('/login');
   const scope = paymentScopeWhere(actor);
 
-  const [customers, page] = await Promise.all([
+  const [customers, page, salesReps, paymentTerms] = await Promise.all([
     // Record-payment dialog + filter picker — scoped to the rep's own
     // customers under "view own".
     listCustomers(db, {
@@ -79,6 +81,8 @@ export default async function PaymentsPage({
       skip,
       take,
     }),
+    listSalesReps(db, { active: true, take: 1000 }),
+    listPaymentTerms(db, { active: true }),
   ]);
 
   const customerOptions: CustomerOption[] = customers.map((c) => ({
@@ -131,7 +135,16 @@ export default async function PaymentsPage({
             track unapplied credit sitting on customer accounts.
           </p>
         </div>
-        <RecordPaymentButton customers={customerOptions} />
+        <RecordPaymentButton
+          customers={customerOptions}
+          salesReps={salesReps.map((r) => ({ id: r.id, name: r.name }))}
+          paymentTerms={paymentTerms.map((t) => ({
+            id: t.id,
+            label:
+              t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
+          }))}
+          defaultSalesRepId={actor.salesRepId}
+        />
       </div>
 
       <PaymentsFilters customers={customerOptions} />

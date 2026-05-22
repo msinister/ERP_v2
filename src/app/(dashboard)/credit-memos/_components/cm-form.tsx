@@ -36,6 +36,12 @@ import {
   VariantPicker,
   type CreatedProduct,
 } from '@/components/shared/variant-picker';
+import {
+  CustomerPicker,
+  type SalesRepOption,
+  type PaymentTermOption,
+  type CreatedCustomer,
+} from '@/components/shared/customer-picker';
 import { formatCurrency } from '@/lib/format';
 import {
   isNonNegativeDecimalInput,
@@ -227,12 +233,19 @@ export function CmForm({
   customers,
   categories,
   variants,
+  salesReps = [],
+  paymentTerms = [],
+  defaultSalesRepId = null,
   defaultValues,
 }: {
   mode: CmFormMode;
   customers: CustomerOption[];
   categories: CategoryOption[];
   variants: VariantOption[];
+  // For the inline create-customer dialog (create mode).
+  salesReps?: SalesRepOption[];
+  paymentTerms?: PaymentTermOption[];
+  defaultSalesRepId?: string | null;
   defaultValues?: Partial<CmFormValues>;
 }) {
   const router = useRouter();
@@ -240,6 +253,17 @@ export function CmForm({
   // Shadow the variants prop so an inline-created product appears on
   // every line without a navigation.
   const [variantsState, setVariantsState] = useState<VariantOption[]>(variants);
+  // Same shadow pattern for customers (inline create-customer flow).
+  const [customersState, setCustomersState] =
+    useState<CustomerOption[]>(customers);
+
+  function onCustomerCreated(created: CreatedCustomer) {
+    setCustomersState((prev) =>
+      prev.some((c) => c.id === created.id)
+        ? prev
+        : [...prev, { id: created.id, code: created.code, name: created.name }],
+    );
+  }
 
   function onProductCreated(created: CreatedProduct) {
     setVariantsState((prev) =>
@@ -459,49 +483,19 @@ export function CmForm({
                   control={control}
                   name="customerId"
                   render={({ field }) => (
-                    <Select
-                      value={field.value}
-                      onValueChange={field.onChange}
+                    <CustomerPicker
+                      id="customerId"
+                      value={field.value || null}
+                      onValueChange={(v) => field.onChange(v ?? '')}
+                      customers={customersState}
+                      salesReps={salesReps}
+                      paymentTerms={paymentTerms}
+                      defaultSalesRepId={defaultSalesRepId}
+                      onCreated={onCustomerCreated}
                       disabled={mode.kind === 'edit'}
-                    >
-                      <SelectTrigger
-                        id="customerId"
-                        className="w-full"
-                        aria-invalid={!!errors.customerId}
-                      >
-                        <SelectValue placeholder="Select a customer">
-                          {(v) => {
-                            if (!v) return null;
-                            const c = customers.find((x) => x.id === v);
-                            if (!c) return v;
-                            return (
-                              <>
-                                <span className="font-mono text-xs text-muted-foreground">
-                                  {c.code}
-                                </span>{' '}
-                                {c.name}
-                              </>
-                            );
-                          }}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {customers.length === 0 ? (
-                          <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                            No active customers — create one first.
-                          </div>
-                        ) : (
-                          customers.map((c) => (
-                            <SelectItem key={c.id} value={c.id}>
-                              <span className="font-mono text-xs text-muted-foreground">
-                                {c.code}
-                              </span>{' '}
-                              {c.name}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
+                      ariaInvalid={!!errors.customerId}
+                      placeholder="Search customers…"
+                    />
                   )}
                 />
                 <FieldError errors={[errors.customerId]} />

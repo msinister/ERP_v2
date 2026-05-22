@@ -4,6 +4,8 @@ import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { listCustomers } from '@/server/services/customers';
 import { listCategories } from '@/server/services/creditMemoCategories';
+import { listSalesReps } from '@/server/services/salesReps';
+import { listPaymentTerms } from '@/server/services/paymentTerms';
 import { getActor } from '@/lib/permissions/getActor';
 import { customerScopeWhere } from '@/lib/permissions/scope';
 import {
@@ -23,7 +25,8 @@ export default async function NewCreditMemoPage() {
   // load client-side via /api/invoices?customerId=… so we don't pull
   // every invoice upfront. The customer picker is scoped to the rep's
   // own customers under "view own".
-  const [customers, categories, variants] = await Promise.all([
+  const [customers, categories, variants, salesReps, paymentTerms] =
+    await Promise.all([
     listCustomers(db, {
       active: true,
       take: 1000,
@@ -47,6 +50,8 @@ export default async function NewCreditMemoPage() {
       orderBy: { sku: 'asc' },
       take: 1000,
     }),
+    listSalesReps(db, { active: true, take: 1000 }),
+    listPaymentTerms(db, { active: true }),
   ]);
 
   const customerOptions: CustomerOption[] = customers.map((c) => ({
@@ -95,6 +100,12 @@ export default async function NewCreditMemoPage() {
         customers={customerOptions}
         categories={categoryOptions}
         variants={variantOptions}
+        salesReps={salesReps.map((r) => ({ id: r.id, name: r.name }))}
+        paymentTerms={paymentTerms.map((t) => ({
+          id: t.id,
+          label: t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
+        }))}
+        defaultSalesRepId={actor.salesRepId}
       />
     </div>
   );

@@ -26,6 +26,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  CustomerPicker,
+  type SalesRepOption,
+  type PaymentTermOption,
+  type CreatedCustomer,
+} from '@/components/shared/customer-picker';
 import { formatCurrency } from '@/lib/format';
 import {
   isNonNegativeDecimalInput,
@@ -179,13 +185,32 @@ export function RmaForm({
   customers,
   variants,
   restockingFeeDefault,
+  salesReps = [],
+  paymentTerms = [],
+  defaultSalesRepId = null,
 }: {
   customers: CustomerOption[];
   variants: VariantOption[];
   restockingFeeDefault: RestockingFeeDefault;
+  // For the inline create-customer dialog.
+  salesReps?: SalesRepOption[];
+  paymentTerms?: PaymentTermOption[];
+  defaultSalesRepId?: string | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // Shadow the customers prop so an inline-created customer appears
+  // immediately and can be auto-selected.
+  const [customersState, setCustomersState] =
+    useState<CustomerOption[]>(customers);
+
+  function onCustomerCreated(created: CreatedCustomer) {
+    setCustomersState((prev) =>
+      prev.some((c) => c.id === created.id)
+        ? prev
+        : [...prev, { id: created.id, code: created.code, name: created.name }],
+    );
+  }
 
   // variantId → variant (joined client-side from the catalog snapshot
   // so the invoice-line rows can render SKU + product name without an
@@ -392,48 +417,18 @@ export function RmaForm({
                   control={control}
                   name="customerId"
                   render={({ field }) => (
-                    <Select
-                      value={field.value}
-                      onValueChange={field.onChange}
-                    >
-                      <SelectTrigger
-                        id="customerId"
-                        className="w-full"
-                        aria-invalid={!!errors.customerId}
-                      >
-                        <SelectValue placeholder="Select a customer">
-                          {(v) => {
-                            if (!v) return null;
-                            const c = customers.find((x) => x.id === v);
-                            if (!c) return v;
-                            return (
-                              <>
-                                <span className="font-mono text-xs text-muted-foreground">
-                                  {c.code}
-                                </span>{' '}
-                                {c.name}
-                              </>
-                            );
-                          }}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {customers.length === 0 ? (
-                          <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                            No active customers — create one first.
-                          </div>
-                        ) : (
-                          customers.map((c) => (
-                            <SelectItem key={c.id} value={c.id}>
-                              <span className="font-mono text-xs text-muted-foreground">
-                                {c.code}
-                              </span>{' '}
-                              {c.name}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
+                    <CustomerPicker
+                      id="customerId"
+                      value={field.value || null}
+                      onValueChange={(v) => field.onChange(v ?? '')}
+                      customers={customersState}
+                      salesReps={salesReps}
+                      paymentTerms={paymentTerms}
+                      defaultSalesRepId={defaultSalesRepId}
+                      onCreated={onCustomerCreated}
+                      ariaInvalid={!!errors.customerId}
+                      placeholder="Search customers…"
+                    />
                   )}
                 />
                 <FieldError errors={[errors.customerId]} />

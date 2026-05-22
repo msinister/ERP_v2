@@ -37,6 +37,11 @@ import {
   VariantPicker,
   type CreatedProduct,
 } from '@/components/shared/variant-picker';
+import {
+  CustomerPicker,
+  type PaymentTermOption,
+  type CreatedCustomer,
+} from '@/components/shared/customer-picker';
 import { formatCurrency } from '@/lib/format';
 import {
   isNonNegativeDecimalInput,
@@ -242,6 +247,8 @@ export function OrderForm({
   warehouses,
   variants,
   salesReps = [],
+  paymentTerms = [],
+  defaultSalesRepId = null,
   canChangeRep = false,
   defaultValues,
 }: {
@@ -249,8 +256,13 @@ export function OrderForm({
   customers: CustomerOption[];
   warehouses: WarehouseOption[];
   variants: VariantOption[];
-  // Active reps for the edit-mode rep override picker. Omitted on create.
+  // Active reps — drives both the edit-mode rep override picker and the
+  // inline create-customer dialog's rep dropdown.
   salesReps?: SalesRepOption[];
+  // Payment terms for the inline create-customer dialog (create mode).
+  paymentTerms?: PaymentTermOption[];
+  // Current user's own rep, pre-selected in the create-customer dialog.
+  defaultSalesRepId?: string | null;
   // Gates the rep override field (UI + payload) on sales_orders.change_rep.
   // The server (PATCH route) re-checks; this just hides the control and
   // omits salesRepId from the request for users without the permission.
@@ -262,6 +274,18 @@ export function OrderForm({
   // Shadow the variants prop so an inline-created product appears on
   // every line. New products have no inventory yet (empty map).
   const [variantsState, setVariantsState] = useState<VariantOption[]>(variants);
+  // Same shadow pattern for customers — the inline create-customer flow
+  // appends + auto-selects without a navigation.
+  const [customersState, setCustomersState] =
+    useState<CustomerOption[]>(customers);
+
+  function onCustomerCreated(created: CreatedCustomer) {
+    setCustomersState((prev) =>
+      prev.some((c) => c.id === created.id)
+        ? prev
+        : [...prev, { id: created.id, code: created.code, name: created.name }],
+    );
+  }
 
   function onProductCreated(created: CreatedProduct) {
     setVariantsState((prev) =>
@@ -428,49 +452,19 @@ export function OrderForm({
                 control={control}
                 name="customerId"
                 render={({ field }) => (
-                  <Select
-                    value={field.value}
-                    onValueChange={field.onChange}
+                  <CustomerPicker
+                    id="customerId"
+                    value={field.value || null}
+                    onValueChange={(v) => field.onChange(v ?? '')}
+                    customers={customersState}
+                    salesReps={salesReps}
+                    paymentTerms={paymentTerms}
+                    defaultSalesRepId={defaultSalesRepId}
+                    onCreated={onCustomerCreated}
                     disabled={mode.kind === 'edit'}
-                  >
-                    <SelectTrigger
-                      id="customerId"
-                      className="w-full"
-                      aria-invalid={!!errors.customerId}
-                    >
-                      <SelectValue placeholder="Select a customer">
-                        {(v) => {
-                          if (!v) return null;
-                          const c = customers.find((x) => x.id === v);
-                          if (!c) return v;
-                          return (
-                            <>
-                              <span className="font-mono text-xs text-muted-foreground">
-                                {c.code}
-                              </span>{' '}
-                              {c.name}
-                            </>
-                          );
-                        }}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {customers.length === 0 ? (
-                        <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                          No active customers — create one first.
-                        </div>
-                      ) : (
-                        customers.map((c) => (
-                          <SelectItem key={c.id} value={c.id}>
-                            <span className="font-mono text-xs text-muted-foreground">
-                              {c.code}
-                            </span>{' '}
-                            {c.name}
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                    ariaInvalid={!!errors.customerId}
+                    placeholder="Search customers…"
+                  />
                 )}
               />
               <FieldError errors={[errors.customerId]} />

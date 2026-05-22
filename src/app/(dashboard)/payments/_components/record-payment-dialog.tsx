@@ -23,6 +23,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  CustomerPicker,
+  type SalesRepOption,
+  type PaymentTermOption,
+  type CreatedCustomer,
+} from '@/components/shared/customer-picker';
 import { formatCurrency } from '@/lib/format';
 import {
   isPositiveDecimalInput,
@@ -79,16 +85,27 @@ async function readApiError(res: Response): Promise<string> {
 
 export function RecordPaymentDialog({
   customers,
+  salesReps = [],
+  paymentTerms = [],
+  defaultSalesRepId = null,
   open,
   onOpenChange,
 }: {
   customers: CustomerOption[];
+  // For the inline create-customer dialog.
+  salesReps?: SalesRepOption[];
+  paymentTerms?: PaymentTermOption[];
+  defaultSalesRepId?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
+  // Shadow the customers prop so an inline-created customer is selectable
+  // immediately (persists across dialog re-opens).
+  const [customersState, setCustomersState] =
+    useState<CustomerOption[]>(customers);
   const [customerId, setCustomerId] = useState('');
   const [openInvoices, setOpenInvoices] = useState<OpenInvoice[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
@@ -159,7 +176,15 @@ export function RecordPaymentDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invoiceId]);
 
-  const customer = customers.find((c) => c.id === customerId) ?? null;
+  const customer = customersState.find((c) => c.id === customerId) ?? null;
+
+  function onCustomerCreated(created: CreatedCustomer) {
+    setCustomersState((prev) =>
+      prev.some((c) => c.id === created.id)
+        ? prev
+        : [...prev, { id: created.id, code: created.code, name: created.name }],
+    );
+  }
 
   const overpaying =
     selectedInvoice != null &&
@@ -247,30 +272,18 @@ export function RecordPaymentDialog({
         <div className="space-y-3">
           <Field>
             <FieldLabel htmlFor="rp-customer">Customer</FieldLabel>
-            <Select
-              value={customerId}
+            <CustomerPicker
+              id="rp-customer"
+              value={customerId || null}
               onValueChange={(v) => setCustomerId(v ?? '')}
-            >
-              <SelectTrigger
-                id="rp-customer"
-                className="w-full"
-                aria-invalid={!!errors.customerId}
-              >
-                <SelectValue placeholder="Select a customer">
-                  {(v) => {
-                    const c = customers.find((x) => x.id === v);
-                    return c ? `${c.name} (${c.code})` : 'Select a customer';
-                  }}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {customers.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name} ({c.code})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              customers={customersState}
+              salesReps={salesReps}
+              paymentTerms={paymentTerms}
+              defaultSalesRepId={defaultSalesRepId}
+              onCreated={onCustomerCreated}
+              ariaInvalid={!!errors.customerId}
+              placeholder="Search customers…"
+            />
             <FieldError
               errors={[
                 errors.customerId ? { message: errors.customerId } : undefined,
