@@ -13,6 +13,7 @@ import {
   FileText,
   Receipt,
   ArrowLeftRight,
+  BookOpen,
   CreditCard,
   Banknote,
   Undo2,
@@ -91,6 +92,13 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Transfers',
     href: '/transfers',
     icon: ArrowLeftRight,
+    module: 'gl',
+  },
+  {
+    // Per-account transaction register (cash / credit-card focus).
+    label: 'GL Ledger',
+    href: '/gl-ledger',
+    icon: BookOpen,
     module: 'gl',
   },
   {
