@@ -261,17 +261,38 @@ suite('BillPayment lifecycle (slice D)', () => {
     ).rejects.toThrow(/Cannot record payment on bill in status DRAFT/);
   });
 
-  it('rejects non-ASSET cashAccountId (e.g., AP/2010 LIABILITY)', async () => {
-    const apAccount = await db.glAccount.findFirstOrThrow({ where: { code: '2010' } });
+  it('accepts a LIABILITY cashAccountId (e.g., a credit-card payable)', async () => {
+    // Paying a bill by credit card credits a 2xxx liability rather than a
+    // 1xxx cash account. 2030 stands in for a credit-card payable here.
+    const liabilityAccount = await db.glAccount.findFirstOrThrow({
+      where: { code: '2030' },
+    });
+    const bill = await makeConfirmedBill('50');
+    const { billPayment } = await recordBillPayment(db, {
+      billId: bill.id,
+      amount: '50',
+      method: PaymentMethod.CREDIT_CARD,
+      cashAccountId: liabilityAccount.id,
+    });
+    expect(billPayment.status).toBe(PaymentStatus.RECORDED);
+    expect(billPayment.cashAccountId).toBe(liabilityAccount.id);
+  });
+
+  it('rejects a non-ASSET/non-LIABILITY cashAccountId (e.g., 5500 EXPENSE)', async () => {
+    const expenseAccount = await db.glAccount.findFirstOrThrow({
+      where: { code: '5500' },
+    });
     const bill = await makeConfirmedBill('50');
     await expect(
       recordBillPayment(db, {
         billId: bill.id,
         amount: '50',
         method: PaymentMethod.CHECK,
-        cashAccountId: apAccount.id,
+        cashAccountId: expenseAccount.id,
       }),
-    ).rejects.toThrow(/cashAccountId must point at an ASSET-type GlAccount/);
+    ).rejects.toThrow(
+      /cashAccountId must point at an ASSET- or LIABILITY-type GlAccount/,
+    );
   });
 
   // ---------- Reverse ----------

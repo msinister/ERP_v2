@@ -156,7 +156,8 @@ export const recordBillPaymentInputSchema = z.object({
     'Must be greater than 0',
   ),
   method: billPaymentMethodSchema,
-  // FK to a GlAccount of type=ASSET (typically 1110 Cash/Bank). Service
+  // FK to a GlAccount of type ASSET (cash/bank, typically 1110) or
+  // LIABILITY (e.g. a credit-card payable when paying by card). Service
   // validates type. Optional at the DB level for record-only entries
   // missing bank-account specification, but the service requires it
   // for non-zero amounts because the JE needs an account to credit.

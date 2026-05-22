@@ -42,7 +42,9 @@ export default async function BillDetailPage({
   // linked-POs and linked-receipts panels.
   // Three parallel reads: the bill (with vendor + lines + M:N joins +
   // payments + cashAccount on each payment), and the active GL account
-  // list filtered to ASSET so the record-payment dialog has a picker.
+  // list filtered to ASSET + LIABILITY so the record-payment dialog has a
+  // picker that covers both cash/bank (1xxx) and credit-card payable
+  // (2xxx) accounts.
   const [bill, allAccounts] = await Promise.all([
     db.bill.findFirst({
       where: { id, deletedAt: null },
@@ -166,7 +168,10 @@ export default async function BillDetailPage({
   }));
 
   const cashAccounts: CashAccountOption[] = allAccounts
-    .filter((a) => a.type === AccountType.ASSET)
+    .filter(
+      (a) =>
+        a.type === AccountType.ASSET || a.type === AccountType.LIABILITY,
+    )
     .map((a) => ({ id: a.id, code: a.code, name: a.name }));
 
   const remainingBalance = bill.total

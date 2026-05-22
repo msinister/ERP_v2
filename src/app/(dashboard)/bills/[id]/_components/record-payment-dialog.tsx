@@ -255,7 +255,7 @@ export function RecordPaymentDialog({
                 className="w-full"
                 aria-invalid={!!errors.cashAccountId}
               >
-                <SelectValue placeholder="Pick a bank / cash account">
+                <SelectValue placeholder="Pick a cash or credit-card account">
                   {(v) => {
                     if (!v) return null;
                     const a = cashAccounts.find((x) => x.id === v);
@@ -274,8 +274,8 @@ export function RecordPaymentDialog({
               <SelectContent>
                 {cashAccounts.length === 0 ? (
                   <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                    No ASSET-type accounts configured — set one up under
-                    Admin → GL accounts first.
+                    No cash/bank or credit-card accounts configured — set one
+                    up under Admin → GL accounts first.
                   </div>
                 ) : (
                   cashAccounts.map((a) => (

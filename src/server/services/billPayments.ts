@@ -99,9 +99,17 @@ export async function recordBillPayment(
     if (!cashAccount || cashAccount.deletedAt) {
       throw new Error(`GlAccount not found: ${data.cashAccountId}`);
     }
-    if (cashAccount.type !== AccountType.ASSET) {
+    // Allow ASSET (cash/bank, 1xxx) and LIABILITY (e.g. a credit-card
+    // payable, 2xxx) — paying a bill on a credit card credits the card
+    // liability rather than a cash account. Both keep the JE balanced
+    // (DR AP / CR cashAccount); other types (EQUITY/REVENUE/EXPENSE)
+    // make no sense as a payment source.
+    if (
+      cashAccount.type !== AccountType.ASSET &&
+      cashAccount.type !== AccountType.LIABILITY
+    ) {
       throw new Error(
-        `cashAccountId must point at an ASSET-type GlAccount; ${cashAccount.code} is ${cashAccount.type}`,
+        `cashAccountId must point at an ASSET- or LIABILITY-type GlAccount; ${cashAccount.code} is ${cashAccount.type}`,
       );
     }
     if (!cashAccount.active) {
