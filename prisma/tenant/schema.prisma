@@ -1968,6 +1968,11 @@ model JournalEntry {
   entityId    String
   postedAt    DateTime  @default(now())
   description String
+  // Optional JE-level metadata. Populated by Account Transfers (manual
+  // money movement between GL accounts): reference = check/confirmation #,
+  // notes = free-text memo. Null for system-posted operational JEs.
+  reference   String?
+  notes       String?
   // Set when the operational entity is voided / payment-reversed /
   // CM-voided. The full GL slice will add admin manual-reverse
   // capability with proper period-close gating.

@@ -12,6 +12,7 @@ import {
   Wrench,
   FileText,
   Receipt,
+  ArrowLeftRight,
   CreditCard,
   Banknote,
   Undo2,
@@ -84,6 +85,13 @@ const NAV_ITEMS: NavItem[] = [
     href: '/expenses',
     icon: Receipt,
     module: 'bills',
+  },
+  {
+    // Account transfers post manual JEs between money accounts — GL module.
+    label: 'Transfers',
+    href: '/transfers',
+    icon: ArrowLeftRight,
+    module: 'gl',
   },
   {
     // Vendor credits are part of the AP (bills) module.
