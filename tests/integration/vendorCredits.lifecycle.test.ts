@@ -175,7 +175,7 @@ suite('VendorCredit lifecycle (slice D)', () => {
 
   // ---------- confirmVendorCredit ----------
 
-  it('confirmVendorCredit: status flips, JE DR 2010 / CR 2030 balanced', async () => {
+  it('confirmVendorCredit: status flips, JE DR 1410 / CR 5150 balanced', async () => {
     const vc = await createVendorCreditDraft(db, {
       vendorId: vendor.id,
       amount: '50',
@@ -191,10 +191,13 @@ suite('VendorCredit lifecycle (slice D)', () => {
     });
     assertBalanced(je);
     expect(je.lines).toHaveLength(2);
-    const ap = je.lines.find((l) => l.account.code === '2010');
-    const vca = je.lines.find((l) => l.account.code === '2030');
-    expect(ap?.debit.toString()).toBe(new Prisma.Decimal('50').toString());
-    expect(vca?.credit.toString()).toBe(new Prisma.Decimal('50').toString());
+    // Asset model: recognize the credit asset, offset to purchase returns.
+    // AP is NOT touched at issue — it drops when the credit is applied.
+    const asset = je.lines.find((l) => l.account.code === '1410');
+    const returns = je.lines.find((l) => l.account.code === '5150');
+    expect(je.lines.find((l) => l.account.code === '2010')).toBeUndefined();
+    expect(asset?.debit.toString()).toBe(new Prisma.Decimal('50').toString());
+    expect(returns?.credit.toString()).toBe(new Prisma.Decimal('50').toString());
 
     const audits = await db.auditLog.findMany({
       where: { entityType: 'VendorCredit', entityId: vc.id, action: AuditAction.VENDOR_CREDIT_CONFIRMED },
@@ -214,7 +217,7 @@ suite('VendorCredit lifecycle (slice D)', () => {
 
   // ---------- applyVendorCreditToBill ----------
 
-  it('applyVendorCreditToBill: NO JE posted, denorms updated, application row created', async () => {
+  it('applyVendorCreditToBill: posts DR 2010 AP / CR 1410, denorms updated, application row created', async () => {
     const bill = await makeConfirmedBill(vendor, '100');
     const vc = await createVendorCreditDraft(db, {
       vendorId: vendor.id,
@@ -238,18 +241,25 @@ suite('VendorCredit lifecycle (slice D)', () => {
     const vcAfter = await db.vendorCredit.findUniqueOrThrow({ where: { id: vc.id } });
     expect(vcAfter.appliedAmount.toString()).toBe(new Prisma.Decimal('30').toString());
 
-    // NO new JE posted by apply (only the confirm JE exists).
+    // Confirm JE (DR 1410 / CR 5150) still the only JE on the VC itself.
     const jes = await db.journalEntry.findMany({
       where: { entityType: 'VendorCredit', entityId: vc.id },
     });
     expect(jes).toHaveLength(1);
-    const appJes = await db.journalEntry.findMany({
+    // Apply posts its own JE on the application: DR 2010 AP / CR 1410 —
+    // this is where AP actually drops.
+    const appJe = await db.journalEntry.findFirstOrThrow({
       where: {
         entityType: 'VendorCreditApplication',
         entityId: application.id,
       },
+      include: { lines: { include: { account: true } } },
     });
-    expect(appJes).toHaveLength(0);
+    assertBalanced(appJe);
+    const ap = appJe.lines.find((l) => l.account.code === '2010');
+    const asset = appJe.lines.find((l) => l.account.code === '1410');
+    expect(ap?.debit.toString()).toBe(new Prisma.Decimal('30').toString());
+    expect(asset?.credit.toString()).toBe(new Prisma.Decimal('30').toString());
 
     // Audit row.
     const audits = await db.auditLog.findMany({
@@ -371,6 +381,21 @@ suite('VendorCredit lifecycle (slice D)', () => {
     const billAfter = await db.bill.findUniqueOrThrow({ where: { id: bill.id } });
     expect(billAfter.amountCredited.toString()).toBe(new Prisma.Decimal('0').toString());
     expect(billAfter.paymentStatus).toBe(BillPaymentStatus.UNPAID);
+
+    // Application carries two JEs now: the apply (DR 2010 / CR 1410) and the
+    // reversal mirror (DR 1410 / CR 2010 AP).
+    const appJes = await db.journalEntry.findMany({
+      where: { entityType: 'VendorCreditApplication', entityId: app.id },
+      include: { lines: { include: { account: true } } },
+    });
+    expect(appJes).toHaveLength(2);
+    const revJe = appJes.find((j) => j.description.startsWith('Reverse vendor credit'));
+    expect(revJe).toBeDefined();
+    assertBalanced(revJe!);
+    const asset = revJe!.lines.find((l) => l.account.code === '1410');
+    const ap = revJe!.lines.find((l) => l.account.code === '2010');
+    expect(asset?.debit.toString()).toBe(new Prisma.Decimal('30').toString());
+    expect(ap?.credit.toString()).toBe(new Prisma.Decimal('30').toString());
   });
 
   it('reverseVendorCreditApplication: idempotency — refuses second reverse', async () => {
@@ -447,10 +472,11 @@ suite('VendorCredit lifecycle (slice D)', () => {
     for (const je of jes) assertBalanced(je);
     const cancelJe = jes.find((j) => j.description.startsWith('Cancel vendor credit'));
     expect(cancelJe).toBeDefined();
-    const vca = cancelJe!.lines.find((l) => l.account.code === '2030');
-    const ap = cancelJe!.lines.find((l) => l.account.code === '2010');
-    expect(vca?.debit.toString()).toBe(new Prisma.Decimal('40').toString());
-    expect(ap?.credit.toString()).toBe(new Prisma.Decimal('40').toString());
+    // Mirror of issue: DR 5150 Purchase Returns / CR 1410 Vendor Credits.
+    const returns = cancelJe!.lines.find((l) => l.account.code === '5150');
+    const asset = cancelJe!.lines.find((l) => l.account.code === '1410');
+    expect(returns?.debit.toString()).toBe(new Prisma.Decimal('40').toString());
+    expect(asset?.credit.toString()).toBe(new Prisma.Decimal('40').toString());
   });
 
   it('cancelVendorCredit on CONFIRMED with applied amount: refused', async () => {

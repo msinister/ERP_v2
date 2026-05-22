@@ -210,16 +210,18 @@ suite('BillPayment lifecycle (slice D)', () => {
     const pmtAp = pmtJe.lines.find((l) => l.account.code === '2010');
     expect(pmtAp?.debit.toString()).toBe(new Prisma.Decimal('120').toString());
 
-    // VC confirm JE: $20 (DR AP / CR VCA).
+    // VC confirm JE for the overpayment: $20 (DR 1410 Vendor Credits / CR
+    // 2010 AP). The CR AP corrects the main payment JE's full-amount AP
+    // debit so net AP relief = bill total ($100); the excess is an asset.
     const vcJe = await db.journalEntry.findFirstOrThrow({
       where: { entityType: 'VendorCredit', entityId: vc.id },
       include: { lines: { include: { account: true } } },
     });
     assertBalanced(vcJe);
+    const vcAsset = vcJe.lines.find((l) => l.account.code === '1410');
     const vcAp = vcJe.lines.find((l) => l.account.code === '2010');
-    const vcca = vcJe.lines.find((l) => l.account.code === '2030');
-    expect(vcAp?.debit.toString()).toBe(new Prisma.Decimal('20').toString());
-    expect(vcca?.credit.toString()).toBe(new Prisma.Decimal('20').toString());
+    expect(vcAsset?.debit.toString()).toBe(new Prisma.Decimal('20').toString());
+    expect(vcAp?.credit.toString()).toBe(new Prisma.Decimal('20').toString());
 
     // VC confirm audit also written.
     const vcAudits = await db.auditLog.findMany({

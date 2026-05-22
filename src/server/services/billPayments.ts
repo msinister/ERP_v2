@@ -55,7 +55,11 @@ const VC_SEQUENCE_NAME = 'vendor_credit';
 const VC_PREFIX = 'VCM';
 
 const AP_ACCOUNT = '2010';
-const VENDOR_CREDITS_AVAILABLE_ACCOUNT = '2030';
+// 1410 "Vendor Credits" (ASSET). An overpayment recognizes a credit asset:
+// DR 1410 / CR 2010 AP. The CR AP corrects the main payment JE — that JE
+// debits AP the FULL payment, but only the bill portion settles AP; the
+// overpaid excess is an asset (vendor owes us), not a payable relief.
+const VENDOR_CREDITS_ASSET = '1410';
 
 export type BillPaymentResult = {
   billPayment: BillPayment;
@@ -212,10 +216,13 @@ export async function recordBillPaymentTx(
       },
     });
 
-    // Post the auto-VC's confirm JE: DR AP / CR VCA. Same shape as
-    // confirmVendorCredit's JE — kept inline rather than calling the
-    // public confirmVendorCredit helper to avoid a nested transaction
-    // and to use a more specific JE description.
+    // Post the auto-VC's confirm JE: DR 1410 Vendor Credits / CR 2010 AP.
+    // Differs from confirmVendorCredit's issue JE (which credits 5150
+    // Purchase Returns): here the cash already left in the main payment JE
+    // above, which debited AP the FULL amount. Only the bill portion should
+    // relieve AP, so we credit AP back by the overpaid excess and recognize
+    // it as a vendor-credit asset instead. Net AP relief = bill total. Kept
+    // inline (not via confirmVendorCredit) to stay in this transaction.
     await post(tx, {
       entityType: 'VendorCredit',
       entityId: overpaymentCredit.id,
@@ -223,14 +230,14 @@ export async function recordBillPaymentTx(
       postedAt: paymentDate,
       lines: [
         {
-          accountCode: AP_ACCOUNT,
+          accountCode: VENDOR_CREDITS_ASSET,
           debit: overpaidBy,
-          memo: `AP overpayment relief — bill ${bill.number}`,
+          memo: `Vendor credit asset (overpayment) — bill ${bill.number}`,
         },
         {
-          accountCode: VENDOR_CREDITS_AVAILABLE_ACCOUNT,
+          accountCode: AP_ACCOUNT,
           credit: overpaidBy,
-          memo: `Vendor credit issued (overpayment)`,
+          memo: `Correct AP — overpaid excess is an asset, not bill settlement`,
         },
       ],
     });
@@ -306,9 +313,9 @@ export async function reverseBillPayment(
     const now = new Date();
 
     // If an overpayment VC exists (and is unapplied), cancel it inline
-    // so the reverse flow leaves no orphan credit. Posts an offsetting
-    // JE for the VC confirm. This mirrors what cancelVendorCredit
-    // would do but stays inside the same transaction.
+    // so the reverse flow leaves no orphan credit. Posts the mirror of the
+    // overpayment issue JE — DR 2010 AP / CR 1410 — undoing the asset and
+    // the AP correction. Stays inside the same transaction.
     if (overpaymentVc) {
       await post(tx, {
         entityType: 'VendorCredit',
@@ -317,7 +324,7 @@ export async function reverseBillPayment(
         postedAt: now,
         lines: [
           {
-            accountCode: VENDOR_CREDITS_AVAILABLE_ACCOUNT,
+            accountCode: AP_ACCOUNT,
             debit: overpaymentVc.appliedAmount.equals(0)
               ? // No application — full credit amount unwinds.
                 (
@@ -327,10 +334,10 @@ export async function reverseBillPayment(
                   })
                 ).amount
               : overpaymentVc.appliedAmount,
-            memo: `Reverse VC issuance (overpayment unwound)`,
+            memo: `Reverse AP correction (overpayment unwound)`,
           },
           {
-            accountCode: AP_ACCOUNT,
+            accountCode: VENDOR_CREDITS_ASSET,
             credit: overpaymentVc.appliedAmount.equals(0)
               ? (
                   await tx.vendorCredit.findUniqueOrThrow({
@@ -339,7 +346,7 @@ export async function reverseBillPayment(
                   })
                 ).amount
               : overpaymentVc.appliedAmount,
-            memo: `Restore AP — VC reversal`,
+            memo: `Remove vendor credit asset — overpayment unwound`,
           },
         ],
       });

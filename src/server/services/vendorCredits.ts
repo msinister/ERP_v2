@@ -29,21 +29,26 @@ import { recomputeBillDenormsTx } from './bills';
 // =============================================================================
 // VendorCredit service. Spec: docs/07-accounts-payable.md#vendor-credits.
 //
+// Vendor credits are an ASSET — value the vendor owes us (1410 "Vendor
+// Credits"). See docs/07-accounts-payable.md#vendor-credits.
+//
 // Three states:
 //   DRAFT     — created, no GL effect, no AP effect. Editable in full.
-//   CONFIRMED — posted to GL (DR 2010 AP / CR 2030 Vendor Credits Available
-//               per spec docs/07:159). From here, the credit can be applied
-//               to confirmed bills via applyVendorCreditToBill.
+//   CONFIRMED — posted to GL (DR 1410 Vendor Credits / CR 5150 Purchase
+//               Returns & Allowances). The asset is recognized; AP is NOT
+//               reduced yet. From here the credit can be applied to
+//               confirmed bills via applyVendorCreditToBill.
 //   CANCELLED — terminal. From DRAFT: just flips status. From CONFIRMED:
-//               offsetting JE posted; refused if appliedAmount > 0.
+//               offsetting JE posted (DR 5150 / CR 1410); refused if
+//               appliedAmount > 0.
 //
-// Apply semantics (per spec docs/07:160 "DR AP / CR AP — net effect: bill
-// reduced"): the application doesn't post a fresh JE — the AP-side
-// reduction was already captured at confirm time. Apply is a pure
-// denormalization update on Bill.amountCredited + VC.appliedAmount,
-// recorded as a VendorCreditApplication row for audit traceability.
-// Reversal of an application is symmetric (clears reversedAt → reverses
-// denorms).
+// Apply semantics: applying a credit to a bill posts DR 2010 AP / CR 1410
+// — AP is reduced when the credit is actually consumed (this is what keeps
+// GL AP reconciled with the bill subledger), and the asset is drawn down.
+// Apply also updates the Bill.amountCredited + VC.appliedAmount denorms and
+// records a VendorCreditApplication row for audit + idempotency. Reversal
+// of an application is symmetric: posts the mirror JE (DR 1410 / CR 2010
+// AP), clears reversedAt, and reverses the denorms.
 //
 // Lines are simple expense-style (description + amount) per pilot scope.
 // Math invariant: SUM(line.amount) === amount, enforced at the service
@@ -59,7 +64,12 @@ const VC_SEQUENCE_NAME = 'vendor_credit';
 const VC_PREFIX = 'VCM';
 
 const AP_ACCOUNT = '2010';
-const VENDOR_CREDITS_AVAILABLE_ACCOUNT = '2030';
+// 1410 "Vendor Credits" (ASSET). DEBIT on issue, CREDIT on apply/cancel.
+const VENDOR_CREDITS_ASSET = '1410';
+// 5150 "Purchase Returns & Allowances" (contra-COGS) — the offset for a
+// manually-issued credit's issue JE. (Overpayment credits offset to AP in
+// billPayments.ts, since the cash already moved in the payment JE.)
+const PURCHASE_RETURNS_ACCOUNT = '5150';
 
 const LINE_MATH_TOLERANCE = new Prisma.Decimal('0.001');
 
@@ -245,7 +255,9 @@ export async function updateVendorCredit(
 }
 
 // ---------------------------------------------------------------------------
-// confirmVendorCredit — posts JE: DR 2010 AP / CR 2030 VCA
+// confirmVendorCredit — posts JE: DR 1410 Vendor Credits / CR 5150 Purchase
+//                       Returns & Allowances. Recognizes the asset; AP is
+//                       not touched until the credit is applied.
 // ---------------------------------------------------------------------------
 
 export async function confirmVendorCredit(
@@ -275,14 +287,14 @@ export async function confirmVendorCredit(
         postedAt: before.creditDate,
         lines: [
           {
-            accountCode: AP_ACCOUNT,
+            accountCode: VENDOR_CREDITS_ASSET,
             debit: before.amount,
-            memo: `AP relief — vendor credit ${before.number}`,
+            memo: `Vendor credit issued — asset (vendor owes us)`,
           },
           {
-            accountCode: VENDOR_CREDITS_AVAILABLE_ACCOUNT,
+            accountCode: PURCHASE_RETURNS_ACCOUNT,
             credit: before.amount,
-            memo: `Vendor credit issued — pending application`,
+            memo: `Purchase returns/allowance — vendor credit ${before.number}`,
           },
         ],
       });
@@ -371,14 +383,14 @@ export async function cancelVendorCredit(
         postedAt: now,
         lines: [
           {
-            accountCode: VENDOR_CREDITS_AVAILABLE_ACCOUNT,
+            accountCode: PURCHASE_RETURNS_ACCOUNT,
             debit: before.amount,
-            memo: `Reverse VC issuance (cancel ${before.number})`,
+            memo: `Reverse purchase returns/allowance (cancel ${before.number})`,
           },
           {
-            accountCode: AP_ACCOUNT,
+            accountCode: VENDOR_CREDITS_ASSET,
             credit: before.amount,
-            memo: `Restore AP — vendor credit cancelled`,
+            memo: `Reverse VC issuance — asset removed (cancel ${before.number})`,
           },
         ],
       });
@@ -406,8 +418,9 @@ export async function cancelVendorCredit(
 }
 
 // ---------------------------------------------------------------------------
-// applyVendorCreditToBill — pure denorm update, NO GL JE per spec.
-//                           Uses a partial-unique-index-protected
+// applyVendorCreditToBill — posts JE DR 2010 AP / CR 1410 (reduce AP using
+//                           the credit asset), updates denorms, and writes a
+//                           partial-unique-index-protected
 //                           VendorCreditApplication row for audit + idempotency.
 // ---------------------------------------------------------------------------
 
@@ -521,6 +534,29 @@ export async function applyVendorCreditToBill(
     // Recompute the bill's amountCredited + paymentStatus.
     await recomputeBillDenormsTx(tx, bill.id);
 
+    // GL: reduce AP using the credit asset. DR 2010 AP / CR 1410. This is
+    // where AP actually drops (the issue JE only recognized the asset), so
+    // GL AP stays reconciled with the bill subledger's amountCredited.
+    if (amount.greaterThan(0)) {
+      await post(tx, {
+        entityType: 'VendorCreditApplication',
+        entityId: application.id,
+        description: `Apply vendor credit ${vc.number} to bill ${bill.number}`,
+        lines: [
+          {
+            accountCode: AP_ACCOUNT,
+            debit: amount,
+            memo: `AP relief — credit ${vc.number} applied to bill ${bill.number}`,
+          },
+          {
+            accountCode: VENDOR_CREDITS_ASSET,
+            credit: amount,
+            memo: `Vendor credit consumed — bill ${bill.number}`,
+          },
+        ],
+      });
+    }
+
     await audit(tx, {
       action: AuditAction.VENDOR_CREDIT_APPLIED,
       entityType: 'VendorCreditApplication',
@@ -534,8 +570,9 @@ export async function applyVendorCreditToBill(
 }
 
 // ---------------------------------------------------------------------------
-// reverseVendorCreditApplication — sets reversedAt, recomputes denorms.
-// No GL JE (mirror of apply).
+// reverseVendorCreditApplication — sets reversedAt, recomputes denorms, and
+// posts the mirror of the apply JE: DR 1410 / CR 2010 AP (restore the asset
+// and the payable).
 // ---------------------------------------------------------------------------
 
 export async function reverseVendorCreditApplication(
@@ -568,7 +605,7 @@ export async function reverseVendorCreditApplication(
     // Drop VC.appliedAmount.
     const vc = await tx.vendorCredit.findUniqueOrThrow({
       where: { id: before.vendorCreditId },
-      select: { appliedAmount: true },
+      select: { number: true, appliedAmount: true },
     });
     await tx.vendorCredit.update({
       where: { id: before.vendorCreditId },
@@ -577,6 +614,32 @@ export async function reverseVendorCreditApplication(
 
     // Recompute the bill's denorms.
     await recomputeBillDenormsTx(tx, before.billId);
+
+    // GL: mirror the apply JE — DR 1410 / CR 2010 AP. Restores the credit
+    // asset and the payable that the application had relieved.
+    if (before.amount.greaterThan(0)) {
+      const bill = await tx.bill.findUniqueOrThrow({
+        where: { id: before.billId },
+        select: { number: true },
+      });
+      await post(tx, {
+        entityType: 'VendorCreditApplication',
+        entityId: applicationId,
+        description: `Reverse vendor credit ${vc.number} application to bill ${bill.number}`,
+        lines: [
+          {
+            accountCode: VENDOR_CREDITS_ASSET,
+            debit: before.amount,
+            memo: `Restore vendor credit asset — application reversed`,
+          },
+          {
+            accountCode: AP_ACCOUNT,
+            credit: before.amount,
+            memo: `Restore AP — credit ${vc.number} application reversed`,
+          },
+        ],
+      });
+    }
 
     await audit(tx, {
       action: AuditAction.STATUS_CHANGE,

@@ -156,8 +156,10 @@ See Module 7. Summary:
 | Goods received (no bill yet) | DR Inventory / CR Accrued Receipts |
 | Bill confirmed (matches receipt) | DR Accrued Receipts / CR AP - Vendor |
 | Bill paid | DR AP / CR Cash/Bank |
-| Vendor credit issued | DR AP / CR Vendor Credits Available |
-| Vendor credit applied to bill | DR AP / CR AP (offset) — net effect: bill reduced |
+| Vendor credit issued | DR Vendor Credits (1410, asset) / CR Purchase Returns & Allowances (5150) |
+| Vendor credit applied to bill | DR AP / CR Vendor Credits (1410) — AP reduced when the credit is consumed |
+| Vendor credit application reversed | DR Vendor Credits (1410) / CR AP (mirror of apply) |
+| Overpayment on bill payment | Payment JE DR AP / CR Cash (full); then DR Vendor Credits (1410) / CR AP for the excess |
 | Late landed cost arrives | DR Inventory (active layers) / CR AP-Freight + COGS adjustment for sold units |
 
 ### "Accrued Receipts" account (clearing)
