@@ -459,3 +459,165 @@ export async function recentActivityWidget(
   });
   return { rows };
 }
+
+// ---------------------------------------------------------------------------
+// salesByRepWidget
+// ---------------------------------------------------------------------------
+
+export type SalesByRepPeriods = {
+  thisMonth: Prisma.Decimal;
+  lastMonth: Prisma.Decimal;
+  thisQuarter: Prisma.Decimal;
+  ytd: Prisma.Decimal;
+};
+
+export type SalesByRepRow = SalesByRepPeriods & {
+  // null → the "Unassigned" bucket (effective rep couldn't be resolved).
+  salesRepId: string | null;
+  salesRepName: string;
+};
+
+export type SalesByRepWidget = {
+  rows: SalesByRepRow[]; // named reps sorted by YTD desc, Unassigned last
+  totals: SalesByRepPeriods;
+};
+
+function emptyPeriods(): SalesByRepPeriods {
+  return {
+    thisMonth: new Prisma.Decimal(0),
+    lastMonth: new Prisma.Decimal(0),
+    thisQuarter: new Prisma.Decimal(0),
+    ytd: new Prisma.Decimal(0),
+  };
+}
+
+/**
+ * Gross sales per sales rep across four overlapping periods (this month,
+ * last month, this quarter, YTD). Gross sales = sum of non-voided invoice
+ * totals (invoices are generated on SO close, so this is closed-SO
+ * revenue). Each invoice is attributed to its EFFECTIVE rep:
+ * SalesOrder.salesRepId ?? Customer.salesRepId. Boundaries are UTC, matching
+ * the GL/"today" convention used by todaysSalesWidget.
+ *
+ * Pilot-scale approach: fetch every in-window invoice once and bucket in
+ * memory. The widest lower bound is min(first-of-last-month, Jan 1) — last
+ * month can fall in the prior year when run in January.
+ */
+export async function salesByRepWidget(
+  db: PrismaClient,
+  now: Date = new Date(),
+): Promise<SalesByRepWidget> {
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+
+  const startOfToday = Date.UTC(y, m, d);
+  const startOfTomorrow = startOfToday + 24 * 60 * 60 * 1000;
+  const firstOfThisMonth = Date.UTC(y, m, 1);
+  const firstOfLastMonth = Date.UTC(y, m - 1, 1); // Date.UTC handles m=-1
+  const firstOfThisQuarter = Date.UTC(y, Math.floor(m / 3) * 3, 1);
+  const jan1 = Date.UTC(y, 0, 1);
+  const lowerBound = Math.min(firstOfLastMonth, jan1);
+
+  const invoices = await db.invoice.findMany({
+    where: {
+      deletedAt: null,
+      status: { not: InvoiceStatus.VOIDED },
+      invoiceDate: {
+        gte: new Date(lowerBound),
+        lt: new Date(startOfTomorrow),
+      },
+    },
+    select: {
+      total: true,
+      invoiceDate: true,
+      salesOrder: { select: { salesRepId: true } },
+      customer: { select: { salesRepId: true } },
+    },
+  });
+
+  // Accumulate per rep id ('' sentinel = Unassigned).
+  const UNASSIGNED = '';
+  const byRep = new Map<string, SalesByRepPeriods>();
+  const totals = emptyPeriods();
+
+  for (const inv of invoices) {
+    const repId =
+      inv.salesOrder?.salesRepId ?? inv.customer.salesRepId ?? UNASSIGNED;
+    let acc = byRep.get(repId);
+    if (!acc) {
+      acc = emptyPeriods();
+      byRep.set(repId, acc);
+    }
+    const t = inv.invoiceDate.getTime();
+    const amt = inv.total;
+    if (t >= firstOfThisMonth && t < startOfTomorrow) {
+      acc.thisMonth = acc.thisMonth.plus(amt);
+      totals.thisMonth = totals.thisMonth.plus(amt);
+    }
+    if (t >= firstOfLastMonth && t < firstOfThisMonth) {
+      acc.lastMonth = acc.lastMonth.plus(amt);
+      totals.lastMonth = totals.lastMonth.plus(amt);
+    }
+    if (t >= firstOfThisQuarter && t < startOfTomorrow) {
+      acc.thisQuarter = acc.thisQuarter.plus(amt);
+      totals.thisQuarter = totals.thisQuarter.plus(amt);
+    }
+    if (t >= jan1 && t < startOfTomorrow) {
+      acc.ytd = acc.ytd.plus(amt);
+      totals.ytd = totals.ytd.plus(amt);
+    }
+  }
+
+  // Resolve rep id → code + name for the real ids.
+  const realIds = Array.from(byRep.keys()).filter((id) => id !== UNASSIGNED);
+  const reps = realIds.length
+    ? await db.salesRep.findMany({
+        where: { id: { in: realIds } },
+        select: { id: true, code: true, name: true },
+      })
+    : [];
+  const repById = new Map(reps.map((r) => [r.id, r]));
+
+  // "No rep" is modeled in this schema as the seeded UNASSIGNED sentinel
+  // rep (customer.salesRepId is required and defaults to it). Fold that
+  // sentinel — plus any defensive true-null bucket — into a single
+  // "Unassigned" row pinned to the bottom, separate from real performers.
+  const unassigned = emptyPeriods();
+  let unassignedSeen = false;
+  const namedRows: SalesByRepRow[] = [];
+
+  for (const [id, p] of byRep) {
+    const rep = id === UNASSIGNED ? undefined : repById.get(id);
+    if (id === UNASSIGNED || rep?.code === 'UNASSIGNED') {
+      unassigned.thisMonth = unassigned.thisMonth.plus(p.thisMonth);
+      unassigned.lastMonth = unassigned.lastMonth.plus(p.lastMonth);
+      unassigned.thisQuarter = unassigned.thisQuarter.plus(p.thisQuarter);
+      unassigned.ytd = unassigned.ytd.plus(p.ytd);
+      unassignedSeen = true;
+      continue;
+    }
+    namedRows.push({
+      salesRepId: id,
+      salesRepName: rep?.name ?? '(unknown rep)',
+      ...p,
+    });
+  }
+
+  // Top performer first.
+  namedRows.sort((a, b) => b.ytd.comparedTo(a.ytd));
+
+  const rows = [...namedRows];
+  // Only surface Unassigned when it carries activity — avoids a
+  // permanently-$0 row in shops that always assign a rep.
+  const unassignedHasActivity =
+    unassigned.thisMonth.greaterThan(0) ||
+    unassigned.lastMonth.greaterThan(0) ||
+    unassigned.thisQuarter.greaterThan(0) ||
+    unassigned.ytd.greaterThan(0);
+  if (unassignedSeen && unassignedHasActivity) {
+    rows.push({ salesRepId: null, salesRepName: 'Unassigned', ...unassigned });
+  }
+
+  return { rows, totals };
+}

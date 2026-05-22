@@ -5,6 +5,7 @@ import { hasPermission } from '@/lib/permissions/actor';
 import { dashboardScopeSalesRepId } from '@/lib/permissions/scope';
 import { SCOPE_PAIRS, type PermissionKey } from '@/lib/permissions/constants';
 import { TodaysSalesWidget } from './_widgets/todays-sales';
+import { SalesByRepWidget } from './_widgets/sales-by-rep';
 import { ArAgingWidget } from './_widgets/ar-aging';
 import { ApAgingWidget } from './_widgets/ap-aging';
 import { OpenSosWidget } from './_widgets/open-sos';
@@ -36,6 +37,9 @@ export default async function DashboardPage() {
   const can = (...keys: PermissionKey[]) =>
     keys.some((k) => hasPermission(actor, k));
   const canSO = can('sales_orders.view_all', 'sales_orders.view_own');
+  // Sales-by-Rep is a cross-rep KPI: managers/admins only. A view_own rep
+  // would see just their own row, redundant with Today's Sales.
+  const canViewAllSO = can('sales_orders.view_all');
   const canBills = can('bills.view');
   const canVendors = can('vendors.view');
   const canInventory = can('inventory.view');
@@ -53,10 +57,26 @@ export default async function DashboardPage() {
       </div>
       {/* Widgets the user has no permission for are skipped entirely (no
           empty card); the grid reflows to fill the gaps. */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      {/* grid-flow-dense lets the full-width Sales-by-Rep card drop to its
+          own row right after Today's Sales while a half-width widget
+          backfills the gap beside Today's Sales. */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:grid-flow-row-dense">
         {canSO ? (
           <Suspense fallback={<WidgetSkeleton title="Today's Sales" />}>
             <TodaysSalesWidget customerSalesRepId={repScope} />
+          </Suspense>
+        ) : null}
+        {canViewAllSO ? (
+          <Suspense
+            fallback={
+              <WidgetSkeleton
+                title="Sales by Rep"
+                className="md:col-span-2"
+                bodyClassName="h-40"
+              />
+            }
+          >
+            <SalesByRepWidget />
           </Suspense>
         ) : null}
         {canSO ? (

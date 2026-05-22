@@ -36,12 +36,14 @@ export function WidgetCard({
 export function WidgetSkeleton({
   title,
   bodyClassName = 'h-12',
+  className,
 }: {
   title: string;
   bodyClassName?: string;
+  className?: string;
 }) {
   return (
-    <WidgetCard title={title}>
+    <WidgetCard title={title} className={className}>
       <Skeleton className={bodyClassName} />
     </WidgetCard>
   );
