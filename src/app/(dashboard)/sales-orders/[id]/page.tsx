@@ -1,7 +1,7 @@
 import { notFound, redirect } from 'next/navigation';
-import { Prisma, SalesOrderStatus } from '@/generated/tenant';
+import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
-import { computeSalesOrderTotal } from '@/lib/ar/openSos';
+import { computeSalesOrderDisplayTotal } from '@/lib/ar/openSos';
 import { getActor } from '@/lib/permissions/getActor';
 import { hasPermission } from '@/lib/permissions/actor';
 import { salesOrderScopeWhere } from '@/lib/permissions/scope';
@@ -237,21 +237,12 @@ export default async function SalesOrderDetailPage({
     });
   });
 
-  // computeSalesOrderTotal stays on qtyOrdered — it's the projected
-  // commitment, used by credit-limit math for in-flight exposure.
-  // For the displayed grand-total on a CLOSED order we want the
-  // invoiced basis (qtyShipped), so the totals card matches the
-  // invoice line totals. Pre-CLOSED both numbers coincide.
-  const displayTotal =
-    so.status === SalesOrderStatus.CLOSED
-      ? computeSalesOrderTotal({
-          ...so,
-          lines: so.lines.map((l) => ({
-            ...l,
-            qtyOrdered: l.qtyShipped as Prisma.Decimal,
-          })),
-        })
-      : computeSalesOrderTotal(so);
+  // Displayed grand total prices the billable qty for the SO's status:
+  // qtyShipped once the warehouse enters it (CONFIRMED/DISPATCHED) or on
+  // CLOSE, otherwise qtyOrdered. Matches the line totals + the invoice.
+  // (Credit-limit math elsewhere stays on the qtyOrdered commitment via
+  // computeSalesOrderTotal.)
+  const displayTotal = computeSalesOrderDisplayTotal(so);
 
   // Invoice money snapshot for the Totals card (Paid / Credited /
   // Balance rows). Only present on CLOSED orders with a live invoice

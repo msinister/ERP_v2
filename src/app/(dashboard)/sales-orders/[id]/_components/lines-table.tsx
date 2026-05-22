@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency } from '@/lib/format';
+import { computeLineBillableTotal } from '@/lib/sales/lineTotals';
 import { ProductThumbnail } from '@/components/shared/product-thumbnail';
 import { ProductImageToggle } from '@/components/shared/product-image-toggle';
 import { StockContextToggle } from '@/components/shared/stock-context-toggle';
@@ -85,7 +86,7 @@ export function SalesOrderLinesTable({
   const groupMeta = new Map<string, GroupMeta>();
   for (const l of lines) {
     if (l.bundleGroupId == null) continue;
-    const lt = computeLineTotal(l, isClosed);
+    const lt = computeLineBillableTotal(l, status);
     const prev = groupMeta.get(l.bundleGroupId);
     if (prev) {
       prev.total = prev.total.plus(lt);
@@ -176,6 +177,7 @@ export function SalesOrderLinesTable({
             <SalesOrderLineCard
               key={item.line.id}
               line={item.line}
+              status={status}
               isClosed={isClosed}
               isEditable={isEditable}
               fieldsEditable={fieldsEditable}
@@ -312,7 +314,7 @@ export function SalesOrderLinesTable({
                     />
                   </TableCell>
                   <TableCell className="text-right tabular-nums font-medium">
-                    {formatCurrency(computeLineTotal(l, isClosed))}
+                    {formatCurrency(computeLineBillableTotal(l, status))}
                   </TableCell>
                   <TableCell className="text-right">
                     {fieldsEditable ? (
@@ -343,6 +345,7 @@ export function SalesOrderLinesTable({
 // server.
 function SalesOrderLineCard({
   line: l,
+  status,
   isClosed,
   isEditable,
   fieldsEditable,
@@ -350,6 +353,7 @@ function SalesOrderLineCard({
   overShippingPolicy,
 }: {
   line: SalesOrderLineRow;
+  status: string;
   isClosed: boolean;
   isEditable: boolean;
   fieldsEditable: boolean;
@@ -414,7 +418,7 @@ function SalesOrderLineCard({
         </Stat>
         <Stat label="Line total">
           <div className="tabular-nums font-medium">
-            {formatCurrency(computeLineTotal(l, isClosed))}
+            {formatCurrency(computeLineBillableTotal(l, status))}
           </div>
         </Stat>
       </div>
@@ -526,27 +530,6 @@ function formatDiscount(
     return `−${n}%`;
   }
   return '—';
-}
-
-function computeLineTotal(
-  l: SalesOrderLineRow,
-  isClosed: boolean,
-): Prisma.Decimal {
-  // Pre-CLOSE the line total reflects the order's commitment (qtyOrdered).
-  // After CLOSE, switch to qtyShipped so the displayed total matches the
-  // invoice line that was actually generated — important for short
-  // shipments where ordered > shipped.
-  const qty = isClosed ? l.qtyShipped : l.qtyOrdered;
-  let lineTotal = qty.times(l.unitPrice);
-  if (l.discountAmount != null) {
-    lineTotal = lineTotal.minus(l.discountAmount);
-  } else if (l.discountPercent != null) {
-    lineTotal = lineTotal.minus(
-      lineTotal.times(l.discountPercent).dividedBy(100),
-    );
-  }
-  if (lineTotal.lessThan(0)) lineTotal = new Prisma.Decimal(0);
-  return lineTotal;
 }
 
 // Internal-only stock + cost reference for a line. Wrapped in the

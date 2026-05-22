@@ -7,10 +7,11 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { formatCurrency } from '@/lib/format';
+import { computeLineBillableTotal } from '@/lib/sales/lineTotals';
 
-// Re-derives subtotal + order-discount-applied so the breakdown
-// matches what computeSalesOrderTotal does internally — we want
-// every row of the totals card to be visible to the operator.
+// Re-derives subtotal + order-discount-applied so the breakdown matches
+// computeSalesOrderDisplayTotal — every row of the totals card stays on
+// the same billable-qty basis as the line totals + the grand total.
 export function SalesOrderTotalsCard({
   lines,
   orderDiscountAmount,
@@ -42,23 +43,12 @@ export function SalesOrderTotalsCard({
    * at-a-glance "money to apply" indicator. Null when not loaded. */
   availableCredit: Prisma.Decimal | null;
 }) {
-  // CLOSED orders bill on qtyShipped (matches the invoice). Pre-CLOSED
-  // shows the order commitment basis (qtyOrdered). Same switch as
-  // lines-table — keeping the breakdown in sync with the row totals.
-  const isClosed = status === 'CLOSED';
-  const subtotal = lines.reduce((acc, l) => {
-    const qty = isClosed ? l.qtyShipped : l.qtyOrdered;
-    let lineTotal = qty.times(l.unitPrice);
-    if (l.discountAmount != null) {
-      lineTotal = lineTotal.minus(l.discountAmount);
-    } else if (l.discountPercent != null) {
-      lineTotal = lineTotal.minus(
-        lineTotal.times(l.discountPercent).dividedBy(100),
-      );
-    }
-    if (lineTotal.lessThan(0)) lineTotal = new Prisma.Decimal(0);
-    return acc.plus(lineTotal);
-  }, new Prisma.Decimal(0));
+  // Billable basis per the SO status (qtyShipped once entered / on CLOSE,
+  // else qtyOrdered) — the same helper the line totals + grand total use.
+  const subtotal = lines.reduce(
+    (acc, l) => acc.plus(computeLineBillableTotal(l, status)),
+    new Prisma.Decimal(0),
+  );
 
   const orderDiscount =
     orderDiscountAmount ??

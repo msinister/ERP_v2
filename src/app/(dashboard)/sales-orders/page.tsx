@@ -5,7 +5,7 @@ import { db } from '@/lib/db';
 import { SalesOrderStatus } from '@/generated/tenant';
 import { listSalesOrdersPaged } from '@/server/services/salesOrders';
 import { listSalesReps } from '@/server/services/salesReps';
-import { computeSalesOrderTotal } from '@/lib/ar/openSos';
+import { computeSalesOrderDisplayTotal } from '@/lib/ar/openSos';
 import { getActor } from '@/lib/permissions/getActor';
 import { salesOrderScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
@@ -100,7 +100,7 @@ export default async function SalesOrdersPage({
     customerName: so.customer.name,
     orderDate: so.orderDate,
     status: so.status,
-    total: computeSalesOrderTotal(so),
+    total: computeSalesOrderDisplayTotal(so),
     // Effective rep: per-order override when set, else the customer's rep.
     salesRepName: repName.get(so.salesRepId ?? so.customer.salesRepId) ?? '—',
   }));

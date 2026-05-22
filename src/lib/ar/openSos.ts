@@ -1,5 +1,6 @@
 import { Prisma, SalesOrderStatus } from '@/generated/tenant';
 import type { PrismaClient, SalesOrder, SalesOrderLine } from '@/generated/tenant';
+import { computeLineBillableTotal } from '@/lib/sales/lineTotals';
 
 // "Open SOs not yet invoiced" = pre-invoice in-flight exposure for
 // credit-limit math. Includes CONFIRMED + DISPATCHED (reserved stock,
@@ -7,28 +8,14 @@ import type { PrismaClient, SalesOrder, SalesOrderLine } from '@/generated/tenan
 // abandoned without operator action and don't represent a real
 // commitment. CLOSED is excluded — by then an Invoice exists and AR
 // counts the exposure. CANCELLED + soft-deleted are excluded.
-//
-// Returns the SUM of computed order totals using the same math as
-// invoice generation: line.qty * line.unitPrice − line.discount,
-// then order-level discount + shipping + handling.
 
 type SOWithLines = SalesOrder & { lines: SalesOrderLine[] };
 
-export function computeSalesOrderTotal(so: SOWithLines): Prisma.Decimal {
-  const liveLines = so.lines.filter((l) => l.deletedAt === null);
-  const subtotal = liveLines.reduce((acc, l) => {
-    let lineTotal = l.qtyOrdered.times(l.unitPrice);
-    if (l.discountAmount != null) {
-      lineTotal = lineTotal.minus(l.discountAmount);
-    } else if (l.discountPercent != null) {
-      lineTotal = lineTotal.minus(
-        lineTotal.times(l.discountPercent).dividedBy(100),
-      );
-    }
-    if (lineTotal.lessThan(0)) lineTotal = new Prisma.Decimal(0);
-    return acc.plus(lineTotal);
-  }, new Prisma.Decimal(0));
-
+// Order-level discount / shipping / handling applied to a line subtotal.
+function applyOrderAdjustments(
+  so: SOWithLines,
+  subtotal: Prisma.Decimal,
+): Prisma.Decimal {
   const orderDiscount =
     so.orderDiscountAmount ??
     (so.orderDiscountPercent != null
@@ -36,10 +23,43 @@ export function computeSalesOrderTotal(so: SOWithLines): Prisma.Decimal {
       : new Prisma.Decimal(0));
   const shippingAmount = so.shippingAmount ?? new Prisma.Decimal(0);
   const handlingAmount = so.handlingAmount ?? new Prisma.Decimal(0);
+  const total = subtotal
+    .minus(orderDiscount)
+    .plus(shippingAmount)
+    .plus(handlingAmount);
+  return total.lessThan(0) ? new Prisma.Decimal(0) : total;
+}
 
-  let total = subtotal.minus(orderDiscount).plus(shippingAmount).plus(handlingAmount);
-  if (total.lessThan(0)) total = new Prisma.Decimal(0);
-  return total;
+/**
+ * Credit-limit "commitment" total — ALWAYS prices qtyOrdered, regardless of
+ * status (the in-flight exposure a confirmed order represents). Forcing the
+ * DRAFT basis makes computeLineBillableTotal resolve to qtyOrdered. Distinct
+ * from computeSalesOrderDisplayTotal, which prices what's shipped.
+ */
+export function computeSalesOrderTotal(so: SOWithLines): Prisma.Decimal {
+  const liveLines = so.lines.filter((l) => l.deletedAt === null);
+  const subtotal = liveLines.reduce(
+    (acc, l) => acc.plus(computeLineBillableTotal(l, SalesOrderStatus.DRAFT)),
+    new Prisma.Decimal(0),
+  );
+  return applyOrderAdjustments(so, subtotal);
+}
+
+/**
+ * Displayed order total — prices the BILLABLE qty for the SO's status
+ * (qtyShipped once the warehouse enters it / on CLOSE, else qtyOrdered).
+ * Used by the SO detail + list views so the shown total reflects what is
+ * actually being delivered, matching the eventual invoice.
+ */
+export function computeSalesOrderDisplayTotal(
+  so: SOWithLines,
+): Prisma.Decimal {
+  const liveLines = so.lines.filter((l) => l.deletedAt === null);
+  const subtotal = liveLines.reduce(
+    (acc, l) => acc.plus(computeLineBillableTotal(l, so.status)),
+    new Prisma.Decimal(0),
+  );
+  return applyOrderAdjustments(so, subtotal);
 }
 
 /**
