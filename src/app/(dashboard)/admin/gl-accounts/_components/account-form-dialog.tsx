@@ -59,10 +59,10 @@ async function readApiError(res: Response): Promise<string> {
   }
 }
 
-// Shared add + edit dialog. Type and code are CREATE-only — the
-// service rejects updates to either (type changes have GL
-// classification implications; code is the stable identifier
-// referenced by services).
+// Shared add + edit dialog. `code` is CREATE-only (stable identifier
+// referenced by services). `type` IS editable on edit — the service
+// reclassifies it, but refuses if any JE on the account sits in a
+// hard-closed period (it surfaces that as a toast error).
 export function AccountFormDialog({
   account,
   open,
@@ -109,7 +109,7 @@ export function AccountFormDialog({
     const url = isEdit ? `/api/gl-accounts/${account.id}` : `/api/gl-accounts`;
     const method = isEdit ? 'PATCH' : 'POST';
     const body = isEdit
-      ? { name: name.trim(), active }
+      ? { name: name.trim(), type, active }
       : { code: code.trim(), name: name.trim(), type, active };
     startTransition(async () => {
       try {
@@ -141,9 +141,10 @@ export function AccountFormDialog({
             {isEdit ? 'Edit GL account' : 'Add GL account'}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            Code and type are fixed on edit — services reference them as
-            stable identifiers, and type changes have classification
-            implications. Archive (active = off) instead of changing.
+            Code is fixed on edit — services reference it as a stable
+            identifier. Type can be reclassified, but the change is
+            refused if any journal entry on this account sits in a
+            hard-closed period.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="space-y-3">
@@ -168,7 +169,6 @@ export function AccountFormDialog({
               <Select
                 value={type}
                 onValueChange={(v) => setType(v ?? 'ASSET')}
-                disabled={isEdit}
               >
                 <SelectTrigger id="acct-type" className="w-full">
                   <SelectValue>

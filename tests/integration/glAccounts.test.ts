@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { Prisma } from '@/generated/tenant';
+import { FiscalPeriodStatus, Prisma } from '@/generated/tenant';
 import type { PrismaClient } from '@/generated/tenant';
 import {
   createAccount,
@@ -9,12 +9,22 @@ import {
   softDeleteAccount,
   updateAccount,
 } from '@/server/services/glAccounts';
+import { periodCodeForDate } from '@/server/services/fiscalPeriods';
 import { post } from '@/lib/gl/post';
 import { hasTenantDb, makeClient } from '../helpers/db';
 
 const suite = hasTenantDb ? describe : describe.skip;
 
 const TAG = 'TEST-GLA';
+
+// Deterministic far-future month for the reclassify-gate tests. 2090 is
+// unused by other integration files (which sit in 2026/2027/2096-2099),
+// so the FiscalPeriod rows we create + hard-close here can't collide with
+// another test's posts. wipe() drops them after each test.
+const TEST_YEAR = 2090;
+function dateInMonth(month: number, day = 15): Date {
+  return new Date(Date.UTC(TEST_YEAR, month - 1, day, 12));
+}
 
 const SEEDED_ACCOUNTS: ReadonlyArray<{ code: string; name: string; type: string }> = [
   { code: '1110', name: 'Cash / Bank', type: 'ASSET' },
@@ -95,7 +105,7 @@ suite('GlAccount service', () => {
     ).rejects.toThrow();
   });
 
-  it('updateAccount can change name; type and code are not in the schema (immutable)', async () => {
+  it('updateAccount can change name + active; type unchanged when omitted; code never changes', async () => {
     const code = `${TAG}-UPD`;
     const created = await createAccount(db, {
       code,
@@ -105,20 +115,80 @@ suite('GlAccount service', () => {
     const updated = await updateAccount(db, created.id, { name: 'New Name', active: false });
     expect(updated.name).toBe('New Name');
     expect(updated.active).toBe(false);
-    expect(updated.type).toBe('EXPENSE'); // unchanged
-    expect(updated.code).toBe(code); // unchanged
-    // Validation rejects type/code in the input shape.
+    expect(updated.type).toBe('EXPENSE'); // unchanged — type omitted
+    expect(updated.code).toBe(code); // code is not in the update schema
+  });
+
+  it('update validation accepts type but strips code', async () => {
     const { updateGlAccountInputSchema } = await import('@/lib/validation/glAccounts');
-    const result = updateGlAccountInputSchema.safeParse({ type: 'ASSET' });
-    // Zod doesn't accept extra keys but doesn't error on them either —
-    // they're just stripped. The schema doesn't HAVE a type field, so
-    // the check is "type is silently ignored" — which is fine because
-    // the service body never reads it. Verify by parsing succeeds and
-    // the parsed payload is empty.
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(Object.keys(result.data)).toEqual([]);
-    }
+    // type is now a first-class updatable field.
+    const withType = updateGlAccountInputSchema.safeParse({ type: 'ASSET' });
+    expect(withType.success).toBe(true);
+    if (withType.success) expect(withType.data.type).toBe('ASSET');
+    // code stays out of the schema → Zod strips it.
+    const withCode = updateGlAccountInputSchema.safeParse({ code: '9999' });
+    expect(withCode.success).toBe(true);
+    if (withCode.success) expect(Object.keys(withCode.data)).toEqual([]);
+  });
+
+  // ---------- Reclassify (type change) gate ----------
+
+  it('reclassifies type when the account has no journal entries', async () => {
+    const code = `${TAG}-RC-NONE`;
+    const created = await createAccount(db, { code, name: 'Reclass none', type: 'LIABILITY' });
+    const updated = await updateAccount(db, created.id, { type: 'ASSET' });
+    expect(updated.type).toBe('ASSET');
+  });
+
+  it('reclassifies type when referencing JEs sit in OPEN periods', async () => {
+    const code = `${TAG}-RC-OPEN`;
+    const created = await createAccount(db, { code, name: 'Reclass open', type: 'LIABILITY' });
+    const stamp = Date.now();
+    await db.$transaction((tx) =>
+      post(tx, {
+        entityType: TAG,
+        entityId: 'rc-open-' + stamp,
+        description: 'open-period je ' + stamp,
+        postedAt: dateInMonth(3), // auto-creates the period OPEN
+        lines: [
+          { accountCode: code, debit: '5' },
+          { accountCode: '4100', credit: '5' },
+        ],
+      }),
+    );
+    const updated = await updateAccount(db, created.id, { type: 'ASSET' });
+    expect(updated.type).toBe('ASSET');
+  });
+
+  it('blocks type change when a referencing JE sits in a HARD_CLOSED period', async () => {
+    const code = `${TAG}-RC-CLOSED`;
+    const created = await createAccount(db, { code, name: 'Reclass closed', type: 'LIABILITY' });
+    const stamp = Date.now();
+    const closedDate = dateInMonth(6);
+    await db.$transaction((tx) =>
+      post(tx, {
+        entityType: TAG,
+        entityId: 'rc-closed-' + stamp,
+        description: 'closed-period je ' + stamp,
+        postedAt: closedDate,
+        lines: [
+          { accountCode: code, debit: '7' },
+          { accountCode: '4100', credit: '7' },
+        ],
+      }),
+    );
+    // post() auto-created the period OPEN; flip it to HARD_CLOSED to arm
+    // the gate (fixture short-cut — not exercising the close workflow).
+    await db.fiscalPeriod.update({
+      where: { code: periodCodeForDate(closedDate) },
+      data: { status: FiscalPeriodStatus.HARD_CLOSED },
+    });
+    await expect(updateAccount(db, created.id, { type: 'ASSET' })).rejects.toThrow(
+      /hard-closed period/i,
+    );
+    // The blocked attempt rolled back — type is still LIABILITY.
+    const after = await getAccount(db, created.id);
+    expect(after!.type).toBe('LIABILITY');
   });
 
   it('softDeleteAccount when no JE lines reference → succeeds', async () => {
@@ -210,4 +280,11 @@ async function wipe(db: PrismaClient): Promise<void> {
     });
     await db.glAccount.deleteMany({ where: { id: { in: ids } } });
   }
+  // Drop the far-future periods the reclassify-gate tests materialize, so
+  // a HARD_CLOSED test period can't leak and block another file's posts.
+  // No FK from JournalEntry → FiscalPeriod, and we never run the recon
+  // close path here, so there are no dependent rows.
+  await db.fiscalPeriod.deleteMany({
+    where: { code: { startsWith: `${TEST_YEAR}-` } },
+  });
 }

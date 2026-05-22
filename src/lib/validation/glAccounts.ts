@@ -11,12 +11,16 @@ export const createGlAccountInputSchema = z.object({
   active: z.boolean().optional(),
 });
 
-// type and code intentionally NOT updatable. Type changes have GL
-// classification implications; code is the stable identifier services
-// reference. The full GL slice will add a permissioned reclassify
-// path.
+// `code` stays NOT updatable — it's the stable identifier services
+// reference (e.g. findByCode('2030'), the AP_ACCOUNT/VENDOR_CREDITS
+// constants). `type` IS updatable (reclassify), but the service gates
+// it: a type change is refused if any journal-entry line on the account
+// falls in a HARD_CLOSED fiscal period, since reclassifying retroactively
+// changes how every historical JE on the account is reported. Audited via
+// the standard before/after diff.
 export const updateGlAccountInputSchema = z.object({
   name: z.string().min(1).max(255).optional(),
+  type: accountTypeEnum.optional(),
   active: z.boolean().optional(),
 });
 
