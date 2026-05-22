@@ -22,6 +22,10 @@ import {
   type VariantPickerCatalogHint,
 } from '@/components/shared/variant-picker';
 import {
+  VendorPicker,
+  type PaymentTermOption,
+} from '@/components/shared/vendor-picker';
+import {
   Field,
   FieldError,
   FieldGroup,
@@ -237,6 +241,7 @@ async function readApiError(res: Response): Promise<string> {
 export function BillForm({
   mode,
   vendors,
+  paymentTerms,
   variants,
   catalogHints,
   expenseAccounts,
@@ -244,6 +249,8 @@ export function BillForm({
 }: {
   mode: BillFormMode;
   vendors: VendorOption[];
+  // Payment terms for the inline "create vendor" dialog (required field).
+  paymentTerms: PaymentTermOption[];
   variants: VariantOption[];
   catalogHints: CatalogHint[];
   expenseAccounts: ExpenseAccountOption[];
@@ -256,6 +263,9 @@ export function BillForm({
   // shadow the prop in local state. The prop becomes the seed only.
   const [variantsState, setVariantsState] =
     useState<VariantOption[]>(variants);
+  // Same shadow pattern for vendors — the inline "create vendor" flow
+  // appends + auto-selects without a navigation.
+  const [vendorsState, setVendorsState] = useState<VendorOption[]>(vendors);
   const [quickCreate, setQuickCreate] = useState<{
     open: boolean;
     lineIndex: number;
@@ -305,8 +315,8 @@ export function BillForm({
     () => append(emptyLine(source)),
   );
   const selectedVendor = useMemo(
-    () => vendors.find((v) => v.id === vendorId) ?? null,
-    [vendors, vendorId],
+    () => vendorsState.find((v) => v.id === vendorId) ?? null,
+    [vendorsState, vendorId],
   );
   // Catalog map scoped to the currently-selected vendor. Keyed by
   // variantId so the picker's catalogHints prop slots in directly.
@@ -414,55 +424,31 @@ export function BillForm({
                 control={control}
                 name="vendorId"
                 render={({ field }) => (
-                  <Select
-                    // Pass `field.value` straight through — RHF
-                    // initializes it to '' from DEFAULT_VALUES and
-                    // never produces undefined, so the Select stays
-                    // consistently controlled across renders. The
-                    // empty string doesn't match any SelectItem, so
-                    // the placeholder shows until the operator picks.
-                    value={field.value}
-                    onValueChange={field.onChange}
+                  <VendorPicker
+                    id="vendorId"
+                    value={field.value || null}
+                    onValueChange={(v) => field.onChange(v ?? '')}
+                    vendors={vendorsState}
+                    paymentTerms={paymentTerms}
+                    onCreated={(created) => {
+                      setVendorsState((prev) =>
+                        prev.some((v) => v.id === created.id)
+                          ? prev
+                          : [
+                              ...prev,
+                              {
+                                id: created.id,
+                                code: created.code,
+                                name: created.name,
+                                defaultCurrency: created.defaultCurrency,
+                              },
+                            ],
+                      );
+                    }}
                     disabled={mode.kind === 'edit'}
-                  >
-                    <SelectTrigger
-                      id="vendorId"
-                      className="w-full"
-                      aria-invalid={!!errors.vendorId}
-                    >
-                      <SelectValue placeholder="Select a vendor">
-                        {(v) => {
-                          if (!v) return null;
-                          const vendor = vendors.find((x) => x.id === v);
-                          if (!vendor) return v;
-                          return (
-                            <>
-                              <span className="font-mono text-xs text-muted-foreground">
-                                {vendor.code}
-                              </span>{' '}
-                              {vendor.name}
-                            </>
-                          );
-                        }}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {vendors.length === 0 ? (
-                        <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                          No active vendors — create one first.
-                        </div>
-                      ) : (
-                        vendors.map((v) => (
-                          <SelectItem key={v.id} value={v.id}>
-                            <span className="font-mono text-xs text-muted-foreground">
-                              {v.code}
-                            </span>{' '}
-                            {v.name}
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                    ariaInvalid={!!errors.vendorId}
+                    placeholder="Search vendors…"
+                  />
                 )}
               />
               <FieldError errors={[errors.vendorId]} />

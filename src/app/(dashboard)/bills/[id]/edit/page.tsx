@@ -6,6 +6,7 @@ import { db } from '@/lib/db';
 import { getBill } from '@/server/services/bills';
 import { listVendors } from '@/server/services/vendors';
 import { listAccounts } from '@/server/services/glAccounts';
+import { listPaymentTerms } from '@/server/services/paymentTerms';
 import {
   BillForm,
   type BillFormValues,
@@ -23,7 +24,8 @@ export default async function EditBillPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [bill, vendors, variants, allAccounts, catalogRows] = await Promise.all([
+  const [bill, vendors, variants, allAccounts, catalogRows, paymentTerms] =
+    await Promise.all([
     getBill(db, id),
     listVendors(db, { active: true, take: 1000 }),
     db.productVariant.findMany({
@@ -49,6 +51,7 @@ export default async function EditBillPage({
       },
       take: 5000,
     }),
+    listPaymentTerms(db, { active: true }),
   ]);
   if (!bill) notFound();
 
@@ -94,6 +97,11 @@ export default async function EditBillPage({
   const expenseAccountOptions: ExpenseAccountOption[] = allAccounts
     .filter((a) => a.type === AccountType.EXPENSE)
     .map((a) => ({ id: a.id, code: a.code, name: a.name }));
+  // Payment terms for the inline "create vendor" dialog (required field).
+  const paymentTermOptions = paymentTerms.map((t) => ({
+    id: t.id,
+    label: t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
+  }));
 
   const defaults: Partial<BillFormValues> = {
     vendorId: bill.vendorId,
@@ -134,6 +142,7 @@ export default async function EditBillPage({
       <BillForm
         mode={{ kind: 'edit', billId: bill.id }}
         vendors={vendorOptions}
+        paymentTerms={paymentTermOptions}
         variants={variantOptions}
         catalogHints={catalogHints}
         expenseAccounts={expenseAccountOptions}

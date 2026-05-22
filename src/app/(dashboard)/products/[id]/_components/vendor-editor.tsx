@@ -7,26 +7,6 @@ import { toast } from 'sonner';
 import { Pencil, Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { Field, FieldError, FieldLabel } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   Combobox,
   ComboboxContent,
   ComboboxInput,
@@ -36,6 +16,10 @@ import {
   ComboboxSeparator,
   ComboboxTrigger,
 } from '@/components/ui/combobox';
+import {
+  CreateVendorDialog,
+  type CreatedVendor,
+} from '@/components/shared/vendor-picker';
 
 export type VendorOption = { id: string; code: string; name: string };
 export type PaymentTermOption = { id: string; label: string };
@@ -105,7 +89,7 @@ export function VendorEditor({
   }
 
   // New vendor created → set it as the product's primary vendor.
-  async function onVendorCreated(created: { id: string; name: string }) {
+  async function onVendorCreated(created: CreatedVendor) {
     setCreateOpen(false);
     await save(created.id);
   }
@@ -117,6 +101,8 @@ export function VendorEditor({
       initialName={createName}
       paymentTerms={paymentTerms}
       onCreated={onVendorCreated}
+      description="Creates the vendor and sets it as this product's primary vendor. You can fill in the rest of the vendor record later."
+      submitLabel="Create & set vendor"
     />
   );
 
@@ -286,183 +272,5 @@ function VendorCombobox({
         ) : null}
       </ComboboxContent>
     </Combobox>
-  );
-}
-
-// SERVICE is intentionally omitted: service vendors can't be a product's
-// primary/catalog vendor (blocked at the service layer), so offering it
-// here — where the whole point is setting the primary vendor — only
-// creates confusion.
-const VENDOR_TYPES: Array<{ value: string; label: string }> = [
-  { value: 'STOCK', label: 'Stock' },
-  { value: 'DROP_SHIP', label: 'Drop-ship' },
-];
-
-function CreateVendorDialog({
-  open,
-  onOpenChange,
-  initialName,
-  paymentTerms,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  initialName: string;
-  paymentTerms: PaymentTermOption[];
-  onCreated: (vendor: { id: string; name: string }) => void;
-}) {
-  const [name, setName] = useState(initialName);
-  const [type, setType] = useState('STOCK');
-  const [paymentTermId, setPaymentTermId] = useState(
-    paymentTerms[0]?.id ?? '',
-  );
-  const [active, setActive] = useState(true);
-  const [pending, setPending] = useState(false);
-  const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
-
-  // Re-seed when (re)opened with a fresh typed name.
-  useEffect(() => {
-    if (!open) return;
-    setName(initialName);
-    setType('STOCK');
-    setPaymentTermId(paymentTerms[0]?.id ?? '');
-    setActive(true);
-    setErrors({});
-  }, [open, initialName, paymentTerms]);
-
-  function submit() {
-    const next: Partial<Record<string, string>> = {};
-    if (!name.trim()) next.name = 'Required';
-    if (!paymentTermId) next.paymentTermId = 'Pick a payment term';
-    if (Object.keys(next).length > 0) {
-      setErrors(next);
-      return;
-    }
-    setErrors({});
-    setPending(true);
-    void (async () => {
-      try {
-        const res = await fetch('/api/vendors', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: name.trim(),
-            type,
-            paymentTermId,
-            active,
-          }),
-        });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as {
-            error?: string;
-          };
-          toast.error(body.error ?? `Create failed (${res.status})`);
-          return;
-        }
-        const v = (await res.json()) as { id: string; name: string };
-        toast.success(`Created vendor ${v.name}.`);
-        onCreated({ id: v.id, name: v.name });
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Network error');
-      } finally {
-        setPending(false);
-      }
-    })();
-  }
-
-  return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="sm:max-w-md">
-        <AlertDialogHeader>
-          <AlertDialogTitle>Create vendor</AlertDialogTitle>
-          <AlertDialogDescription>
-            Creates the vendor and sets it as this product&apos;s primary
-            vendor. You can fill in the rest of the vendor record later.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <div className="space-y-3">
-          <Field>
-            <FieldLabel htmlFor="cv-name">Vendor name</FieldLabel>
-            <Input
-              id="cv-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              aria-invalid={!!errors.name}
-            />
-            <FieldError
-              errors={[errors.name ? { message: errors.name } : undefined]}
-            />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field>
-              <FieldLabel htmlFor="cv-type">Type</FieldLabel>
-              <Select value={type} onValueChange={(v) => setType(v ?? 'STOCK')}>
-                <SelectTrigger id="cv-type" className="w-full">
-                  <SelectValue>
-                    {(v) =>
-                      VENDOR_TYPES.find((t) => t.value === v)?.label ?? v
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {VENDOR_TYPES.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>
-                      {t.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="cv-term">Payment term</FieldLabel>
-              <Select
-                value={paymentTermId}
-                onValueChange={(v) => setPaymentTermId(v ?? '')}
-              >
-                <SelectTrigger
-                  id="cv-term"
-                  className="w-full"
-                  aria-invalid={!!errors.paymentTermId}
-                >
-                  <SelectValue placeholder="Select…">
-                    {(v) =>
-                      paymentTerms.find((t) => t.id === v)?.label ?? 'Select…'
-                    }
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {paymentTerms.map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      {t.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FieldError
-                errors={[
-                  errors.paymentTermId
-                    ? { message: errors.paymentTermId }
-                    : undefined,
-                ]}
-              />
-            </Field>
-          </div>
-          <Field orientation="horizontal">
-            <Checkbox
-              id="cv-active"
-              checked={active}
-              onCheckedChange={(v) => setActive(v === true)}
-            />
-            <FieldLabel htmlFor="cv-active">Active</FieldLabel>
-          </Field>
-        </div>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={submit} disabled={pending}>
-            {pending ? 'Creating…' : 'Create & set vendor'}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }

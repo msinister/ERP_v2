@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { getPurchaseOrder } from '@/server/services/purchaseOrders';
 import { listVendors } from '@/server/services/vendors';
 import { listWarehouses } from '@/server/services/warehouse';
+import { listPaymentTerms } from '@/server/services/paymentTerms';
 import {
   PoForm,
   type VendorOption,
@@ -22,7 +23,8 @@ export default async function EditPurchaseOrderPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [po, vendors, warehouses, variants, catalogRows] = await Promise.all([
+  const [po, vendors, warehouses, variants, catalogRows, paymentTerms] =
+    await Promise.all([
     getPurchaseOrder(db, id),
     listVendors(db, { active: true, take: 1000 }),
     listWarehouses(db),
@@ -48,6 +50,7 @@ export default async function EditPurchaseOrderPage({
       },
       take: 5000,
     }),
+    listPaymentTerms(db, { active: true }),
   ]);
   if (!po) notFound();
 
@@ -104,6 +107,11 @@ export default async function EditPurchaseOrderPage({
     vendorSku: r.vendorSku,
     latestCost: r.latestCost?.toString() ?? null,
   }));
+  // Payment terms for the inline "create vendor" dialog (required field).
+  const paymentTermOptions = paymentTerms.map((t) => ({
+    id: t.id,
+    label: t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
+  }));
 
   // Every line of a DRAFT PO carries its own warehouseId. Schema
   // supports per-line warehouses; the create form uses a single
@@ -153,6 +161,7 @@ export default async function EditPurchaseOrderPage({
       <PoForm
         mode={{ kind: 'edit', purchaseOrderId: po.id }}
         vendors={vendorOptions}
+        paymentTerms={paymentTermOptions}
         warehouses={warehouseOptions}
         variants={variantOptions}
         catalogHints={catalogHints}

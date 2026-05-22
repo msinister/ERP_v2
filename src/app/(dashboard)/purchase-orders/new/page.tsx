@@ -3,6 +3,7 @@ import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { listVendors } from '@/server/services/vendors';
 import { listWarehouses } from '@/server/services/warehouse';
+import { listPaymentTerms } from '@/server/services/paymentTerms';
 import {
   PoForm,
   type VendorOption,
@@ -18,7 +19,8 @@ export const revalidate = 0;
 export default async function NewPurchaseOrderPage() {
   // Pilot scale: dozens of vendors, dozens of variants, a few hundred
   // catalog rows max. One fetch each — no per-line API search.
-  const [vendors, warehouses, variants, catalogRows] = await Promise.all([
+  const [vendors, warehouses, variants, catalogRows, paymentTerms] =
+    await Promise.all([
     listVendors(db, { active: true, take: 1000 }),
     listWarehouses(db),
     db.productVariant.findMany({
@@ -46,6 +48,7 @@ export default async function NewPurchaseOrderPage() {
       },
       take: 5000,
     }),
+    listPaymentTerms(db, { active: true }),
   ]);
 
   const vendorOptions: VendorOption[] = vendors.map((v) => ({
@@ -73,6 +76,11 @@ export default async function NewPurchaseOrderPage() {
     vendorSku: r.vendorSku,
     latestCost: r.latestCost?.toString() ?? null,
   }));
+  // Payment terms for the inline "create vendor" dialog (required field).
+  const paymentTermOptions = paymentTerms.map((t) => ({
+    id: t.id,
+    label: t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
+  }));
 
   return (
     <div className="space-y-6">
@@ -96,6 +104,7 @@ export default async function NewPurchaseOrderPage() {
       <PoForm
         mode={{ kind: 'create' }}
         vendors={vendorOptions}
+        paymentTerms={paymentTermOptions}
         warehouses={warehouseOptions}
         variants={variantOptions}
         catalogHints={catalogHints}

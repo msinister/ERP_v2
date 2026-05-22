@@ -4,6 +4,7 @@ import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { getVendorCredit } from '@/server/services/vendorCredits';
 import { listVendors } from '@/server/services/vendors';
+import { listPaymentTerms } from '@/server/services/paymentTerms';
 import {
   VcForm,
   type VcFormValues,
@@ -18,9 +19,10 @@ export default async function EditVendorCreditPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [vc, vendors] = await Promise.all([
+  const [vc, vendors, paymentTerms] = await Promise.all([
     getVendorCredit(db, id),
     listVendors(db, { active: true, take: 1000 }),
+    listPaymentTerms(db, { active: true }),
   ]);
   if (!vc) notFound();
 
@@ -48,6 +50,12 @@ export default async function EditVendorCreditPage({
       });
     }
   }
+
+  // Payment terms for the inline "create vendor" dialog (required field).
+  const paymentTermOptions = paymentTerms.map((t) => ({
+    id: t.id,
+    label: t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
+  }));
 
   const defaults: Partial<VcFormValues> = {
     vendorId: vc.vendorId,
@@ -86,6 +94,7 @@ export default async function EditVendorCreditPage({
       <VcForm
         mode={{ kind: 'edit', vendorCreditId: vc.id }}
         vendors={vendorOptions}
+        paymentTerms={paymentTermOptions}
         defaultValues={defaults}
       />
     </div>

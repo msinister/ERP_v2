@@ -4,6 +4,7 @@ import { AccountType } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listVendors } from '@/server/services/vendors';
 import { listAccounts } from '@/server/services/glAccounts';
+import { listPaymentTerms } from '@/server/services/paymentTerms';
 import {
   BillForm,
   type CatalogHint,
@@ -19,7 +20,8 @@ export default async function NewBillPage() {
   // dozen GL accounts. Fetch all active in one go — no per-line API
   // search. Vendor catalog rows (VendorProduct) provide the picker's
   // vendorSku search corpus + the latestCost auto-fill on select.
-  const [vendors, variants, allAccounts, catalogRows] = await Promise.all([
+  const [vendors, variants, allAccounts, catalogRows, paymentTerms] =
+    await Promise.all([
     listVendors(db, { active: true, take: 1000 }),
     db.productVariant.findMany({
       where: {
@@ -44,6 +46,7 @@ export default async function NewBillPage() {
       },
       take: 5000,
     }),
+    listPaymentTerms(db, { active: true }),
   ]);
 
   const vendorOptions: VendorOption[] = vendors.map((v) => ({
@@ -71,6 +74,11 @@ export default async function NewBillPage() {
   const expenseAccountOptions: ExpenseAccountOption[] = allAccounts
     .filter((a) => a.type === AccountType.EXPENSE)
     .map((a) => ({ id: a.id, code: a.code, name: a.name }));
+  // Payment terms for the inline "create vendor" dialog (required field).
+  const paymentTermOptions = paymentTerms.map((t) => ({
+    id: t.id,
+    label: t.netDays === null ? t.label : `${t.label} (net ${t.netDays})`,
+  }));
 
   return (
     <div className="space-y-6">
@@ -94,6 +102,7 @@ export default async function NewBillPage() {
       <BillForm
         mode={{ kind: 'create' }}
         vendors={vendorOptions}
+        paymentTerms={paymentTermOptions}
         variants={variantOptions}
         catalogHints={catalogHints}
         expenseAccounts={expenseAccountOptions}
