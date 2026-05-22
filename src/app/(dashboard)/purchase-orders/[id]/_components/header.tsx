@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ChevronLeft, Printer } from 'lucide-react';
+import { ChevronLeft, ClipboardCheck, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { LifecycleActions } from './lifecycle-actions';
@@ -67,6 +67,25 @@ export function PurchaseOrderHeader({ po }: PurchaseOrderHeaderProps) {
             <Printer />
             Print PO
           </Button>
+          {/* Pre-receiving warehouse count sheet — only meaningful once
+              the PO is signaled to the vendor (CONFIRMED) and while it's
+              still being received (PARTIALLY_RECEIVED). */}
+          {po.status === 'CONFIRMED' || po.status === 'PARTIALLY_RECEIVED' ? (
+            <Button
+              variant="outline"
+              size="sm"
+              render={
+                <Link
+                  href={`/print/purchase-orders/${po.id}/check-in`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                />
+              }
+            >
+              <ClipboardCheck />
+              Check-in Sheet
+            </Button>
+          ) : null}
           <LifecycleActions
             purchaseOrderId={po.id}
             purchaseOrderNumber={po.number}
