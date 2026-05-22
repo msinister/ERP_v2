@@ -72,182 +72,191 @@ export async function recordBillPayment(
   input: RecordBillPaymentInput,
   ctx?: AuditContext,
 ): Promise<BillPaymentResult> {
+  return db.$transaction((tx) => recordBillPaymentTx(tx, input, ctx));
+}
+
+// Tx-composable core. Runs inside a caller-supplied transaction so flows
+// like logExpense can record a payment atomically alongside the bill
+// create + confirm. recordBillPayment is the standalone wrapper.
+export async function recordBillPaymentTx(
+  tx: Prisma.TransactionClient,
+  input: RecordBillPaymentInput,
+  ctx?: AuditContext,
+): Promise<BillPaymentResult> {
   const data = recordBillPaymentInputSchema.parse(input);
   const amount = new Prisma.Decimal(data.amount);
   const paymentDate = data.paymentDate ?? new Date();
 
-  return db.$transaction(async (tx) => {
-    // Lock the bill so concurrent payment recording can't race the
-    // overpayment-detection logic.
-    await tx.$executeRaw`SELECT 1 FROM "Bill" WHERE "id" = ${data.billId} FOR UPDATE`;
-    const bill = await tx.bill.findUnique({
-      where: { id: data.billId },
+  // Lock the bill so concurrent payment recording can't race the
+  // overpayment-detection logic.
+  await tx.$executeRaw`SELECT 1 FROM "Bill" WHERE "id" = ${data.billId} FOR UPDATE`;
+  const bill = await tx.bill.findUnique({
+    where: { id: data.billId },
+  });
+  if (!bill) throw new Error(`Bill not found: ${data.billId}`);
+  if (bill.deletedAt) throw new Error('Bill is soft-deleted');
+  if (bill.status !== BillStatus.CONFIRMED) {
+    throw new Error(
+      `Cannot record payment on bill in status ${bill.status} (only CONFIRMED accepts payments)`,
+    );
+  }
+
+  // Validate cash account.
+  const cashAccount = await tx.glAccount.findUnique({
+    where: { id: data.cashAccountId },
+    select: { id: true, code: true, type: true, active: true, deletedAt: true },
+  });
+  if (!cashAccount || cashAccount.deletedAt) {
+    throw new Error(`GlAccount not found: ${data.cashAccountId}`);
+  }
+  // Allow ASSET (cash/bank, 1xxx) and LIABILITY (e.g. a credit-card
+  // payable, 2xxx) — paying a bill on a credit card credits the card
+  // liability rather than a cash account. Both keep the JE balanced
+  // (DR AP / CR cashAccount); other types (EQUITY/REVENUE/EXPENSE)
+  // make no sense as a payment source.
+  if (
+    cashAccount.type !== AccountType.ASSET &&
+    cashAccount.type !== AccountType.LIABILITY
+  ) {
+    throw new Error(
+      `cashAccountId must point at an ASSET- or LIABILITY-type GlAccount; ${cashAccount.code} is ${cashAccount.type}`,
+    );
+  }
+  if (!cashAccount.active) {
+    throw new Error(`GlAccount ${cashAccount.code} is inactive`);
+  }
+
+  // Compute remaining balance from current denorms — bill is locked
+  // so this is the authoritative read.
+  const remaining = bill.total
+    .minus(bill.amountPaid)
+    .minus(bill.amountCredited);
+
+  // Allocate BPMT sequence + create the BillPayment row.
+  const seq = await getNextSequence(tx, {
+    name: BILL_PAYMENT_SEQUENCE_NAME,
+    prefix: BILL_PAYMENT_PREFIX,
+    useYear: true,
+  });
+  const billPayment = await tx.billPayment.create({
+    data: {
+      number: seq.formatted,
+      billId: bill.id,
+      vendorId: bill.vendorId,
+      amount,
+      method: data.method,
+      cashAccountId: cashAccount.id,
+      paymentDate,
+      reference: data.reference ?? null,
+      notes: data.notes ?? null,
+      status: PaymentStatus.RECORDED,
+      createdById: ctx?.userId ?? null,
+    },
+  });
+
+  // Post the cash-out JE: DR AP / CR cash for the full amount.
+  if (amount.greaterThan(0)) {
+    await post(tx, {
+      entityType: 'BillPayment',
+      entityId: billPayment.id,
+      description: `Bill payment ${billPayment.number} for bill ${bill.number}`,
+      postedAt: paymentDate,
+      lines: [
+        {
+          accountCode: AP_ACCOUNT,
+          debit: amount,
+          memo: `Settle AP — bill ${bill.number}`,
+        },
+        {
+          accountCode: cashAccount.code,
+          credit: amount,
+          memo: `Cash out — ${data.method}${data.reference ? ` ref ${data.reference}` : ''}`,
+        },
+      ],
     });
-    if (!bill) throw new Error(`Bill not found: ${data.billId}`);
-    if (bill.deletedAt) throw new Error('Bill is soft-deleted');
-    if (bill.status !== BillStatus.CONFIRMED) {
-      throw new Error(
-        `Cannot record payment on bill in status ${bill.status} (only CONFIRMED accepts payments)`,
-      );
-    }
+  }
 
-    // Validate cash account.
-    const cashAccount = await tx.glAccount.findUnique({
-      where: { id: data.cashAccountId },
-      select: { id: true, code: true, type: true, active: true, deletedAt: true },
-    });
-    if (!cashAccount || cashAccount.deletedAt) {
-      throw new Error(`GlAccount not found: ${data.cashAccountId}`);
-    }
-    // Allow ASSET (cash/bank, 1xxx) and LIABILITY (e.g. a credit-card
-    // payable, 2xxx) — paying a bill on a credit card credits the card
-    // liability rather than a cash account. Both keep the JE balanced
-    // (DR AP / CR cashAccount); other types (EQUITY/REVENUE/EXPENSE)
-    // make no sense as a payment source.
-    if (
-      cashAccount.type !== AccountType.ASSET &&
-      cashAccount.type !== AccountType.LIABILITY
-    ) {
-      throw new Error(
-        `cashAccountId must point at an ASSET- or LIABILITY-type GlAccount; ${cashAccount.code} is ${cashAccount.type}`,
-      );
-    }
-    if (!cashAccount.active) {
-      throw new Error(`GlAccount ${cashAccount.code} is inactive`);
-    }
-
-    // Compute remaining balance from current denorms — bill is locked
-    // so this is the authoritative read.
-    const remaining = bill.total
-      .minus(bill.amountPaid)
-      .minus(bill.amountCredited);
-
-    // Allocate BPMT sequence + create the BillPayment row.
-    const seq = await getNextSequence(tx, {
-      name: BILL_PAYMENT_SEQUENCE_NAME,
-      prefix: BILL_PAYMENT_PREFIX,
+  // Overpayment? Auto-create + confirm a VendorCredit for the excess.
+  let overpaymentCredit: VendorCredit | null = null;
+  const overpaidBy = amount.minus(remaining);
+  if (overpaidBy.greaterThan(0) && remaining.greaterThanOrEqualTo(0)) {
+    // Allocate VCM sequence.
+    const vcSeq = await getNextSequence(tx, {
+      name: VC_SEQUENCE_NAME,
+      prefix: VC_PREFIX,
       useYear: true,
     });
-    const billPayment = await tx.billPayment.create({
+    overpaymentCredit = await tx.vendorCredit.create({
       data: {
-        number: seq.formatted,
-        billId: bill.id,
+        number: vcSeq.formatted,
         vendorId: bill.vendorId,
-        amount,
-        method: data.method,
-        cashAccountId: cashAccount.id,
-        paymentDate,
-        reference: data.reference ?? null,
-        notes: data.notes ?? null,
-        status: PaymentStatus.RECORDED,
+        status: VendorCreditStatus.CONFIRMED,
+        creditDate: paymentDate,
+        amount: overpaidBy,
+        appliedAmount: new Prisma.Decimal(0),
+        currency: bill.currency ?? 'USD',
+        reason: `Overpayment from bill payment ${billPayment.number}`,
+        notes: `Auto-created from BillPayment ${billPayment.number} on bill ${bill.number}`,
         createdById: ctx?.userId ?? null,
+        confirmedAt: paymentDate,
+        sourceTag: `OVERPAYMENT:${billPayment.id}`,
+        lines: {
+          create: [
+            {
+              lineNumber: 1,
+              description: `Overpayment of $${overpaidBy.toString()} on bill ${bill.number}`,
+              amount: overpaidBy,
+            },
+          ],
+        },
       },
     });
 
-    // Post the cash-out JE: DR AP / CR cash for the full amount.
-    if (amount.greaterThan(0)) {
-      await post(tx, {
-        entityType: 'BillPayment',
-        entityId: billPayment.id,
-        description: `Bill payment ${billPayment.number} for bill ${bill.number}`,
-        postedAt: paymentDate,
-        lines: [
-          {
-            accountCode: AP_ACCOUNT,
-            debit: amount,
-            memo: `Settle AP — bill ${bill.number}`,
-          },
-          {
-            accountCode: cashAccount.code,
-            credit: amount,
-            memo: `Cash out — ${data.method}${data.reference ? ` ref ${data.reference}` : ''}`,
-          },
-        ],
-      });
-    }
-
-    // Overpayment? Auto-create + confirm a VendorCredit for the excess.
-    let overpaymentCredit: VendorCredit | null = null;
-    const overpaidBy = amount.minus(remaining);
-    if (overpaidBy.greaterThan(0) && remaining.greaterThanOrEqualTo(0)) {
-      // Allocate VCM sequence.
-      const vcSeq = await getNextSequence(tx, {
-        name: VC_SEQUENCE_NAME,
-        prefix: VC_PREFIX,
-        useYear: true,
-      });
-      overpaymentCredit = await tx.vendorCredit.create({
-        data: {
-          number: vcSeq.formatted,
-          vendorId: bill.vendorId,
-          status: VendorCreditStatus.CONFIRMED,
-          creditDate: paymentDate,
-          amount: overpaidBy,
-          appliedAmount: new Prisma.Decimal(0),
-          currency: bill.currency ?? 'USD',
-          reason: `Overpayment from bill payment ${billPayment.number}`,
-          notes: `Auto-created from BillPayment ${billPayment.number} on bill ${bill.number}`,
-          createdById: ctx?.userId ?? null,
-          confirmedAt: paymentDate,
-          sourceTag: `OVERPAYMENT:${billPayment.id}`,
-          lines: {
-            create: [
-              {
-                lineNumber: 1,
-                description: `Overpayment of $${overpaidBy.toString()} on bill ${bill.number}`,
-                amount: overpaidBy,
-              },
-            ],
-          },
+    // Post the auto-VC's confirm JE: DR AP / CR VCA. Same shape as
+    // confirmVendorCredit's JE — kept inline rather than calling the
+    // public confirmVendorCredit helper to avoid a nested transaction
+    // and to use a more specific JE description.
+    await post(tx, {
+      entityType: 'VendorCredit',
+      entityId: overpaymentCredit.id,
+      description: `Confirm vendor credit ${overpaymentCredit.number} (overpayment from BPMT ${billPayment.number})`,
+      postedAt: paymentDate,
+      lines: [
+        {
+          accountCode: AP_ACCOUNT,
+          debit: overpaidBy,
+          memo: `AP overpayment relief — bill ${bill.number}`,
         },
-      });
-
-      // Post the auto-VC's confirm JE: DR AP / CR VCA. Same shape as
-      // confirmVendorCredit's JE — kept inline rather than calling the
-      // public confirmVendorCredit helper to avoid a nested transaction
-      // and to use a more specific JE description.
-      await post(tx, {
-        entityType: 'VendorCredit',
-        entityId: overpaymentCredit.id,
-        description: `Confirm vendor credit ${overpaymentCredit.number} (overpayment from BPMT ${billPayment.number})`,
-        postedAt: paymentDate,
-        lines: [
-          {
-            accountCode: AP_ACCOUNT,
-            debit: overpaidBy,
-            memo: `AP overpayment relief — bill ${bill.number}`,
-          },
-          {
-            accountCode: VENDOR_CREDITS_AVAILABLE_ACCOUNT,
-            credit: overpaidBy,
-            memo: `Vendor credit issued (overpayment)`,
-          },
-        ],
-      });
-
-      await audit(tx, {
-        action: AuditAction.VENDOR_CREDIT_CONFIRMED,
-        entityType: 'VendorCredit',
-        entityId: overpaymentCredit.id,
-        after: overpaymentCredit,
-        ctx,
-      });
-    }
-
-    // Recompute bill denorms (caps amountPaid at bill.total — the
-    // overpayment portion lives on the VC, not on bill.amountPaid).
-    await recomputeBillDenormsTx(tx, bill.id);
-
-    await audit(tx, {
-      action: AuditAction.BILL_PAYMENT_RECORDED,
-      entityType: 'BillPayment',
-      entityId: billPayment.id,
-      after: billPayment,
-      ctx,
+        {
+          accountCode: VENDOR_CREDITS_AVAILABLE_ACCOUNT,
+          credit: overpaidBy,
+          memo: `Vendor credit issued (overpayment)`,
+        },
+      ],
     });
 
-    return { billPayment, overpaymentCredit };
+    await audit(tx, {
+      action: AuditAction.VENDOR_CREDIT_CONFIRMED,
+      entityType: 'VendorCredit',
+      entityId: overpaymentCredit.id,
+      after: overpaymentCredit,
+      ctx,
+    });
+  }
+
+  // Recompute bill denorms (caps amountPaid at bill.total — the
+  // overpayment portion lives on the VC, not on bill.amountPaid).
+  await recomputeBillDenormsTx(tx, bill.id);
+
+  await audit(tx, {
+    action: AuditAction.BILL_PAYMENT_RECORDED,
+    entityType: 'BillPayment',
+    entityId: billPayment.id,
+    after: billPayment,
+    ctx,
   });
+
+  return { billPayment, overpaymentCredit };
 }
 
 // ---------------------------------------------------------------------------

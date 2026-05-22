@@ -11,6 +11,7 @@ import {
   Truck,
   Wrench,
   FileText,
+  Receipt,
   CreditCard,
   Banknote,
   Undo2,
@@ -76,6 +77,14 @@ const NAV_ITEMS: NavItem[] = [
     module: 'vendors',
   },
   { label: 'Bills', href: '/bills', icon: FileText, module: 'bills' },
+  {
+    // Quick Expense Logger — fast credit-card / small-expense entry.
+    // Part of the AP (bills) module.
+    label: 'Expenses',
+    href: '/expenses',
+    icon: Receipt,
+    module: 'bills',
+  },
   {
     // Vendor credits are part of the AP (bills) module.
     label: 'Vendor Credits',

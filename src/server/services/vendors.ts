@@ -37,60 +37,69 @@ export async function createVendor(
   input: CreateVendorInput,
   ctx?: AuditContext,
 ): Promise<Vendor> {
+  return db.$transaction((tx) => createVendorTx(tx, input, ctx));
+}
+
+// Tx-composable core. Runs inside a caller-supplied transaction so flows
+// like logExpense can find-or-create a vendor atomically alongside the
+// bill create + confirm + payment. createVendor is the standalone wrapper.
+export async function createVendorTx(
+  tx: Prisma.TransactionClient,
+  input: CreateVendorInput,
+  ctx?: AuditContext,
+): Promise<Vendor> {
   const data = createVendorInputSchema.parse(input);
-  return db.$transaction(async (tx) => {
-    let code = data.code;
-    if (!code) {
-      const seq = await getNextSequence(tx, {
-        name: VENDOR_SEQUENCE_NAME,
-        prefix: VENDOR_PREFIX,
-        useYear: true,
-      });
-      code = seq.formatted;
-    }
-
-    const vendor = await tx.vendor.create({
-      data: {
-        code,
-        name: data.name,
-        type: data.type ?? 'STOCK',
-        paymentTerm: { connect: { id: data.paymentTermId } },
-        defaultCurrency: data.defaultCurrency ?? 'USD',
-        minimumOrderAmount:
-          data.minimumOrderAmount != null
-            ? new Prisma.Decimal(data.minimumOrderAmount)
-            : null,
-        costChangeAlertPct:
-          data.costChangeAlertPct != null
-            ? new Prisma.Decimal(data.costChangeAlertPct)
-            : null,
-        defaultCommissionRate:
-          data.defaultCommissionRate != null
-            ? new Prisma.Decimal(data.defaultCommissionRate)
-            : null,
-        notes: data.notes ?? null,
-        active: data.active ?? true,
-      },
+  let code = data.code;
+  if (!code) {
+    const seq = await getNextSequence(tx, {
+      name: VENDOR_SEQUENCE_NAME,
+      prefix: VENDOR_PREFIX,
+      useYear: true,
     });
+    code = seq.formatted;
+  }
 
-    if (data.remitToAddress) {
-      await addVendorAddressTx(tx, vendor.id, data.remitToAddress, ctx);
-    }
-    if (data.contacts) {
-      for (const contact of data.contacts) {
-        await createVendorContactTx(tx, vendor.id, contact, ctx);
-      }
-    }
-
-    await audit(tx, {
-      action: AuditAction.CREATE,
-      entityType: 'Vendor',
-      entityId: vendor.id,
-      after: vendor,
-      ctx,
-    });
-    return vendor;
+  const vendor = await tx.vendor.create({
+    data: {
+      code,
+      name: data.name,
+      type: data.type ?? 'STOCK',
+      paymentTerm: { connect: { id: data.paymentTermId } },
+      defaultCurrency: data.defaultCurrency ?? 'USD',
+      minimumOrderAmount:
+        data.minimumOrderAmount != null
+          ? new Prisma.Decimal(data.minimumOrderAmount)
+          : null,
+      costChangeAlertPct:
+        data.costChangeAlertPct != null
+          ? new Prisma.Decimal(data.costChangeAlertPct)
+          : null,
+      defaultCommissionRate:
+        data.defaultCommissionRate != null
+          ? new Prisma.Decimal(data.defaultCommissionRate)
+          : null,
+      notes: data.notes ?? null,
+      active: data.active ?? true,
+    },
   });
+
+  if (data.remitToAddress) {
+    await addVendorAddressTx(tx, vendor.id, data.remitToAddress, ctx);
+  }
+  if (data.contacts) {
+    for (const contact of data.contacts) {
+      await createVendorContactTx(tx, vendor.id, contact, ctx);
+    }
+  }
+
+  await audit(tx, {
+    action: AuditAction.CREATE,
+    entityType: 'Vendor',
+    entityId: vendor.id,
+    after: vendor,
+    ctx,
+  });
+  return vendor;
 }
 
 export async function updateVendor(
