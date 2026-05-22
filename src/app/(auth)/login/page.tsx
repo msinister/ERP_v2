@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { Suspense, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   Card,
@@ -30,6 +30,27 @@ async function readErrorMessage(res: Response): Promise<string> {
 }
 
 export default function LoginPage() {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle className="text-xl">Sign in</CardTitle>
+          <CardDescription>Access the ERP dashboard.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {/* useSearchParams() in LoginForm forces a client-side bailout,
+              which Next requires to sit behind a Suspense boundary — without
+              it the whole /login route fails to prerender at build time. */}
+          <Suspense fallback={<LoginFormFallback />}>
+            <LoginForm />
+          </Suspense>
+        </CardContent>
+      </Card>
+    </main>
+  );
+}
+
+function LoginForm() {
   const params = useSearchParams();
   const next = params.get('next') ?? '/';
   const [email, setEmail] = useState('');
@@ -63,50 +84,58 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="text-xl">Sign in</CardTitle>
-          <CardDescription>Access the ERP dashboard.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={onSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-            {error ? (
-              <p
-                role="alert"
-                className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
-              >
-                {error}
-              </p>
-            ) : null}
-            <Button type="submit" disabled={pending} className="w-full">
-              {pending ? 'Signing in…' : 'Sign in'}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-    </main>
+    <form onSubmit={onSubmit} className="space-y-4">
+      <div className="space-y-1.5">
+        <Label htmlFor="email">Email</Label>
+        <Input
+          id="email"
+          type="email"
+          autoComplete="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="password">Password</Label>
+        <Input
+          id="password"
+          type="password"
+          autoComplete="current-password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+      </div>
+      {error ? (
+        <p
+          role="alert"
+          className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+        >
+          {error}
+        </p>
+      ) : null}
+      <Button type="submit" disabled={pending} className="w-full">
+        {pending ? 'Signing in…' : 'Sign in'}
+      </Button>
+    </form>
+  );
+}
+
+// Skeleton shown while the Suspense boundary settles. Mirrors the form's
+// field/button heights so the card doesn't jump when LoginForm mounts.
+function LoginFormFallback() {
+  return (
+    <div className="space-y-4" aria-hidden>
+      <div className="space-y-1.5">
+        <div className="h-4 w-12 rounded bg-muted" />
+        <div className="h-9 w-full rounded-md bg-muted" />
+      </div>
+      <div className="space-y-1.5">
+        <div className="h-4 w-16 rounded bg-muted" />
+        <div className="h-9 w-full rounded-md bg-muted" />
+      </div>
+      <div className="h-9 w-full rounded-md bg-muted" />
+    </div>
   );
 }
