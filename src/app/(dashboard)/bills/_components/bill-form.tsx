@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   VariantPicker,
+  type CreatedProduct,
   type VariantPickerCatalogHint,
 } from '@/components/shared/variant-picker';
 import {
@@ -40,7 +41,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { QuickCreateProductDialog } from './quick-create-product-dialog';
 import { formatCurrency } from '@/lib/format';
 import {
   isNonNegativeDecimalInput,
@@ -258,19 +258,34 @@ export function BillForm({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  // `variants` is server-rendered into props; the quick-create flow needs
-  // to append a newly-created variant without a navigation, so we
-  // shadow the prop in local state. The prop becomes the seed only.
+  // `variants` is server-rendered into props; the inline create-product
+  // flow needs to append a newly-created variant without a navigation, so
+  // we shadow the prop in local state. The prop becomes the seed only.
   const [variantsState, setVariantsState] =
     useState<VariantOption[]>(variants);
   // Same shadow pattern for vendors — the inline "create vendor" flow
   // appends + auto-selects without a navigation.
   const [vendorsState, setVendorsState] = useState<VendorOption[]>(vendors);
-  const [quickCreate, setQuickCreate] = useState<{
-    open: boolean;
-    lineIndex: number;
-    query: string;
-  }>({ open: false, lineIndex: 0, query: '' });
+
+  // Append an inline-created product to the shared options list so it
+  // shows up on every line. The picker handles selecting it on the line
+  // it was created from.
+  function onProductCreated(created: CreatedProduct) {
+    setVariantsState((prev) =>
+      prev.some((v) => v.id === created.variantId)
+        ? prev
+        : [
+            ...prev,
+            {
+              id: created.variantId,
+              sku: created.sku,
+              variantName: created.variantName,
+              productName: created.productName,
+              shortDescription: created.shortDescription,
+            },
+          ],
+    );
+  }
 
   const form = useForm<BillFormValues>({
     // Cast: the lines z.preprocess makes the schema's INPUT type
@@ -521,9 +536,7 @@ export function BillForm({
                   expenseAccounts={expenseAccounts}
                   canRemove={fields.length > 1}
                   onRemove={() => remove(index)}
-                  onRequestQuickCreate={(query) =>
-                    setQuickCreate({ open: true, lineIndex: index, query })
-                  }
+                  onProductCreated={onProductCreated}
                 />
               ))}
               <div className="flex items-center justify-between gap-3">
@@ -623,23 +636,6 @@ export function BillForm({
               : 'Save changes'}
         </Button>
       </div>
-
-      <QuickCreateProductDialog
-        open={quickCreate.open}
-        onOpenChange={(open) => setQuickCreate((s) => ({ ...s, open }))}
-        initialQuery={quickCreate.query}
-        onCreated={(variant) => {
-          // Append to the live options list, then select on the requesting
-          // line. Use setValue (not useFieldArray.update) so we only touch
-          // the variantId field — quantity / unit cost / notes stay as
-          // the operator left them.
-          setVariantsState((prev) => [...prev, variant]);
-          setValue(`lines.${quickCreate.lineIndex}.variantId`, variant.id, {
-            shouldDirty: true,
-            shouldValidate: true,
-          });
-        }}
-      />
     </form>
   );
 }
@@ -653,7 +649,7 @@ function LineRow({
   expenseAccounts,
   canRemove,
   onRemove,
-  onRequestQuickCreate,
+  onProductCreated,
 }: {
   form: UseFormReturn<BillFormValues>;
   index: number;
@@ -663,7 +659,7 @@ function LineRow({
   expenseAccounts: ExpenseAccountOption[];
   canRemove: boolean;
   onRemove: () => void;
-  onRequestQuickCreate: (query: string) => void;
+  onProductCreated: (created: CreatedProduct) => void;
 }) {
   const {
     register,
@@ -712,22 +708,7 @@ function LineRow({
                     catalogHints={catalogHints}
                     ariaInvalid={!!lineErrors?.variantId}
                     placeholder="Search SKU, product name, description…"
-                    renderEmptyAction={(query) => (
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm text-primary outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
-                        onClick={() => onRequestQuickCreate(query)}
-                      >
-                        <Plus className="size-3.5" />
-                        Create product
-                        {query.trim() !== '' ? (
-                          <span className="font-mono text-xs text-muted-foreground">
-                            {' '}
-                            “{query.trim()}”
-                          </span>
-                        ) : null}
-                      </button>
-                    )}
+                    onCreated={onProductCreated}
                   />
                 )}
               />

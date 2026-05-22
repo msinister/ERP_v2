@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/select';
 import {
   VariantPicker,
+  type CreatedProduct,
   type VariantPickerOption,
 } from '@/components/shared/variant-picker';
 import { useAutoAppendLine } from '@/lib/forms/useAutoAppendLine';
@@ -56,6 +57,26 @@ export function BatchAdjustmentForm({
   const [lines, setLines] = useState<LineState[]>([newLine()]);
   const [pending, setPending] = useState(false);
   const [errors, setErrors] = useState<Partial<Record<string, string>>>({});
+  // Shadow the variants prop so an inline-created product appears across
+  // all lines, not just the one it was created on.
+  const [variantList, setVariantList] = useState(variants);
+
+  function onProductCreated(created: CreatedProduct) {
+    setVariantList((prev) =>
+      prev.some((v) => v.id === created.variantId)
+        ? prev
+        : [
+            ...prev,
+            {
+              id: created.variantId,
+              sku: created.sku,
+              productName: created.productName,
+              variantName: created.variantName,
+              shortDescription: created.shortDescription,
+            },
+          ],
+    );
+  }
 
   // Pick a variant on the last line → a fresh blank line appears below it.
   useAutoAppendLine(
@@ -245,7 +266,8 @@ export function BatchAdjustmentForm({
                 <VariantPicker
                   value={line.variantId}
                   onValueChange={(id) => updateLine(line.key, { variantId: id })}
-                  variants={variants}
+                  variants={variantList}
+                  onCreated={onProductCreated}
                   placeholder="Search SKU or product…"
                 />
               </div>

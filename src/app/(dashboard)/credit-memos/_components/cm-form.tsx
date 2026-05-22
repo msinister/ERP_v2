@@ -32,7 +32,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { VariantPicker } from '@/components/shared/variant-picker';
+import {
+  VariantPicker,
+  type CreatedProduct,
+} from '@/components/shared/variant-picker';
 import { formatCurrency } from '@/lib/format';
 import {
   isNonNegativeDecimalInput,
@@ -234,6 +237,26 @@ export function CmForm({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // Shadow the variants prop so an inline-created product appears on
+  // every line without a navigation.
+  const [variantsState, setVariantsState] = useState<VariantOption[]>(variants);
+
+  function onProductCreated(created: CreatedProduct) {
+    setVariantsState((prev) =>
+      prev.some((v) => v.id === created.variantId)
+        ? prev
+        : [
+            ...prev,
+            {
+              id: created.variantId,
+              sku: created.sku,
+              variantName: created.variantName,
+              productName: created.productName,
+              shortDescription: created.shortDescription,
+            },
+          ],
+    );
+  }
 
   const form = useForm<CmFormValues>({
     // Cast: the lines z.preprocess makes the schema's INPUT type
@@ -666,10 +689,11 @@ export function CmForm({
                   key={field.id}
                   form={form}
                   index={index}
-                  variants={variants}
+                  variants={variantsState}
                   invoice={selectedInvoice}
                   canRemove={fields.length > 1}
                   onRemove={() => remove(index)}
+                  onProductCreated={onProductCreated}
                 />
               ))}
               <div className="flex items-center justify-between gap-3">
@@ -790,6 +814,7 @@ function LineRow({
   invoice,
   canRemove,
   onRemove,
+  onProductCreated,
 }: {
   form: UseFormReturn<CmFormValues>;
   index: number;
@@ -797,6 +822,7 @@ function LineRow({
   invoice: InvoiceOption | null;
   canRemove: boolean;
   onRemove: () => void;
+  onProductCreated: (created: CreatedProduct) => void;
 }) {
   const {
     register,
@@ -903,6 +929,7 @@ function LineRow({
                       ? 'No active variants.'
                       : 'No matching products.'
                   }
+                  onCreated={onProductCreated}
                 />
               )}
             />

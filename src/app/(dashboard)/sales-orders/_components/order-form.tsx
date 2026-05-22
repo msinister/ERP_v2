@@ -33,7 +33,10 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { VariantPicker } from '@/components/shared/variant-picker';
+import {
+  VariantPicker,
+  type CreatedProduct,
+} from '@/components/shared/variant-picker';
 import { formatCurrency } from '@/lib/format';
 import {
   isNonNegativeDecimalInput,
@@ -256,6 +259,28 @@ export function OrderForm({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // Shadow the variants prop so an inline-created product appears on
+  // every line. New products have no inventory yet (empty map).
+  const [variantsState, setVariantsState] = useState<VariantOption[]>(variants);
+
+  function onProductCreated(created: CreatedProduct) {
+    setVariantsState((prev) =>
+      prev.some((v) => v.id === created.variantId)
+        ? prev
+        : [
+            ...prev,
+            {
+              id: created.variantId,
+              sku: created.sku,
+              variantName: created.variantName,
+              productName: created.productName,
+              shortDescription: created.shortDescription,
+              basePrice: created.basePrice,
+              inventoryByWarehouse: {},
+            },
+          ],
+    );
+  }
 
   const form = useForm<OrderFormValues>({
     // Cast: the lines z.preprocess makes the schema's INPUT type
@@ -559,9 +584,10 @@ export function OrderForm({
                   index={index}
                   customerId={customerId}
                   warehouseId={warehouseId}
-                  variants={variants}
+                  variants={variantsState}
                   canRemove={fields.length > 1}
                   onRemove={() => remove(index)}
+                  onProductCreated={onProductCreated}
                 />
               ))}
               <div className="flex items-center justify-between gap-3">
@@ -746,6 +772,7 @@ function LineRow({
   variants,
   canRemove,
   onRemove,
+  onProductCreated,
 }: {
   form: UseFormReturn<OrderFormValues>;
   index: number;
@@ -754,6 +781,7 @@ function LineRow({
   variants: VariantOption[];
   canRemove: boolean;
   onRemove: () => void;
+  onProductCreated: (created: CreatedProduct) => void;
 }) {
   const {
     register,
@@ -868,6 +896,7 @@ function LineRow({
                       </span>
                     );
                   }}
+                  onCreated={onProductCreated}
                 />
               )}
             />

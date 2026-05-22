@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/select';
 import {
   VariantPicker,
+  type CreatedProduct,
   type VariantPickerCatalogHint,
 } from '@/components/shared/variant-picker';
 import {
@@ -136,6 +137,26 @@ export function AddLinesForm({
   const [errors, setErrors] = useState<
     Array<Partial<Record<keyof DraftLine, string>>>
   >([]);
+  // Shadow the variants prop so an inline-created product appears on
+  // every draft row.
+  const [variantList, setVariantList] = useState(variants);
+
+  function onProductCreated(created: CreatedProduct) {
+    setVariantList((prev) =>
+      prev.some((v) => v.id === created.variantId)
+        ? prev
+        : [
+            ...prev,
+            {
+              id: created.variantId,
+              sku: created.sku,
+              productName: created.productName,
+              variantName: created.variantName,
+              shortDescription: created.shortDescription,
+            },
+          ],
+    );
+  }
 
   // Fill the variant on the last draft → a fresh blank draft appears.
   useAutoAppendLine(
@@ -344,12 +365,13 @@ export function AddLinesForm({
                 key={d.key}
                 draft={d}
                 errors={errors[i] ?? {}}
-                variants={variants}
+                variants={variantList}
                 hintByVariant={hintByVariant}
                 warehouses={warehouses}
                 currency={currency}
                 onChange={(p) => patch(d.key, p)}
                 onRemove={drafts.length > 1 ? () => remove(d.key) : null}
+                onProductCreated={onProductCreated}
               />
             ))}
             <Button type="button" variant="outline" size="sm" onClick={add}>
@@ -388,6 +410,7 @@ function DraftRow({
   currency,
   onChange,
   onRemove,
+  onProductCreated,
 }: {
   draft: DraftLine;
   errors: Partial<Record<keyof DraftLine, string>>;
@@ -397,6 +420,7 @@ function DraftRow({
   currency: string;
   onChange: (patch: Partial<DraftLine>) => void;
   onRemove: (() => void) | null;
+  onProductCreated: (created: CreatedProduct) => void;
 }) {
   return (
     <div className="rounded-md border border-border p-3">
@@ -435,6 +459,7 @@ function DraftRow({
                   ? 'No active variants.'
                   : 'No matching products.'
               }
+              onCreated={onProductCreated}
             />
             {errors.variantId ? (
               <FieldError errors={[{ message: errors.variantId }]} />

@@ -35,6 +35,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   InCatalogBadge,
   VariantPicker,
+  type CreatedProduct,
   type VariantPickerCatalogHint,
   type VariantPickerOption,
 } from '@/components/shared/variant-picker';
@@ -220,6 +221,26 @@ export function PoForm({
   // Shadow the vendors prop so an inline-created vendor can be appended
   // and auto-selected without a navigation. The prop is the seed only.
   const [vendorsState, setVendorsState] = useState<VendorOption[]>(vendors);
+  // Same shadow pattern for variants — the inline create-product flow
+  // appends a new variant so it shows up on every line.
+  const [variantsState, setVariantsState] = useState<VariantOption[]>(variants);
+
+  function onProductCreated(created: CreatedProduct) {
+    setVariantsState((prev) =>
+      prev.some((v) => v.id === created.variantId)
+        ? prev
+        : [
+            ...prev,
+            {
+              id: created.variantId,
+              sku: created.sku,
+              variantName: created.variantName,
+              productName: created.productName,
+              shortDescription: created.shortDescription,
+            },
+          ],
+    );
+  }
 
   // Catalog hints keyed by `${vendorId}:${variantId}` so the line row
   // can look up vendor SKU + latest cost on every (vendor, variant)
@@ -488,7 +509,7 @@ export function PoForm({
                 <LockedLinesSummary
                   lines={fields.map((_, i) => i)}
                   form={form}
-                  variants={variants}
+                  variants={variantsState}
                 />
               ) : (
                 fields.map((field, index) => (
@@ -497,10 +518,11 @@ export function PoForm({
                     form={form}
                     index={index}
                     vendorId={vendorId}
-                    variants={variants}
+                    variants={variantsState}
                     catalogByKey={catalogByKey}
                     canRemove={fields.length > 1}
                     onRemove={() => remove(index)}
+                    onProductCreated={onProductCreated}
                   />
                 ))
               )}
@@ -622,6 +644,7 @@ function LineRow({
   catalogByKey,
   canRemove,
   onRemove,
+  onProductCreated,
 }: {
   form: UseFormReturn<PoFormValues>;
   index: number;
@@ -630,6 +653,7 @@ function LineRow({
   catalogByKey: Map<string, CatalogHint>;
   canRemove: boolean;
   onRemove: () => void;
+  onProductCreated: (created: CreatedProduct) => void;
 }) {
   const {
     register,
@@ -736,6 +760,7 @@ function LineRow({
                       <InCatalogBadge />
                     ) : null
                   }
+                  onCreated={onProductCreated}
                 />
               )}
             />
