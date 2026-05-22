@@ -1,4 +1,5 @@
 import {
+  AccountType,
   AuditAction,
   CreditApplicationKind,
   CreditMemoStatus,
@@ -478,6 +479,48 @@ export async function recordPayment(
     });
 
     const amount = new Prisma.Decimal(data.amount);
+
+    // Resolve the deposit account for the cash-receipt JE. APPLIED_CREDIT
+    // moves no cash, so it needs none. For real receipts, honor the
+    // operator's pick (a cash/bank ASSET or a credit-card LIABILITY),
+    // validated the same way the bills/AP side validates its cash account;
+    // fall back to the default Cash account (1110) when the caller omits
+    // one (smoke scripts, older API clients). The chosen account is stored
+    // on the Payment so a later reversal credits the exact same account.
+    let cashAccount: { id: string; code: string } | null = null;
+    if (data.method !== PaymentMethod.APPLIED_CREDIT) {
+      if (data.cashAccountId) {
+        const acct = await tx.glAccount.findUnique({
+          where: { id: data.cashAccountId },
+          select: { id: true, code: true, type: true, active: true, deletedAt: true },
+        });
+        if (!acct || acct.deletedAt) {
+          throw new Error(`GlAccount not found: ${data.cashAccountId}`);
+        }
+        if (
+          acct.type !== AccountType.ASSET &&
+          acct.type !== AccountType.LIABILITY
+        ) {
+          throw new Error(
+            `cashAccountId must point at an ASSET- or LIABILITY-type GlAccount; ${acct.code} is ${acct.type}`,
+          );
+        }
+        if (!acct.active) {
+          throw new Error(`GlAccount ${acct.code} is inactive`);
+        }
+        cashAccount = { id: acct.id, code: acct.code };
+      } else {
+        const acct = await tx.glAccount.findUnique({
+          where: { code: CASH_ACCOUNT },
+          select: { id: true, code: true },
+        });
+        if (!acct) {
+          throw new Error(`Default cash account ${CASH_ACCOUNT} not found`);
+        }
+        cashAccount = { id: acct.id, code: acct.code };
+      }
+    }
+
     const payment = await tx.payment.create({
       data: {
         number: seq.formatted,
@@ -490,6 +533,7 @@ export async function recordPayment(
         receivedAt: data.receivedAt ?? new Date(),
         reference: data.reference ?? null,
         notes: data.notes ?? null,
+        cashAccountId: cashAccount?.id ?? null,
       },
     });
 
@@ -527,13 +571,17 @@ export async function recordPayment(
       }
     } else {
       // Standard cash-receipt path. JE first so the GL records the
-      // receipt before any application drift. Apps next.
+      // receipt before any application drift. Apps next. cashAccount is
+      // always resolved on this branch (only APPLIED_CREDIT skips it).
+      if (!cashAccount) {
+        throw new Error('Cash account not resolved for cash-receipt payment');
+      }
       await post(tx, {
         entityType: 'Payment',
         entityId: payment.id,
         description: `Payment ${payment.number} from ${customer.name}`,
         lines: [
-          { accountCode: CASH_ACCOUNT, debit: amount, memo: 'Cash receipt' },
+          { accountCode: cashAccount.code, debit: amount, memo: 'Cash receipt' },
           { accountCode: AR_ACCOUNT, credit: amount, memo: 'AR — payment received' },
         ],
       });
@@ -594,7 +642,7 @@ export async function reversePaymentTx(
   await lockPayment(tx, data.paymentId);
   const before = await tx.payment.findUnique({
     where: { id: data.paymentId },
-    include: { applications: true },
+    include: { applications: true, cashAccount: { select: { code: true } } },
   });
   if (!before) throw new Error(`Payment not found: ${data.paymentId}`);
   if (before.deletedAt) throw new Error('Payment is soft-deleted');
@@ -642,9 +690,16 @@ export async function reversePaymentTx(
       entityType: 'Payment',
       entityId: data.paymentId,
       description: `Reversal of payment ${before.number}: ${data.reason}`,
+      // Credit the exact account the original receipt debited. Legacy rows
+      // (no stored cashAccountId) predate the deposit-account picker and
+      // always posted to 1110, so the fallback reverses them correctly.
       lines: [
         { accountCode: AR_ACCOUNT, debit: before.amount, memo: 'AR — payment reversed' },
-        { accountCode: CASH_ACCOUNT, credit: before.amount, memo: 'Cash reversed' },
+        {
+          accountCode: before.cashAccount?.code ?? CASH_ACCOUNT,
+          credit: before.amount,
+          memo: 'Cash reversed',
+        },
       ],
     });
   }

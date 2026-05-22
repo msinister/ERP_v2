@@ -29,6 +29,10 @@ import {
   type PaymentTermOption,
   type CreatedCustomer,
 } from '@/components/shared/customer-picker';
+import {
+  CashAccountSelect,
+  rememberCashAccount,
+} from '@/components/shared/cash-account-select';
 import { formatCurrency } from '@/lib/format';
 import {
   isPositiveDecimalInput,
@@ -38,8 +42,9 @@ import {
 // List-page Record Payment dialog: customer-first. The operator picks a
 // customer, then (optionally) one of that customer's open invoices to
 // apply the payment to. Leaving the invoice unselected records the
-// payment as unapplied credit on the customer. Posts DR Cash / CR AR
-// via /api/payments (the service hardcodes accounts 1110 / 1210).
+// payment as unapplied credit on the customer. Posts DR <deposit account>
+// / CR AR (1210) via /api/payments — the operator picks the deposit
+// account, which the service stores on the Payment for clean reversal.
 
 const METHODS: Array<{ value: string; label: string }> = [
   { value: 'CHECK', label: 'Check' },
@@ -112,6 +117,7 @@ export function RecordPaymentDialog({
   const [invoiceId, setInvoiceId] = useState(NO_INVOICE);
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('CHECK');
+  const [cashAccountId, setCashAccountId] = useState('');
   const [receivedAt, setReceivedAt] = useState('');
   const [reference, setReference] = useState('');
   const [notes, setNotes] = useState('');
@@ -126,6 +132,7 @@ export function RecordPaymentDialog({
     setInvoiceId(NO_INVOICE);
     setAmount('');
     setMethod('CHECK');
+    setCashAccountId('');
     setReceivedAt(new Date().toISOString().slice(0, 10));
     setReference('');
     setNotes('');
@@ -196,6 +203,7 @@ export function RecordPaymentDialog({
     const next: Partial<Record<string, string>> = {};
     if (!customerId) next.customerId = 'Pick a customer';
     if (!isPositiveDecimalInput(amount)) next.amount = 'Must be a positive number';
+    if (!cashAccountId) next.cashAccountId = 'Pick a cash account';
     if (Object.keys(next).length > 0) {
       setErrors(next);
       return;
@@ -223,6 +231,7 @@ export function RecordPaymentDialog({
     const payload = {
       customerId,
       method,
+      cashAccountId,
       amount: normalizedAmount,
       receivedAt: receivedAt || undefined,
       reference: reference.trim() || undefined,
@@ -247,6 +256,7 @@ export function RecordPaymentDialog({
           amount: string;
           appliedAmount: string;
         };
+        rememberCashAccount(cashAccountId);
         toast.success(
           `Recorded ${result.number} for ${formatCurrency(result.amount)}.`,
         );
@@ -384,6 +394,23 @@ export function RecordPaymentDialog({
               />
             </Field>
           </div>
+
+          <Field>
+            <FieldLabel htmlFor="rp-cash-account">Deposit to</FieldLabel>
+            <CashAccountSelect
+              id="rp-cash-account"
+              value={cashAccountId}
+              onValueChange={setCashAccountId}
+              ariaInvalid={!!errors.cashAccountId}
+            />
+            <FieldError
+              errors={[
+                errors.cashAccountId
+                  ? { message: errors.cashAccountId }
+                  : undefined,
+              ]}
+            />
+          </Field>
 
           <Field>
             <FieldLabel htmlFor="rp-reference">

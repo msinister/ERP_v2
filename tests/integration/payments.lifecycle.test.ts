@@ -167,6 +167,87 @@ suite('Payments lifecycle', () => {
     void inv;
   });
 
+  // ---------- cashAccountId (operator-picked deposit account) ----------
+
+  it('recordPayment honors cashAccountId: JE debits the chosen account, stored on Payment', async () => {
+    // 1310 (Inventory) is a seeded ASSET account ≠ the default 1110.
+    // The service validates by type, so any ASSET stands in for an
+    // alternate bank account here.
+    const altCash = await db.glAccount.findFirstOrThrow({
+      where: { code: '1310' },
+    });
+    const pmt = await recordPayment(db, {
+      customerId: customer.id,
+      method: PaymentMethod.CHECK,
+      amount: '40',
+      cashAccountId: altCash.id,
+    });
+    expect(pmt.cashAccountId).toBe(altCash.id);
+
+    const je = await db.journalEntry.findFirstOrThrow({
+      where: { entityType: 'Payment', entityId: pmt.id },
+      include: { lines: { include: { account: true } } },
+    });
+    assertJournalEntryBalanced(je);
+    // Debit lands on the picked account, NOT the hardcoded 1110.
+    expect(je.lines.find((l) => l.account.code === '1310')!.debit.toString()).toBe(
+      new Prisma.Decimal('40').toString(),
+    );
+    expect(je.lines.find((l) => l.account.code === '1110')).toBeUndefined();
+    expect(je.lines.find((l) => l.account.code === '1210')!.credit.toString()).toBe(
+      new Prisma.Decimal('40').toString(),
+    );
+  });
+
+  it('reversePayment credits the originally chosen cash account, not 1110', async () => {
+    const altCash = await db.glAccount.findFirstOrThrow({
+      where: { code: '1310' },
+    });
+    const pmt = await recordPayment(db, {
+      customerId: customer.id,
+      method: PaymentMethod.CHECK,
+      amount: '25',
+      cashAccountId: altCash.id,
+    });
+    const originalJe = await db.journalEntry.findFirstOrThrow({
+      where: { entityType: 'Payment', entityId: pmt.id },
+    });
+
+    await reversePayment(db, { paymentId: pmt.id, reason: 'check bounced' });
+
+    const allJes = await db.journalEntry.findMany({
+      where: { entityType: 'Payment', entityId: pmt.id },
+      include: { lines: { include: { account: true } } },
+    });
+    const reverseJe = allJes.find((j) => j.id !== originalJe.id)!;
+    assertJournalEntryBalanced(reverseJe);
+    // Reversal credits the same account the receipt debited (1310).
+    expect(reverseJe.lines.find((l) => l.account.code === '1310')!.credit.toString()).toBe(
+      new Prisma.Decimal('25').toString(),
+    );
+    expect(reverseJe.lines.find((l) => l.account.code === '1110')).toBeUndefined();
+    expect(reverseJe.lines.find((l) => l.account.code === '1210')!.debit.toString()).toBe(
+      new Prisma.Decimal('25').toString(),
+    );
+  });
+
+  it('recordPayment rejects a non-ASSET/non-LIABILITY cashAccountId', async () => {
+    // 5100 (COGS) is a seeded EXPENSE account — invalid as a deposit.
+    const expense = await db.glAccount.findFirstOrThrow({
+      where: { code: '5100' },
+    });
+    await expect(
+      recordPayment(db, {
+        customerId: customer.id,
+        method: PaymentMethod.CHECK,
+        amount: '15',
+        cashAccountId: expense.id,
+      }),
+    ).rejects.toThrow(
+      /cashAccountId must point at an ASSET- or LIABILITY-type GlAccount/,
+    );
+  });
+
   // ---------- recordPayment with applications ----------
 
   it('recordPayment with applications: invoice amountPaid bumps, status flips PARTIAL or PAID', async () => {

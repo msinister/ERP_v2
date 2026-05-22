@@ -51,6 +51,11 @@ export const recordPaymentInputSchema = z
     customerId: z.string().min(1),
     method: z.nativeEnum(PaymentMethod),
     amount: positiveDecimal,
+    // Deposit account for the cash-receipt JE. Optional for back-compat
+    // (smoke scripts / older callers) and unused by APPLIED_CREDIT, which
+    // posts no cash JE. The service validates the account type and falls
+    // back to the default Cash account (1110) when omitted.
+    cashAccountId: z.string().min(1).optional(),
     currency: z.string().min(3).max(3).optional(),
     receivedAt: z.coerce.date().optional(),
     reference: z.string().max(255).optional(),

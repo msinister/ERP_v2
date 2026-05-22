@@ -1705,6 +1705,11 @@ model Payment {
   receivedAt     DateTime      @default(now())
   reference      String?
   notes          String?
+  // Deposit account for the cash-receipt JE (DR cashAccount / CR AR).
+  // Operator-picked per payment (cash/bank ASSET, or a credit-card
+  // LIABILITY). Nullable: APPLIED_CREDIT payments post no cash JE, and
+  // legacy rows predate the field (the service falls back to 1110).
+  cashAccountId  String?
   reversedAt     DateTime?
   reversedReason String?
   deletedAt      DateTime?
@@ -1712,6 +1717,7 @@ model Payment {
   updatedAt      DateTime      @updatedAt
 
   customer            Customer            @relation(fields: [customerId], references: [id])
+  cashAccount         GlAccount?          @relation(fields: [cashAccountId], references: [id])
   applications        CreditApplication[]
   commissionAccruals  CommissionAccrual[] @relation("CommissionPaymentSource")
   reversedCommissions CommissionAccrual[] @relation("CommissionReversedBy")
@@ -1954,6 +1960,7 @@ model GlAccount {
   creditMemoCategories CreditMemoCategory[]
   billLines            BillLine[]
   billPayments         BillPayment[]
+  payments             Payment[]
 
   @@index([type])
 }
