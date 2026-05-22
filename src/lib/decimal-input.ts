@@ -1,9 +1,12 @@
 // =============================================================================
 // Shared decimal-input helpers for form fields backed by Prisma.Decimal on
-// the server. The server's `decimalString` validator expects a strict
-// pattern (^-?\d+(\.\d+)?$), but operators reasonably type ".25" without
-// the leading zero. These helpers let the form accept the looser
-// human-typed shape and normalize before submit.
+// the server. Operators reasonably type ".25" without the leading zero, so
+// these client helpers accept that shape and normalizeDecimalForSubmit
+// canonicalizes it (".25" → "0.25") before posting. The server's
+// `decimalString` validator (lib/validation/common.ts) ALSO accepts the
+// leading-dot form and normalizes it, so a missed normalize call is no
+// longer a hard failure — but normalizing on submit keeps payloads clean.
+// Use these helpers (not ad-hoc regexes) for every decimal/money input.
 // =============================================================================
 
 const NON_NEG_RE = /^\d*\.?\d*$/;

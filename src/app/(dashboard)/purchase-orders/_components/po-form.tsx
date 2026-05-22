@@ -85,8 +85,8 @@ export type CatalogHint = {
 // ===========================================================================
 
 // Looser refines so operators can type ".25" without a leading zero;
-// the submit handler normalizes before posting (server validator
-// remains strict on ^-?\d+(\.\d+)?$).
+// the submit handler normalizes before posting. The server validator
+// (decimalString) accepts the leading-dot form too.
 const qtyStr = z
   .string()
   .min(1, 'Required')

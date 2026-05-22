@@ -36,6 +36,10 @@ import { Field, FieldError, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { formatCurrency } from '@/lib/format';
+import {
+  isNonNegativeDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 type Props = {
   salesOrderId: string;
@@ -398,25 +402,24 @@ function CloseAction({
   const [handling, setHandling] = useState(handlingAmount ?? '');
   const [error, setError] = useState<string | null>(null);
 
-  const DECIMAL_RE = /^\d+(\.\d+)?$/;
-
   function onClose() {
     setError(null);
     // Loose client-side validation so the operator sees obvious typos
     // before hitting the server. The server is the source of truth.
-    if (shipping && !DECIMAL_RE.test(shipping)) {
+    // Accepts the leading-dot shorthand (".93") via the shared helper.
+    if (shipping && !isNonNegativeDecimalInput(shipping)) {
       setError('Shipping must be a non-negative number');
       return;
     }
-    if (handling && !DECIMAL_RE.test(handling)) {
+    if (handling && !isNonNegativeDecimalInput(handling)) {
       setError('Handling must be a non-negative number');
       return;
     }
     startTransition(async () => {
       try {
         const body: Record<string, string> = {};
-        if (shipping) body.shippingAmount = shipping;
-        if (handling) body.handlingAmount = handling;
+        if (shipping) body.shippingAmount = normalizeDecimalForSubmit(shipping);
+        if (handling) body.handlingAmount = normalizeDecimalForSubmit(handling);
         // qtyShipped per line is captured inline on the SO detail
         // page's Qty shipped column while the SO is CONFIRMED /
         // DISPATCHED; closeSalesOrder picks up the saved values

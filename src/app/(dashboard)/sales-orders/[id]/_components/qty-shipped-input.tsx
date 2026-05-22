@@ -15,6 +15,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  isPositiveDecimalInput,
+  normalizeDecimalForSubmit,
+} from '@/lib/decimal-input';
 
 type SaveState =
   | { kind: 'idle' }
@@ -125,16 +129,14 @@ export function QtyShippedInput({
       setState({ kind: 'idle' });
       return;
     }
-    // Loose client-side guard — server is the source of truth.
-    if (!/^\d+(\.\d+)?$/.test(trimmed)) {
+    // Loose client-side guard — server is the source of truth. Accepts
+    // the leading-dot shorthand (".5") via the shared helper.
+    if (!isPositiveDecimalInput(trimmed)) {
       setState({ kind: 'error', message: 'Must be a positive number' });
       return;
     }
-    const n = Number(trimmed);
-    if (!(n > 0)) {
-      setState({ kind: 'error', message: 'Must be > 0' });
-      return;
-    }
+    const normalized = normalizeDecimalForSubmit(trimmed);
+    const n = Number(normalized);
     const ordered = Number(qtyOrdered);
     if (n > ordered) {
       // Over-shipping path. Branch on tenant policy.
@@ -153,12 +155,12 @@ export function QtyShippedInput({
       }
       if (overShippingPolicy === 'CONFIRM') {
         // Open the confirm dialog; persist happens on confirm.
-        setConfirmPending(trimmed);
+        setConfirmPending(normalized);
         return;
       }
       // ALLOW — fall through to direct save.
     }
-    persist(trimmed);
+    persist(normalized);
   }
 
   function onConfirmOverShip() {
