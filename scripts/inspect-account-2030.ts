@@ -58,18 +58,25 @@ async function main() {
   const statusByCode = new Map(periods.map((p) => [p.code, p.status]));
 
   console.log(`\n=== ${jes.length} journal entr${jes.length === 1 ? 'y' : 'ies'} touching 2030 ===`);
+  // Net is computed over LIVE (deletedAt = null) JEs only — that's what
+  // every GL report sees (they filter journalEntry.deletedAt = null).
+  // Soft-deleted JEs are still printed (marked) for traceability.
   let sumDebit = 0;
   let sumCredit = 0;
+  let liveCount = 0;
   for (const je of jes) {
     const code = periodCodeForDate(je.postedAt);
+    const deleted = je.deletedAt != null;
+    if (!deleted) liveCount++;
     console.log(
       `\n${je.number}  ${je.postedAt.toISOString().slice(0, 10)}  ` +
         `[${code} ${statusByCode.get(code) ?? 'OPEN (uncreated)'}]  ` +
-        `${je.entityType}${je.reversedAt ? '  (REVERSED)' : ''}\n  "${je.description}"`,
+        `${je.entityType}${je.reversedAt ? '  (REVERSED)' : ''}` +
+        `${deleted ? '  *** SOFT-DELETED — excluded from balances ***' : ''}\n  "${je.description}"`,
     );
     for (const l of je.lines) {
       const is2030 = l.accountId === account.id;
-      if (is2030) {
+      if (is2030 && !deleted) {
         sumDebit += Number(l.debit);
         sumCredit += Number(l.credit);
       }
@@ -80,16 +87,18 @@ async function main() {
     }
   }
 
-  console.log('\n=== Net on 2030 ===');
+  console.log(`\n=== Net on 2030 (${liveCount} live JE(s); soft-deleted excluded) ===`);
   console.log(`SUM(debit)  = ${sumDebit}`);
   console.log(`SUM(credit) = ${sumCredit}`);
   console.log(`As LIABILITY (credit - debit) = ${sumCredit - sumDebit}  <- current display`);
   console.log(`As ASSET     (debit - credit) = ${sumDebit - sumCredit}  <- display after reclassify`);
 
   const hardClosed = jes.filter(
-    (j) => statusByCode.get(periodCodeForDate(j.postedAt)) === 'HARD_CLOSED',
+    (j) =>
+      j.deletedAt == null &&
+      statusByCode.get(periodCodeForDate(j.postedAt)) === 'HARD_CLOSED',
   );
-  console.log(`\nJEs in a HARD_CLOSED period (would block reclassify): ${hardClosed.length}`);
+  console.log(`\nLive JEs in a HARD_CLOSED period (would block reclassify): ${hardClosed.length}`);
 }
 
 main()
