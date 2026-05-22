@@ -23,9 +23,11 @@ import { arBalanceForCustomer } from '@/server/services/ar';
 import { SalesOrderReopenBlockedError } from '@/lib/errors/credit';
 import { receiveInventory } from '@/server/services/movements';
 import { setSetting } from '@/server/services/settings';
+import { getNegativeInventoryAllowed } from '@/server/services/negativeInventory';
 import {
   SETTING_KEYS,
   overShippingPolicyValueSchema,
+  negativeInventoryAllowedValueSchema,
 } from '@/lib/validation/settings';
 import { wipeInvoiceArtifactsForSOs } from '../helpers/wipeInvoiceArtifacts';
 import { hasTenantDb, makeClient } from '../helpers/db';
@@ -239,22 +241,52 @@ suite('SalesOrder lifecycle', () => {
   });
 
   it('Insufficient stock at close throws AND emits an INSUFFICIENT_STOCK_AT_CLOSE audit row', async () => {
-    await stockBin('2'); // only 2 in stock
-    const so = await createSalesOrder(db, createInput('5'));
-    await confirmSalesOrder(db, so.id);
-    await dispatchSalesOrder(db, so.id);
-    await expect(closeSalesOrder(db, so.id, undefined)).rejects.toThrow(/Insufficient stock/);
+    // This test asserts the throw-on-shortfall path, which only fires when
+    // negative inventory is disallowed. The shared dev DB may have the
+    // tenant-wide flag flipped on, so force it off for the assertion and
+    // restore the operator's value afterward (mirrors the over-shipping
+    // policy tests). The beforeEach FIFO-layer wipe guarantees the bin
+    // truly holds only the 2 units stockBin seeds.
+    const prevNegAllowed = await getNegativeInventoryAllowed(db);
+    await setSetting(
+      db,
+      SETTING_KEYS.NEGATIVE_INVENTORY_ALLOWED,
+      { allowed: false },
+      negativeInventoryAllowedValueSchema,
+    );
+    try {
+      await stockBin('2'); // only 2 in stock
+      const so = await createSalesOrder(db, createInput('5'));
+      await confirmSalesOrder(db, so.id);
+      await dispatchSalesOrder(db, so.id);
+      await expect(closeSalesOrder(db, so.id, undefined)).rejects.toThrow(
+        /Insufficient stock/,
+      );
 
-    const audits = await db.auditLog.findMany({
-      where: { action: AuditAction.INSUFFICIENT_STOCK_AT_CLOSE, entityType: 'SalesOrder', entityId: so.id },
-    });
-    expect(audits).toHaveLength(1);
-    const after = audits[0].afterJson as { qtyRequested?: string };
-    expect(after.qtyRequested).toBe('5');
+      const audits = await db.auditLog.findMany({
+        where: {
+          action: AuditAction.INSUFFICIENT_STOCK_AT_CLOSE,
+          entityType: 'SalesOrder',
+          entityId: so.id,
+        },
+      });
+      expect(audits).toHaveLength(1);
+      const after = audits[0].afterJson as { qtyRequested?: string };
+      expect(after.qtyRequested).toBe('5');
 
-    // Status was rolled back with the failed tx — still DISPATCHED.
-    const stillDispatched = await db.salesOrder.findUnique({ where: { id: so.id } });
-    expect(stillDispatched!.status).toBe(SalesOrderStatus.DISPATCHED);
+      // Status was rolled back with the failed tx — still DISPATCHED.
+      const stillDispatched = await db.salesOrder.findUnique({
+        where: { id: so.id },
+      });
+      expect(stillDispatched!.status).toBe(SalesOrderStatus.DISPATCHED);
+    } finally {
+      await setSetting(
+        db,
+        SETTING_KEYS.NEGATIVE_INVENTORY_ALLOWED,
+        { allowed: prevNegAllowed },
+        negativeInventoryAllowedValueSchema,
+      );
+    }
   });
 
   it('Partial close: per-line qtyShipped < qtyOrdered consumes only shipped qty and shorts the invoice', async () => {
@@ -1089,5 +1121,10 @@ async function wipe(
   await db.salesOrderLine.deleteMany({ where: { salesOrder: { customerId: ids.customerId } } });
   await db.salesOrder.deleteMany({ where: { customerId: ids.customerId } });
   await db.inventoryMovement.deleteMany({ where: { variantId: ids.variantId } });
+  // Clear FIFO layers too — deleting movements cascades FifoConsumption
+  // and nulls FifoLayer.sourceMovementId, but the layers themselves
+  // survive. Left behind, their qtyRemaining leaks stock into later tests
+  // (notably "insufficient stock at close", which needs an empty bin).
+  await db.fifoLayer.deleteMany({ where: { variantId: ids.variantId } });
   await db.inventoryItem.deleteMany({ where: { variantId: ids.variantId } });
 }
