@@ -14,6 +14,9 @@ export type PurchaseOrderHeaderProps = {
     confirmedAt: Date | null;
     closedAt: Date | null;
     cancelledAt: Date | null;
+    // Rolled-up shipment status across the PO's shipments, or null when
+    // there are none. Rendered as a second badge beside the PO status.
+    shipmentRollup: string | null;
   };
 };
 
@@ -34,6 +37,12 @@ export function PurchaseOrderHeader({ po }: PurchaseOrderHeaderProps) {
               {po.number}
             </h1>
             <StatusBadge entityType="PurchaseOrder" status={po.status} />
+            {po.shipmentRollup ? (
+              <StatusBadge
+                entityType="PoShipment"
+                status={po.shipmentRollup}
+              />
+            ) : null}
           </div>
           <div className="text-sm text-muted-foreground">
             <Link

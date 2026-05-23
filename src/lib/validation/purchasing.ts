@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PaymentMethod, PoShipmentStatus } from '@/generated/tenant';
 import { decimalString } from './common';
 
 const positiveDecimal = decimalString.refine(
@@ -95,6 +96,77 @@ export const updatePurchaseOrderLineFieldsInputSchema = z
 export const addPurchaseOrderLinesInputSchema = z.object({
   lines: z.array(purchaseOrderLineInputSchema).min(1),
 });
+
+// =============================================================================
+// PO shipments — physical-logistics tracking. No GL/inventory effect.
+// trackingUrl is a free-form string (carrier deep-links vary); the UI
+// renders it as a link when present. cartonCount coerces from the form's
+// string input; totalWeight is decimalString so it shares the project-wide
+// money/decimal precision rules even though it's a weight.
+// =============================================================================
+
+const shipmentStatusSchema = z.nativeEnum(PoShipmentStatus);
+
+export const createPoShipmentInputSchema = z.object({
+  shipmentStatus: shipmentStatusSchema,
+  trackingNumber: z.string().max(255).nullable().optional(),
+  carrierName: z.string().max(255).nullable().optional(),
+  trackingUrl: z.string().max(2000).nullable().optional(),
+  cartonCount: z.coerce.number().int().min(0).nullable().optional(),
+  totalWeight: nonNegativeDecimal.nullable().optional(),
+  weightUnit: z.string().max(16).optional(),
+  estimatedArrival: z.coerce.date().nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+});
+
+// All fields optional — the inline editor sends only what changed. A
+// no-op payload is rejected by the service (mirrors the PO line editor).
+export const updatePoShipmentInputSchema = z.object({
+  shipmentStatus: shipmentStatusSchema.optional(),
+  trackingNumber: z.string().max(255).nullable().optional(),
+  carrierName: z.string().max(255).nullable().optional(),
+  trackingUrl: z.string().max(2000).nullable().optional(),
+  cartonCount: z.coerce.number().int().min(0).nullable().optional(),
+  totalWeight: nonNegativeDecimal.nullable().optional(),
+  weightUnit: z.string().max(16).optional(),
+  estimatedArrival: z.coerce.date().nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+});
+
+// =============================================================================
+// PO direct payments (prepay / import deposits).
+//
+// method reuses the PaymentMethod enum but is OPTIONAL — a deposit can be
+// logged before the method is known. APPLIED_CREDIT makes no sense as a
+// cash-out source, so it's rejected (mirrors the bill-payment validator).
+// cashAccountId is required: the deposit JE needs a bank/asset (or
+// credit-card liability) account to credit.
+// =============================================================================
+
+const poPaymentMethodSchema = z
+  .nativeEnum(PaymentMethod)
+  .refine((m) => m !== PaymentMethod.APPLIED_CREDIT, {
+    message: 'APPLIED_CREDIT is not a valid deposit source',
+  });
+
+export const recordPoPaymentInputSchema = z.object({
+  amount: positiveDecimal,
+  paymentDate: z.coerce.date().optional(),
+  method: poPaymentMethodSchema.optional(),
+  cashAccountId: z.string().min(1),
+  reference: z.string().max(255).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+});
+
+export const voidPoPaymentInputSchema = z.object({
+  // Reversals always need a reason — the accounting trail requires it.
+  reason: z.string().min(1).max(2000),
+});
+
+export type CreatePoShipmentInput = z.infer<typeof createPoShipmentInputSchema>;
+export type UpdatePoShipmentInput = z.infer<typeof updatePoShipmentInputSchema>;
+export type RecordPoPaymentInput = z.infer<typeof recordPoPaymentInputSchema>;
+export type VoidPoPaymentInput = z.infer<typeof voidPoPaymentInputSchema>;
 
 export type PurchaseOrderLineInput = z.infer<typeof purchaseOrderLineInputSchema>;
 export type CreatePurchaseOrderInput = z.infer<typeof createPurchaseOrderInputSchema>;

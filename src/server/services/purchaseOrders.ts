@@ -1,5 +1,10 @@
 import { Prisma, AuditAction, PurchaseOrderStatus } from '@/generated/tenant';
-import type { PrismaClient, PurchaseOrder, PurchaseOrderLine } from '@/generated/tenant';
+import type {
+  PoShipmentStatus,
+  PrismaClient,
+  PurchaseOrder,
+  PurchaseOrderLine,
+} from '@/generated/tenant';
 import { audit, type AuditContext } from '@/lib/audit/audit';
 import { getNextSequence } from '@/lib/sequences/sequences';
 import {
@@ -562,6 +567,8 @@ export async function listPurchaseOrdersPaged(
     PurchaseOrder & {
       lines: PurchaseOrderLine[];
       vendor: { id: string; code: string; name: string };
+      shipments: { shipmentStatus: PoShipmentStatus }[];
+      payments: { amount: Prisma.Decimal }[];
     }
   >;
   total: number;
@@ -574,6 +581,15 @@ export async function listPurchaseOrdersPaged(
       include: {
         lines: { where: { deletedAt: null } },
         vendor: { select: { id: true, code: true, name: true } },
+        // Shipment-status rollup + prepaid badge for the list table.
+        shipments: {
+          where: { deletedAt: null },
+          select: { shipmentStatus: true },
+        },
+        payments: {
+          where: { deletedAt: null, status: 'RECORDED' },
+          select: { amount: true },
+        },
       },
       orderBy: { createdAt: 'desc' },
       skip,

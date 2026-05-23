@@ -1,6 +1,9 @@
 import { notFound } from 'next/navigation';
+import { AccountType, Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { listAccounts } from '@/server/services/glAccounts';
 import { resolveLineImageUrl } from '@/lib/products/lineItemImage';
+import { rollupShipmentStatus } from '@/lib/po/shipmentRollup';
 import { PurchaseOrderHeader } from './_components/header';
 import { PurchaseOrderLinesTable } from './_components/lines-table';
 import { PurchaseOrderTotalsCard } from './_components/totals-card';
@@ -9,6 +12,12 @@ import {
   PurchaseOrderReceiptsTable,
   type ReceiptRow,
 } from './_components/receipts-table';
+import { ShipmentsCard, type ShipmentRow } from './_components/shipments-card';
+import {
+  PoPaymentsCard,
+  type PoPaymentRow,
+  type CashAccountOption,
+} from './_components/po-payments-card';
 
 // Always live (no caching) — PO status and qtyReceived flip as
 // receipts get posted; we want every visit to reflect current state.
@@ -22,56 +31,74 @@ export default async function PurchaseOrderDetailPage({
   const { id } = await params;
 
   // Single round-trip: PO with vendor + lines (variant + warehouse +
-  // receiptLines). We pull each receiptLine's parent receipt so the
-  // receipts table can collapse them by receipt id without a second
-  // findMany on receipts.
-  const po = await db.purchaseOrder.findFirst({
-    where: { id, deletedAt: null },
-    include: {
-      vendor: { select: { id: true, code: true, name: true } },
-      lines: {
-        where: { deletedAt: null },
-        include: {
-          variant: {
-            select: {
-              id: true,
-              sku: true,
-              name: true,
-              imageUrl: true,
-              product: {
-                select: {
-                  name: true,
-                  images: {
-                    where: { isPrimary: true, deletedAt: null },
-                    select: { url: true },
-                    orderBy: { sortOrder: 'asc' },
-                    take: 1,
+  // receiptLines) + shipments + payments (with cash account + live
+  // applications). Parallel with the active GL account list (filtered to
+  // ASSET + LIABILITY) that feeds the record-deposit dialog's picker.
+  const [po, allAccounts] = await Promise.all([
+    db.purchaseOrder.findFirst({
+      where: { id, deletedAt: null },
+      include: {
+        vendor: { select: { id: true, code: true, name: true } },
+        lines: {
+          where: { deletedAt: null },
+          include: {
+            variant: {
+              select: {
+                id: true,
+                sku: true,
+                name: true,
+                imageUrl: true,
+                product: {
+                  select: {
+                    name: true,
+                    images: {
+                      where: { isPrimary: true, deletedAt: null },
+                      select: { url: true },
+                      orderBy: { sortOrder: 'asc' },
+                      take: 1,
+                    },
+                  },
+                },
+              },
+            },
+            warehouse: { select: { code: true, name: true } },
+            receiptLines: {
+              where: { deletedAt: null },
+              include: {
+                receipt: {
+                  select: {
+                    id: true,
+                    number: true,
+                    status: true,
+                    receivedAt: true,
+                    createdAt: true,
+                    deletedAt: true,
                   },
                 },
               },
             },
           },
-          warehouse: { select: { code: true, name: true } },
-          receiptLines: {
-            where: { deletedAt: null },
-            include: {
-              receipt: {
-                select: {
-                  id: true,
-                  number: true,
-                  status: true,
-                  receivedAt: true,
-                  createdAt: true,
-                  deletedAt: true,
-                },
-              },
+          orderBy: { createdAt: 'asc' },
+        },
+        shipments: {
+          where: { deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+        },
+        payments: {
+          where: { deletedAt: null },
+          orderBy: { paymentDate: 'desc' },
+          include: {
+            cashAccount: { select: { code: true, name: true } },
+            applications: {
+              where: { reversedAt: null },
+              include: { bill: { select: { id: true, number: true } } },
             },
           },
         },
-        orderBy: { createdAt: 'asc' },
       },
-    },
-  });
+    }),
+    listAccounts(db, { active: true, take: 500 }),
+  ]);
   if (!po) notFound();
 
   // Collapse receipt lines (already filtered to this PO via the
@@ -109,6 +136,66 @@ export default async function PurchaseOrderDetailPage({
     return bt - at;
   });
 
+  // PO total (Σ qtyOrdered × unitCost) drives the payments card's
+  // PO Total | Paid | Balance summary row.
+  const poTotal = po.lines.reduce(
+    (acc, l) => acc.plus(l.qtyOrdered.times(l.unitCost)),
+    new Prisma.Decimal(0),
+  );
+  // Net cash deposited = sum of RECORDED (non-reversed) deposits.
+  const totalPaid = po.payments
+    .filter((p) => p.status === 'RECORDED')
+    .reduce((acc, p) => acc.plus(p.amount), new Prisma.Decimal(0));
+  const balance = poTotal.minus(totalPaid);
+
+  const shipmentRows: ShipmentRow[] = po.shipments.map((s) => ({
+    id: s.id,
+    shipmentStatus: s.shipmentStatus,
+    trackingNumber: s.trackingNumber,
+    carrierName: s.carrierName,
+    trackingUrl: s.trackingUrl,
+    cartonCount: s.cartonCount,
+    totalWeight: s.totalWeight ? s.totalWeight.toString() : null,
+    weightUnit: s.weightUnit,
+    estimatedArrival: s.estimatedArrival,
+    notes: s.notes,
+  }));
+
+  const shipmentRollup = rollupShipmentStatus(
+    po.shipments.map((s) => s.shipmentStatus),
+  );
+
+  const paymentRows: PoPaymentRow[] = po.payments.map((p) => ({
+    id: p.id,
+    number: p.number,
+    paymentDate: p.paymentDate,
+    amount: p.amount.toString(),
+    method: p.method,
+    status: p.status,
+    reference: p.reference,
+    cashAccountCode: p.cashAccount?.code ?? null,
+    cashAccountName: p.cashAccount?.name ?? null,
+    appliedAmount: p.appliedAmount.toString(),
+    reversedReason: p.reversedReason,
+    applications: p.applications.map((a) => ({
+      id: a.id,
+      billId: a.bill.id,
+      billNumber: a.bill.number,
+      amount: a.amount.toString(),
+    })),
+  }));
+
+  const cashAccounts: CashAccountOption[] = allAccounts
+    .filter(
+      (a) => a.type === AccountType.ASSET || a.type === AccountType.LIABILITY,
+    )
+    .map((a) => ({ id: a.id, code: a.code, name: a.name }));
+
+  // Deposits can be recorded while the PO is live (not cancelled). DRAFT is
+  // unusual but allowed — operators sometimes wire a deposit before the PO
+  // is formally confirmed.
+  const canRecordPayment = po.status !== 'CANCELLED';
+
   return (
     <div className="space-y-6">
       <PurchaseOrderHeader
@@ -121,6 +208,7 @@ export default async function PurchaseOrderDetailPage({
           confirmedAt: po.confirmedAt,
           closedAt: po.closedAt,
           cancelledAt: po.cancelledAt,
+          shipmentRollup,
         }}
       />
 
@@ -143,6 +231,22 @@ export default async function PurchaseOrderDetailPage({
               notes: l.notes,
               imageUrl: resolveLineImageUrl(l.variant),
             }))}
+          />
+
+          <ShipmentsCard
+            purchaseOrderId={po.id}
+            shipments={shipmentRows}
+          />
+
+          <PoPaymentsCard
+            purchaseOrderId={po.id}
+            canRecord={canRecordPayment}
+            currency={po.currency ?? 'USD'}
+            poTotal={poTotal.toString()}
+            totalPaid={totalPaid.toString()}
+            balance={balance.toString()}
+            cashAccounts={cashAccounts}
+            payments={paymentRows}
           />
 
           <PurchaseOrderInfoCard

@@ -34,6 +34,7 @@ import {
   createDraftBillFromReceiptTx,
   hasConfirmedBillForReceiptTx,
 } from '@/server/services/bills';
+import { applyPoPaymentsToBillTx } from '@/server/services/poPayments';
 import { post } from '@/lib/gl/post';
 
 const RECEIPT_SEQUENCE_NAME = 'receipt';
@@ -402,6 +403,12 @@ export async function postReceipt(
     const draftBill = await createDraftBillFromReceiptTx(tx, id, ctx);
     if (draftBill != null) {
       await confirmBillTx(tx, draftBill.id, ctx);
+      // PO direct-payment slice: once the bill is confirmed, consume any
+      // unapplied deposits on the PO(s) it links to (oldest-first, split-
+      // capable). DR 2010 AP / CR 1510 per applied deposit, in this same
+      // transaction so the receipt post + bill confirm + deposit apply are
+      // atomic. No-op when the PO carries no unapplied deposits.
+      await applyPoPaymentsToBillTx(tx, draftBill.id, ctx);
     }
 
     // Re-read with linked movements for the response.

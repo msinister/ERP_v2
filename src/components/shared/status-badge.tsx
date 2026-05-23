@@ -25,6 +25,7 @@ import { formatStatusLabel } from '@/lib/format';
 export type StatusEntityType =
   | 'SalesOrder'
   | 'PurchaseOrder'
+  | 'PoShipment'
   | 'Bill'
   | 'BillPaymentStatus'
   | 'CreditMemo'
@@ -78,6 +79,14 @@ const STATUS_TONES: Record<StatusEntityType, Record<string, StatusTone>> = {
     PARTIALLY_RECEIVED: 'yellow',
     CLOSED: 'blue',
     CANCELLED: 'outline',
+  },
+  // Parallel shipment-tracking dimension on a PO (not the PO lifecycle).
+  // Progression PAID → IN_PRODUCTION → IN_TRANSIT → DELIVERED.
+  PoShipment: {
+    PAID: 'grey',
+    IN_PRODUCTION: 'yellow',
+    IN_TRANSIT: 'yellow',
+    DELIVERED: 'blue',
   },
   Bill: {
     DRAFT: 'grey',
@@ -149,6 +158,12 @@ const LABEL_OVERRIDES: Partial<
     UNPAID: 'Unpaid',
     PARTIAL: 'Partially paid',
     PAID: 'Paid',
+  },
+  PoShipment: {
+    PAID: 'Paid',
+    IN_PRODUCTION: 'In Production',
+    IN_TRANSIT: 'In Transit',
+    DELIVERED: 'Delivered',
   },
 };
 

@@ -117,6 +117,16 @@ enum AuditAction {
   PERIOD_REOPENED
   MANUAL_JE_POSTED
   RECONCILIATION_RUN
+  // PO shipment-tracking + PO direct-payment slice. PO_PAYMENT_RECORDED /
+  // _REVERSED mirror the BILL_PAYMENT_* pair (deposit cash-out + its
+  // reversal). PO_PAYMENT_APPLIED fires when a deposit is consumed against
+  // a bill (DR 2010 AP / CR 1510 Vendor Deposits) — at receipt time or on
+  // void-unwind. Shipment create/update/delete reuse the generic
+  // CREATE/UPDATE/DELETE actions (no GL effect — nothing domain-specific
+  // to filter on).
+  PO_PAYMENT_RECORDED
+  PO_PAYMENT_REVERSED
+  PO_PAYMENT_APPLIED
 }
 
 enum InvoiceStatus {
@@ -838,6 +848,7 @@ model Vendor {
   bills          Bill[]
   billPayments   BillPayment[]
   vendorCredits  VendorCredit[]
+  poPayments     PoPayment[]
 
   @@index([type])
   @@index([active, deletedAt])
@@ -870,6 +881,8 @@ model PurchaseOrder {
   vendor    Vendor              @relation(fields: [vendorId], references: [id])
   lines     PurchaseOrderLine[]
   billLinks BillPurchaseOrder[]
+  shipments PoShipment[]
+  payments  PoPayment[]
 
   @@index([vendorId, status])
   @@index([status, expectedReceiveDate])
@@ -1961,6 +1974,7 @@ model GlAccount {
   billLines            BillLine[]
   billPayments         BillPayment[]
   payments             Payment[]
+  poPayments           PoPayment[]
 
   @@index([type])
 }
@@ -1998,6 +2012,8 @@ model JournalEntry {
   landedCostAllocationLines LandedCostAllocationLine[]
   // Back-relation: Work Order completion events that posted this JE.
   workOrderCompletions      WorkOrderCompletion[]
+  // Back-relation: PoPayment rows whose deposit JE is recorded here.
+  poPayments                PoPayment[]
 
   @@index([entityType, entityId])
   @@index([postedAt])
@@ -2172,6 +2188,10 @@ model Bill {
   // (amountPaid + amountCredited) >= total → PAID; > 0 → PARTIAL.
   amountPaid      Decimal           @default(0) @db.Decimal(18, 5)
   amountCredited  Decimal           @default(0) @db.Decimal(18, 5)
+  // SUM of non-reversed PoPaymentApplication.amount pointing at this bill.
+  // PO deposits relieve AP just like a payment; folded into the settled
+  // total alongside amountPaid + amountCredited when deriving paymentStatus.
+  amountDeposited Decimal           @default(0) @db.Decimal(18, 5)
   currency        String?           @default("USD")
   notes           String?
   createdById     String?
@@ -2182,12 +2202,13 @@ model Bill {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
-  vendor             Vendor                    @relation(fields: [vendorId], references: [id])
-  lines              BillLine[]
-  payments           BillPayment[]
-  creditApplications VendorCreditApplication[]
-  receipts           BillReceipt[]
-  purchaseOrders     BillPurchaseOrder[]
+  vendor                Vendor                    @relation(fields: [vendorId], references: [id])
+  lines                 BillLine[]
+  payments              BillPayment[]
+  creditApplications    VendorCreditApplication[]
+  receipts              BillReceipt[]
+  purchaseOrders        BillPurchaseOrder[]
+  poPaymentApplications PoPaymentApplication[]
 
   @@index([vendorId, status])
   @@index([status, billDate])
@@ -2390,6 +2411,133 @@ model VendorCreditApplication {
 
   @@index([billId, reversedAt])
   @@index([vendorCreditId])
+}
+
+// =========================================================================
+// PO shipment tracking + PO direct payments — phase 6 extension.
+// Spec: feature brief "PO Shipment Tracking + PO Direct Payments".
+//
+// Two parallel concerns layered on top of the existing PO lifecycle
+// (Draft → Confirmed → PartiallyReceived → Closed), neither of which
+// changes that lifecycle:
+//
+//   PoShipment   — physical-logistics tracking. Many shipments per PO,
+//                  each with its own carrier / tracking / ETA + a status
+//                  (PAID → IN_PRODUCTION → IN_TRANSIT → DELIVERED). No GL
+//                  or inventory effect — receiving is still the Receipt
+//                  flow. The PO header shows a rolled-up status.
+//
+//   PoPayment    — money paid directly against a PO before a bill exists
+//                  (prepay / import deposits). Records a cash-out:
+//                  DR 1510 Vendor Deposits / CR <cashAccount>. When a bill
+//                  later auto-confirms from a receipt on the PO, unapplied
+//                  deposits auto-apply oldest-first (DR 2010 AP / CR 1510)
+//                  via PoPaymentApplication rows — mirroring the
+//                  VendorCredit ↔ VendorCreditApplication architecture.
+// =========================================================================
+
+enum PoShipmentStatus {
+  PAID
+  IN_PRODUCTION
+  IN_TRANSIT
+  DELIVERED
+}
+
+model PoShipment {
+  id               String           @id @default(cuid())
+  purchaseOrderId  String
+  shipmentStatus   PoShipmentStatus @default(IN_PRODUCTION)
+  trackingNumber   String?
+  carrierName      String?
+  trackingUrl      String?
+  cartonCount      Int?
+  totalWeight      Decimal?         @db.Decimal(18, 5)
+  weightUnit       String           @default("lbs")
+  estimatedArrival DateTime?
+  notes            String?
+  createdById      String?
+  deletedAt        DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+
+  @@index([purchaseOrderId])
+  @@index([deletedAt])
+}
+
+// A money-leaving event recorded directly against a PO (prepay / import
+// deposit), before any Bill exists. Mirrors BillPayment but credits a
+// deposit ASSET (1510 Vendor Deposits) instead of relieving AP. The
+// deposit is later consumed against bills via PoPaymentApplication rows.
+//
+// status / reversedAt mirror BillPayment: a void keeps the row (REVERSED)
+// rather than hard-deleting, preserving the audit + GL trail. appliedAmount
+// is a denorm of SUM(non-reversed applications.amount); a deposit is
+// "fully applied" when appliedAmount == amount.
+model PoPayment {
+  id              String         @id @default(cuid())
+  number          String         @unique // POPMT-YYYY-NNNNN via Sequence
+  purchaseOrderId String
+  // Denorm for vendor-deposit-history queries without a PO join.
+  vendorId        String
+  paymentDate     DateTime       @default(now())
+  amount          Decimal        @db.Decimal(18, 5)
+  // Nullable (a deposit may be logged before the method is known). Reuses
+  // the PaymentMethod enum for consistency with BillPayment / Payment.
+  method          PaymentMethod?
+  // Bank/asset (or credit-card liability) account the deposit was paid
+  // from. FK to GlAccount; service validates type ∈ {ASSET, LIABILITY}.
+  cashAccountId   String?
+  reference       String? // check #, wire ref, ACH trace, etc.
+  notes           String?
+  status          PaymentStatus  @default(RECORDED)
+  // SUM of non-reversed PoPaymentApplication.amount. Recompute helper in
+  // the service. isApplied is derived (appliedAmount > 0).
+  appliedAmount   Decimal        @default(0) @db.Decimal(18, 5)
+  // Convenience pointer to the deposit JE (the DR 1510 / CR cash post).
+  // The reversal + application JEs are found via (entityType, entityId).
+  journalEntryId  String?
+  reversedAt      DateTime?
+  reversedReason  String?
+  createdById     String?
+  deletedAt       DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  purchaseOrder PurchaseOrder          @relation(fields: [purchaseOrderId], references: [id])
+  vendor        Vendor                 @relation(fields: [vendorId], references: [id])
+  cashAccount   GlAccount?             @relation(fields: [cashAccountId], references: [id])
+  journalEntry  JournalEntry?          @relation(fields: [journalEntryId], references: [id])
+  applications  PoPaymentApplication[]
+
+  @@index([purchaseOrderId, status])
+  @@index([vendorId, paymentDate])
+  @@index([status, paymentDate])
+  @@index([deletedAt])
+}
+
+// Single source of truth for "this dollar of PO deposit was applied to
+// that dollar of bill." Mirrors VendorCreditApplication. Reversed apps are
+// kept (reversedAt set). Auto-created at receipt time when a bill confirms
+// on a PO carrying unapplied deposits; unwound when a deposit is voided.
+model PoPaymentApplication {
+  id          String    @id @default(cuid())
+  poPaymentId String
+  billId      String
+  amount      Decimal   @db.Decimal(18, 5)
+  appliedAt   DateTime  @default(now())
+  appliedById String?
+  reversedAt  DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  poPayment PoPayment @relation(fields: [poPaymentId], references: [id])
+  bill      Bill      @relation(fields: [billId], references: [id])
+
+  @@index([billId, reversedAt])
+  @@index([poPaymentId])
 }
 
 // =========================================================================

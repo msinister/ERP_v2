@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { Prisma } from '@/generated/tenant';
+import { Badge } from '@/components/ui/badge';
 import {
   Table,
   TableBody,
@@ -22,6 +23,12 @@ export type PurchaseOrderRowData = {
   status: string;
   lineCount: number;
   total: Prisma.Decimal;
+  // Rolled-up shipment status (null when the PO has no shipments).
+  shipmentRollup: string | null;
+  // Sum of RECORDED deposits, as a decimal string. hasPayments drives the
+  // "Prepaid" badge even when the total nets to a small value.
+  paid: string;
+  hasPayments: boolean;
 };
 
 export function PurchaseOrdersTable({
@@ -47,8 +54,10 @@ export function PurchaseOrdersTable({
             <TableHead>Order date</TableHead>
             <TableHead>Expected</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead>Shipment</TableHead>
             <TableHead className="text-right">Lines</TableHead>
             <TableHead className="text-right">Total</TableHead>
+            <TableHead className="text-right">Paid</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -97,11 +106,33 @@ export function PurchaseOrdersTable({
               <TableCell>
                 <StatusBadge entityType="PurchaseOrder" status={row.status} />
               </TableCell>
+              <TableCell>
+                {row.shipmentRollup ? (
+                  <StatusBadge
+                    entityType="PoShipment"
+                    status={row.shipmentRollup}
+                  />
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </TableCell>
               <TableCell className="text-right tabular-nums text-muted-foreground">
                 {row.lineCount}
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatCurrency(row.total)}
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                {row.hasPayments ? (
+                  <div className="flex items-center justify-end gap-1.5">
+                    <Badge variant="secondary" className="text-[10px]">
+                      Prepaid
+                    </Badge>
+                    <span>{formatCurrency(row.paid)}</span>
+                  </div>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
               </TableCell>
             </TableRow>
           ))}

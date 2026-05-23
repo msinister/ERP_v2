@@ -4,6 +4,7 @@ import { Prisma, PurchaseOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listPurchaseOrdersPaged } from '@/server/services/purchaseOrders';
 import { listVendors } from '@/server/services/vendors';
+import { rollupShipmentStatus } from '@/lib/po/shipmentRollup';
 import { Button } from '@/components/ui/button';
 import {
   PurchaseOrdersFilters,
@@ -86,6 +87,10 @@ export default async function PurchaseOrdersPage({
       (acc, l) => acc.plus(l.qtyOrdered.times(l.unitCost)),
       new Prisma.Decimal(0),
     );
+    const paid = po.payments.reduce(
+      (acc, p) => acc.plus(p.amount),
+      new Prisma.Decimal(0),
+    );
     return {
       id: po.id,
       number: po.number,
@@ -97,6 +102,11 @@ export default async function PurchaseOrdersPage({
       status: po.status,
       lineCount: po.lines.length,
       total,
+      shipmentRollup: rollupShipmentStatus(
+        po.shipments.map((s) => s.shipmentStatus),
+      ),
+      paid: paid.toString(),
+      hasPayments: po.payments.length > 0,
     };
   });
 

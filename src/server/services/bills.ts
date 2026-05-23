@@ -652,13 +652,14 @@ export async function cancelBill(
       return after;
     }
 
-    // CONFIRMED → CANCELLED: refuse if any payments/credits attached.
+    // CONFIRMED → CANCELLED: refuse if any payments/credits/deposits attached.
     if (
       before.amountPaid.greaterThan(0) ||
-      before.amountCredited.greaterThan(0)
+      before.amountCredited.greaterThan(0) ||
+      before.amountDeposited.greaterThan(0)
     ) {
       throw new Error(
-        'Cannot cancel a confirmed bill with applied payments or credits. Reverse those first, then cancel.',
+        'Cannot cancel a confirmed bill with applied payments, credits, or PO deposits. Reverse those first, then cancel.',
       );
     }
 
@@ -905,11 +906,15 @@ export async function softDeleteBill(
 
 // ---------------------------------------------------------------------------
 // recomputeBillDenorms — self-heal Bill.amountPaid + amountCredited +
-// paymentStatus from authoritative source rows.
+// amountDeposited + paymentStatus from authoritative source rows.
 //
 // amountPaid       = SUM(BillPayment.amount WHERE status=RECORDED)
 // amountCredited   = SUM(VendorCreditApplication.amount WHERE reversedAt IS NULL)
-// paymentStatus    = derived from (amountPaid + amountCredited) vs total
+// amountDeposited  = SUM(PoPaymentApplication.amount WHERE reversedAt IS NULL)
+// paymentStatus    = derived from (amountPaid + amountCredited + amountDeposited) vs total
+//
+// PO deposits relieve AP just like a payment (DR AP / CR 1510), so they
+// fold into the settled total alongside payments + vendor credits.
 //
 // Mirrors recomputeAmountPaidForInvoice on the AR side. Service-internal
 // helper — direct mutation of these fields by other paths is forbidden.
@@ -925,12 +930,16 @@ export async function recomputeBillDenormsTx(
   });
   if (!bill) return;
 
-  const [paymentAgg, creditAgg] = await Promise.all([
+  const [paymentAgg, creditAgg, depositAgg] = await Promise.all([
     tx.billPayment.aggregate({
       where: { billId, status: 'RECORDED' },
       _sum: { amount: true },
     }),
     tx.vendorCreditApplication.aggregate({
+      where: { billId, reversedAt: null },
+      _sum: { amount: true },
+    }),
+    tx.poPaymentApplication.aggregate({
       where: { billId, reversedAt: null },
       _sum: { amount: true },
     }),
@@ -943,8 +952,9 @@ export async function recomputeBillDenormsTx(
   // overpayment that should have triggered VC creation).
   const cappedPaid = amountPaid.greaterThan(bill.total) ? bill.total : amountPaid;
   const amountCredited = creditAgg._sum.amount ?? new Prisma.Decimal(0);
+  const amountDeposited = depositAgg._sum.amount ?? new Prisma.Decimal(0);
 
-  const settled = cappedPaid.plus(amountCredited);
+  const settled = cappedPaid.plus(amountCredited).plus(amountDeposited);
   let paymentStatus: 'UNPAID' | 'PARTIAL' | 'PAID' = 'UNPAID';
   // Only CONFIRMED bills can transition past UNPAID — DRAFT bills
   // shouldn't accept payments anyway, but defending here keeps the
@@ -962,6 +972,7 @@ export async function recomputeBillDenormsTx(
     data: {
       amountPaid: cappedPaid,
       amountCredited,
+      amountDeposited,
       paymentStatus,
     },
   });
