@@ -207,6 +207,7 @@ export function ProductsTable({
   const availableColumns = PRODUCT_COLUMNS.filter(
     (c) => !c.requiresCost || canViewCost,
   );
+  const colById = new Map(availableColumns.map((c) => [c.id, c]));
   const customizerColumns: CustomizableColumn[] = availableColumns.map((c) => ({
     id: c.id,
     label: c.label,
@@ -214,22 +215,34 @@ export function ProductsTable({
     locked: c.locked,
   }));
 
-  const { isVisible, toggleColumn, showImages, setShowImages } =
-    useTablePreferences({
-      prefKey: PREF_KEY,
-      columns: customizerColumns,
-      initial: initialPrefs,
-    });
+  const {
+    isVisible,
+    toggleColumn,
+    showImages,
+    setShowImages,
+    orderedColumnIds,
+    moveColumn,
+  } = useTablePreferences({
+    prefKey: PREF_KEY,
+    columns: customizerColumns,
+    initial: initialPrefs,
+  });
 
-  const visibleColumns = availableColumns.filter((c) => isVisible(c.id));
+  // Columns in the user's saved order (defaults when none saved), then the
+  // visible subset for the table body — both share the same ordering.
+  const orderedColumns = orderedColumnIds
+    .map((id) => colById.get(id))
+    .filter((c): c is ProductColumn => c != null);
+  const visibleColumns = orderedColumns.filter((c) => isVisible(c.id));
 
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
         <TableCustomizer
-          columns={customizerColumns}
+          columns={orderedColumns}
           isVisible={isVisible}
           onToggleColumn={toggleColumn}
+          onReorder={moveColumn}
           showImages={showImages}
           onToggleImages={setShowImages}
         />

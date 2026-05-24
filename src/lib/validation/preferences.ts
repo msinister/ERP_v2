@@ -8,9 +8,12 @@ import { z } from 'zod';
 // =============================================================================
 
 // A list-page table view: sparse column-visibility overrides (columnId →
-// bool; absent column falls back to the page's default) + image default.
+// bool; absent column falls back to the page's default), a display order
+// (column ids; unknown/missing ids are reconciled against the page's column
+// set at read time), + image default.
 export const tableViewPrefSchema = z.object({
   columns: z.record(z.string(), z.boolean()).optional(),
+  order: z.array(z.string()).optional(),
   showImages: z.boolean().optional(),
 });
 export type TableViewPref = z.infer<typeof tableViewPrefSchema>;
