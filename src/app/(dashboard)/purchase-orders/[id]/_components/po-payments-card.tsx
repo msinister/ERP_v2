@@ -259,6 +259,7 @@ export function PoPaymentsCard({
 
       <RecordPoPaymentDialog
         purchaseOrderId={purchaseOrderId}
+        balance={balance}
         cashAccounts={cashAccounts}
         open={recordOpen}
         onOpenChange={setRecordOpen}
@@ -330,11 +331,14 @@ function PaymentStatusBadge({ status }: { status: string }) {
 
 function RecordPoPaymentDialog({
   purchaseOrderId,
+  balance,
   cashAccounts,
   open,
   onOpenChange,
 }: {
   purchaseOrderId: string;
+  // PO balance (total − recorded deposits), decimal string.
+  balance: string;
   cashAccounts: CashAccountOption[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -352,13 +356,22 @@ function RecordPoPaymentDialog({
   useEffect(() => {
     if (!open) return;
     setErrors({});
-    setAmount('');
+    // Pre-fill with the remaining balance (paying the PO off) when there's
+    // one; leave blank if already settled. The operator can change it.
+    setAmount(Number(balance) > 0 ? balance : '');
     setMethod('WIRE');
     setCashAccountId(cashAccounts[0]?.id ?? '');
     setPaymentDate(new Date().toISOString().slice(0, 10));
     setReference('');
     setNotes('');
-  }, [open, cashAccounts]);
+  }, [open, cashAccounts, balance]);
+
+  // Display-only running figures (the service does the authoritative Decimal
+  // math on submit). amtN is null until a valid positive amount is typed.
+  const balanceN = Number(balance);
+  const amtN = isPositiveDecimalInput(amount) ? Number(amount) : null;
+  const afterBalance = amtN != null ? balanceN - amtN : null;
+  const overpaying = amtN != null && Number.isFinite(balanceN) && amtN > balanceN;
 
   function submit() {
     const next: Partial<Record<string, string>> = {};
@@ -419,6 +432,13 @@ function RecordPoPaymentDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="space-y-3">
+          <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2">
+            <span className="text-sm text-muted-foreground">PO Balance</span>
+            <span className="text-base font-semibold tabular-nums">
+              {formatCurrency(balance)}
+            </span>
+          </div>
+
           <Field>
             <FieldLabel htmlFor="dep-amount">Amount</FieldLabel>
             <Input
@@ -431,6 +451,18 @@ function RecordPoPaymentDialog({
             <FieldError
               errors={[errors.amount ? { message: errors.amount } : undefined]}
             />
+            {afterBalance != null ? (
+              <p className="text-xs text-muted-foreground">
+                Balance after payment:{' '}
+                <span className="tabular-nums">{formatCurrency(afterBalance)}</span>
+              </p>
+            ) : null}
+            {overpaying ? (
+              <p className="text-xs text-amber-600">
+                Overpaying by {formatCurrency(amtN! - balanceN)} — the excess
+                sits as a prepaid balance on this PO.
+              </p>
+            ) : null}
           </Field>
 
           <div className="grid grid-cols-2 gap-3">

@@ -213,6 +213,15 @@ export function RecordCustomerPaymentDialog({
     });
   }
 
+  // Display-only running figures (the service does the authoritative Decimal
+  // math on submit). Only meaningful when bound to an invoice.
+  const invoiceBalanceN = targetInvoice
+    ? Number(targetInvoice.remainingBalance)
+    : null;
+  const amtN = isPositiveDecimalInput(amount) ? Number(amount) : null;
+  const afterBalance =
+    invoiceBalanceN != null && amtN != null ? invoiceBalanceN - amtN : null;
+
   const overpaying =
     targetInvoice != null &&
     isPositiveDecimalInput(amount) &&
@@ -240,6 +249,17 @@ export function RecordCustomerPaymentDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="space-y-3">
+          {targetInvoice ? (
+            <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2">
+              <span className="text-sm text-muted-foreground">
+                Invoice Balance
+              </span>
+              <span className="text-base font-semibold tabular-nums">
+                {formatCurrency(targetInvoice.remainingBalance)}
+              </span>
+            </div>
+          ) : null}
+
           <Field>
             <FieldLabel htmlFor="cust-pay-amount">Amount</FieldLabel>
             <Input
@@ -252,10 +272,12 @@ export function RecordCustomerPaymentDialog({
             <FieldError
               errors={[errors.amount ? { message: errors.amount } : undefined]}
             />
-            {targetInvoice ? (
+            {afterBalance != null ? (
               <p className="text-xs text-muted-foreground">
-                Remaining balance:{' '}
-                {formatCurrency(targetInvoice.remainingBalance)}
+                Balance after payment:{' '}
+                <span className="tabular-nums">
+                  {formatCurrency(afterBalance)}
+                </span>
               </p>
             ) : null}
             {overpaying ? (
