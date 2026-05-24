@@ -35,17 +35,29 @@ export function useProductImageToggle(): {
   toggle: () => void;
   set: (next: boolean) => void;
 } {
-  // useState's initializer runs once on mount. On SSR `readInitial` returns
-  // `true` (default); the inline script may have already applied the hide
-  // class server-side-render result is overridden client-side by the
-  // useEffect below if needed.
-  const [show, setShow] = useState<boolean>(() => readInitial());
+  // Consistent default on the server AND the client's first render so
+  // hydration matches (reading localStorage in the initializer is what
+  // caused the SSR-vs-client mismatch). The persisted preference is read
+  // after mount below; the inline blocking script in layout.tsx has already
+  // applied the correct <html> class pre-hydration, so there's no content
+  // flicker in the meantime.
+  const [show, setShow] = useState<boolean>(true);
+  const [hydrated, setHydrated] = useState(false);
 
-  // Sync the <html> class + localStorage with the React state.
+  // Read the stored preference once, after the first client render.
   useEffect(() => {
+    setShow(readInitial());
+    setHydrated(true);
+  }, []);
+
+  // Sync the <html> class + localStorage with state — but only after we've
+  // read the stored preference, so the first commit (default `true`) never
+  // momentarily clobbers the class the blocking script already set.
+  useEffect(() => {
+    if (!hydrated) return;
     applyClass(show);
     window.localStorage.setItem(STORAGE_KEY, String(show));
-  }, [show]);
+  }, [show, hydrated]);
 
   return {
     show,

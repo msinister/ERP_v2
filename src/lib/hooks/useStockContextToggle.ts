@@ -39,12 +39,29 @@ export function useStockContextToggle(): {
   toggle: () => void;
   set: (next: boolean) => void;
 } {
-  const [show, setShow] = useState<boolean>(() => readInitial());
+  // Consistent default on the server AND the client's first render so
+  // hydration matches (reading localStorage in the initializer is what
+  // caused the SSR-vs-client mismatch). The persisted preference is read
+  // after mount below; the inline blocking script in layout.tsx has already
+  // applied the correct <html> class pre-hydration, so there's no content
+  // flicker in the meantime.
+  const [show, setShow] = useState<boolean>(true);
+  const [hydrated, setHydrated] = useState(false);
 
+  // Read the stored preference once, after the first client render.
   useEffect(() => {
+    setShow(readInitial());
+    setHydrated(true);
+  }, []);
+
+  // Sync the <html> class + localStorage with state — but only after we've
+  // read the stored preference, so the first commit (default `true`) never
+  // momentarily clobbers the class the blocking script already set.
+  useEffect(() => {
+    if (!hydrated) return;
     applyClass(show);
     window.localStorage.setItem(STORAGE_KEY, String(show));
-  }, [show]);
+  }, [show, hydrated]);
 
   return {
     show,

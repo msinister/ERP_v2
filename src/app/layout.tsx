@@ -29,12 +29,19 @@ try {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={cn("font-sans", geist.variable)}>
+    // suppressHydrationWarning: the blocking script below adds hide-*
+    // classes to <html> BEFORE React hydrates, so <html>'s className
+    // legitimately differs between the server HTML and the hydrating client.
+    // React owns this element's className, so without this it warns on every
+    // load where a toggle is off. Scoped to <html>'s own attributes —
+    // children still hydrate and report mismatches normally.
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={cn("font-sans", geist.variable)}
+    >
       <head>
         <script
-          // suppressHydrationWarning here is unnecessary — this script
-          // mutates <html>, not the children React owns; nothing the
-          // server renders inside <body> depends on the class.
           dangerouslySetInnerHTML={{ __html: TABLE_TOGGLE_FLICKER_SCRIPT }}
         />
       </head>
