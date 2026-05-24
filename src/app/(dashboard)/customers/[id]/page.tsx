@@ -18,6 +18,7 @@ import { PricingTab } from './_tabs/pricing';
 import { DocumentsTab } from './_tabs/documents';
 import { ActivityTab } from './_tabs/activity';
 import { ArTab } from './_tabs/ar';
+import { CustomerLedgerTab } from './_tabs/ledger';
 import { TabSkeleton } from './_tabs/tab-shell';
 
 // Always live (no caching) — customer balances and activity drive
@@ -57,6 +58,7 @@ export default async function CustomerDetailPage({
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
           <TabsTrigger value="ar">AR</TabsTrigger>
+          <TabsTrigger value="ledger">Ledger</TabsTrigger>
         </TabsList>
 
         {/* Each panel is its own Suspense boundary so slow tabs (AR,
@@ -95,6 +97,15 @@ export default async function CustomerDetailPage({
         <TabsContent value="ar">
           <Suspense fallback={<TabSkeleton rows={4} />}>
             <ArTab
+              customerId={customer.id}
+              customerName={customer.name}
+              searchParams={sp}
+            />
+          </Suspense>
+        </TabsContent>
+        <TabsContent value="ledger">
+          <Suspense fallback={<TabSkeleton rows={5} />}>
+            <CustomerLedgerTab
               customerId={customer.id}
               customerName={customer.name}
               searchParams={sp}

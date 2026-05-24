@@ -16,6 +16,7 @@ import { ProductsTab } from './_tabs/products';
 import { PaymentMethodsTab } from './_tabs/payment-methods';
 import { PosTab } from './_tabs/pos';
 import { ApTab } from './_tabs/ap';
+import { VendorLedgerTab } from './_tabs/ledger';
 import { TabSkeleton } from './_tabs/tab-shell';
 
 // Always live (no caching) — vendor balances and contact lists drive
@@ -25,10 +26,16 @@ export const revalidate = 0;
 
 export default async function VendorDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  // Ledger tab uses namespaced URL params (ledgerFrom/ledgerTo/ledgerType/
+  // ledgerSort/ledgerSkip). Forward them so its server fetch sees the
+  // current filter/page.
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
+  const sp = await searchParams;
   const vendor = await getVendor(db, id);
   if (!vendor) notFound();
 
@@ -45,6 +52,7 @@ export default async function VendorDetailPage({
           <TabsTrigger value="payment-methods">Payment methods</TabsTrigger>
           <TabsTrigger value="pos">POs</TabsTrigger>
           <TabsTrigger value="ap">AP</TabsTrigger>
+          <TabsTrigger value="ledger">Ledger</TabsTrigger>
         </TabsList>
 
         {/* Each panel is its own Suspense boundary so slow tabs stream
@@ -82,6 +90,15 @@ export default async function VendorDetailPage({
         <TabsContent value="ap">
           <Suspense fallback={<TabSkeleton rows={4} />}>
             <ApTab vendorId={vendor.id} />
+          </Suspense>
+        </TabsContent>
+        <TabsContent value="ledger">
+          <Suspense fallback={<TabSkeleton rows={5} />}>
+            <VendorLedgerTab
+              vendorId={vendor.id}
+              vendorName={vendor.name}
+              searchParams={sp}
+            />
           </Suspense>
         </TabsContent>
       </Tabs>
