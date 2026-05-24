@@ -19,6 +19,7 @@ import {
   PaymentsAppliedCard,
   type AppliedRow,
 } from './_components/payments-applied-card';
+import { OrderDepositCard } from './_components/order-deposit-card';
 import { AvailableFundsCard } from './_components/available-funds-card';
 import {
   JournalEntriesCard,
@@ -462,11 +463,14 @@ export default async function SalesOrderDetailPage({
             }
           />
 
-          {/* Payments & credits applied — only when the SO has a
-              live invoice link. Hosts the Record Payment button for
-              CLOSED orders and lists every application (incl.
-              reversed). After a void-on-reopen the FK is null and
-              the card is omitted entirely. */}
+          {/* Payments & credits. With a live invoice (CLOSED) → the
+              invoice-bound card that lists applications + hosts the
+              Record Payment button. Pre-invoice CONFIRMED / DISPATCHED
+              orders → a deposit card so operators can take a prepayment
+              (customer-level credit) before the invoice exists; it applies
+              on close. After a void-on-reopen the invoice FK is null and
+              the order is back in CONFIRMED/DISPATCHED, so the deposit card
+              shows there too. */}
           {so.invoice ? (
             <PaymentsAppliedCard
               invoice={{
@@ -483,6 +487,11 @@ export default async function SalesOrderDetailPage({
               customerId={so.customer.id}
               customerName={so.customer.name}
               rows={appliedRows}
+            />
+          ) : so.status === 'CONFIRMED' || so.status === 'DISPATCHED' ? (
+            <OrderDepositCard
+              customerId={so.customer.id}
+              customerName={so.customer.name}
             />
           ) : null}
 
