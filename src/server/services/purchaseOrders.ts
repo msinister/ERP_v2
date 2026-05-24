@@ -531,9 +531,32 @@ export type PurchaseOrderListFilters = {
   // Substring match on PO number (case-insensitive). Numbers look like
   // PO-2026-00001 so partial matches are useful.
   q?: string;
+  // Optional sort. Only 'balance' is supported as a non-default sort; it's
+  // a computed value (line total − recorded payments), so it can't be a DB
+  // orderBy and is sorted in-memory across all matching rows. Omitted →
+  // default createdAt desc (DB-paginated).
+  sort?: 'balance';
+  dir?: 'asc' | 'desc';
   skip?: number;
   take?: number;
 };
+
+// Line total (Σ qty × unit cost) minus recorded payments/deposits. Shared by
+// the in-memory balance sort here and the per-row display in page.tsx.
+export function purchaseOrderBalance(po: {
+  lines: { qtyOrdered: Prisma.Decimal; unitCost: Prisma.Decimal }[];
+  payments: { amount: Prisma.Decimal }[];
+}): Prisma.Decimal {
+  const total = po.lines.reduce(
+    (acc, l) => acc.plus(l.qtyOrdered.times(l.unitCost)),
+    new Prisma.Decimal(0),
+  );
+  const paid = po.payments.reduce(
+    (acc, p) => acc.plus(p.amount),
+    new Prisma.Decimal(0),
+  );
+  return total.minus(paid);
+}
 
 function purchaseOrderWhere(
   filters: Omit<PurchaseOrderListFilters, 'skip' | 'take'>,
@@ -573,24 +596,44 @@ export async function listPurchaseOrdersPaged(
   >;
   total: number;
 }> {
-  const { skip = 0, take = 100, ...rest } = filters;
+  const { skip = 0, take = 100, sort, dir = 'desc', ...rest } = filters;
   const where = purchaseOrderWhere(rest);
+
+  const include = {
+    lines: { where: { deletedAt: null } },
+    vendor: { select: { id: true, code: true, name: true } },
+    // Shipment-status rollup + prepaid badge for the list table.
+    shipments: {
+      where: { deletedAt: null },
+      select: { shipmentStatus: true },
+    },
+    payments: {
+      where: { deletedAt: null, status: 'RECORDED' },
+      select: { amount: true },
+    },
+  } satisfies Prisma.PurchaseOrderInclude;
+
+  // Balance is computed (line total − recorded payments), so it can't be a
+  // DB orderBy. Sort it in-memory across ALL matching rows, then paginate.
+  // Fine at pilot scale; revisit with a denormalized balance column if the
+  // PO table grows very large.
+  if (sort === 'balance') {
+    const all = await db.purchaseOrder.findMany({
+      where,
+      include,
+      orderBy: { createdAt: 'desc' },
+    });
+    all.sort((a, b) => {
+      const cmp = purchaseOrderBalance(a).comparedTo(purchaseOrderBalance(b));
+      return dir === 'asc' ? cmp : -cmp;
+    });
+    return { rows: all.slice(skip, skip + take), total: all.length };
+  }
+
   const [rows, total] = await Promise.all([
     db.purchaseOrder.findMany({
       where,
-      include: {
-        lines: { where: { deletedAt: null } },
-        vendor: { select: { id: true, code: true, name: true } },
-        // Shipment-status rollup + prepaid badge for the list table.
-        shipments: {
-          where: { deletedAt: null },
-          select: { shipmentStatus: true },
-        },
-        payments: {
-          where: { deletedAt: null, status: 'RECORDED' },
-          select: { amount: true },
-        },
-      },
+      include,
       orderBy: { createdAt: 'desc' },
       skip,
       take,

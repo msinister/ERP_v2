@@ -61,6 +61,10 @@ export default async function PurchaseOrdersPage({
   const dateTo = parseDateInput(pickString(sp.dateTo), true);
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
+  // Only 'balance' is a non-default sort (computed; sorted in-memory by the
+  // service). Anything else falls through to the default createdAt desc.
+  const sort = pickString(sp.sort) === 'balance' ? ('balance' as const) : undefined;
+  const dir = pickString(sp.dir) === 'asc' ? ('asc' as const) : ('desc' as const);
 
   const [vendors, page] = await Promise.all([
     // Active vendors only in the filter dropdown — historical POs for
@@ -72,6 +76,8 @@ export default async function PurchaseOrdersPage({
       vendorId,
       dateFrom,
       dateTo,
+      sort,
+      dir,
       skip,
       take,
     }),
@@ -107,6 +113,8 @@ export default async function PurchaseOrdersPage({
       ),
       paid: paid.toString(),
       hasPayments: po.payments.length > 0,
+      // Remaining balance = line total − recorded payments/deposits.
+      balance: total.minus(paid).toString(),
     };
   });
 

@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/shared/status-badge';
 import { formatCurrency } from '@/lib/format';
+import { BalanceSortHeader } from './balance-sort-header';
 
 export type PurchaseOrderRowData = {
   id: string;
@@ -29,6 +30,8 @@ export type PurchaseOrderRowData = {
   // "Prepaid" badge even when the total nets to a small value.
   paid: string;
   hasPayments: boolean;
+  // Remaining balance (line total − recorded payments), decimal string.
+  balance: string;
 };
 
 export function PurchaseOrdersTable({
@@ -57,6 +60,9 @@ export function PurchaseOrdersTable({
             <TableHead>Shipment</TableHead>
             <TableHead className="text-right">Lines</TableHead>
             <TableHead className="text-right">Total</TableHead>
+            <TableHead className="text-right">
+              <BalanceSortHeader />
+            </TableHead>
             <TableHead className="text-right">Paid</TableHead>
           </TableRow>
         </TableHeader>
@@ -121,6 +127,17 @@ export function PurchaseOrdersTable({
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatCurrency(row.total)}
+              </TableCell>
+              <TableCell
+                className={
+                  'text-right tabular-nums ' +
+                  // Fully paid (balance <= 0) reads green; otherwise normal.
+                  (Number(row.balance) <= 0
+                    ? 'text-emerald-600 dark:text-emerald-500'
+                    : '')
+                }
+              >
+                {formatCurrency(row.balance)}
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {row.hasPayments ? (
