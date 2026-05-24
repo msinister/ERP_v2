@@ -329,6 +329,10 @@ model Product {
   longDescription  String?
   brand            String?
   category         String?
+  // Manufacturer part number — a product-level catalog attribute. Distinct
+  // from PurchaseOrderLine.manufacturerPartNumber (which is per-PO-line);
+  // this is the canonical MPN shown on the product list + detail.
+  manufacturerPartNumber String?
   type             ProductType @default(SIMPLE)
   tracksInventory  Boolean     @default(true)
   basePrice        Decimal?    @db.Decimal(18, 5)
@@ -1597,6 +1601,25 @@ model Setting {
   value     Json
   updatedAt DateTime @updatedAt
   updatedBy String?
+}
+
+// Per-user UI preferences (e.g. list-page column visibility + image
+// default). Mirrors Setting's key/value-JSON shape but scoped per user.
+// userId is a loose reference (no FK) — same convention as AuditLog — so a
+// preference row is independent of the auth-owned User lifecycle. Each
+// (userId, key) holds one JSON blob; the shape is validated per-key in the
+// service layer. Reusable across list pages via distinct keys
+// ("table.products", "table.vendors", …).
+model UserPreference {
+  id        String   @id @default(cuid())
+  userId    String
+  key       String
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, key])
+  @@index([userId])
 }
 
 // Invoice generated automatically when a SalesOrder closes.

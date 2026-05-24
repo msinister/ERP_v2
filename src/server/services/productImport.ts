@@ -28,6 +28,7 @@ export type ImportRowInput = {
   longDescription?: string;
   brand?: string;
   category?: string;
+  manufacturerPartNumber?: string;
   basePrice?: string;
   weight?: string;
   weightUnit?: string;
@@ -240,6 +241,7 @@ export async function importProductRows(
         longDescription: clean(row.longDescription),
         brand: clean(row.brand),
         category: clean(row.category),
+        manufacturerPartNumber: clean(row.manufacturerPartNumber),
         basePrice: cleanNumber(row.basePrice),
         weight: cleanNumber(row.weight),
         weightUnit: parseWeightUnit(row.weightUnit),

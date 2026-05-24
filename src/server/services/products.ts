@@ -1,4 +1,4 @@
-import { AuditAction, Prisma } from '@/generated/tenant';
+import { AuditAction, Prisma, PurchaseOrderStatus } from '@/generated/tenant';
 import type {
   PrismaClient,
   Product,
@@ -135,6 +135,9 @@ export type ProductListFilters = {
   category?: string;
   // Filter to products carrying ANY of these tag ids.
   tagIds?: string[];
+  // Compute blended WAC per product. Gated by the caller on
+  // products.view_cost — off by default so cost never leaks.
+  includeCost?: boolean;
   skip?: number;
   take?: number;
 };
@@ -156,6 +159,13 @@ export type ProductListRow = Product & {
   // inventory rows — the list shows one representative bin.
   vendorName: string | null;
   binLocation: string | null;
+  // Remaining qty incoming on open POs (CONFIRMED + PARTIALLY_RECEIVED),
+  // summed across the product's variants. Σ max(qtyOrdered − qtyReceived, 0).
+  qtyOnPo: Prisma.Decimal;
+  // Blended weighted-average cost across the product's variants/warehouses:
+  // Σ(qtyRemaining × unitCost) / Σ(qtyRemaining). null when nothing on hand
+  // OR when the caller didn't request cost (includeCost=false).
+  wac: Prisma.Decimal | null;
 };
 
 function productWhere(
@@ -219,7 +229,7 @@ export async function listProductsPaged(
   db: PrismaClient,
   filters: ProductListFilters = {},
 ): Promise<{ rows: ProductListRow[]; total: number }> {
-  const { skip = 0, take = 25, ...rest } = filters;
+  const { skip = 0, take = 25, includeCost = false, ...rest } = filters;
   const where = productWhere(rest);
   const [products, total] = await Promise.all([
     db.product.findMany({
@@ -265,6 +275,77 @@ export async function listProductsPaged(
   ]);
 
   const zero = new Prisma.Decimal(0);
+
+  // Map every page variant back to its product so cross-table aggregates
+  // (Qty on PO, WAC) can be summed per product in two batched queries.
+  const variantToProduct = new Map<string, string>();
+  for (const p of products) {
+    for (const v of p.variants) variantToProduct.set(v.id, p.id);
+  }
+  const variantIds = [...variantToProduct.keys()];
+
+  // Qty on PO — remaining (qtyOrdered − qtyReceived, floored per line) on
+  // open POs (CONFIRMED + PARTIALLY_RECEIVED).
+  const qtyOnPoByProduct = new Map<string, Prisma.Decimal>();
+  if (variantIds.length > 0) {
+    const poLines = await db.purchaseOrderLine.findMany({
+      where: {
+        variantId: { in: variantIds },
+        deletedAt: null,
+        purchaseOrder: {
+          deletedAt: null,
+          status: {
+            in: [
+              PurchaseOrderStatus.CONFIRMED,
+              PurchaseOrderStatus.PARTIALLY_RECEIVED,
+            ],
+          },
+        },
+      },
+      select: { variantId: true, qtyOrdered: true, qtyReceived: true },
+    });
+    for (const l of poLines) {
+      const pid = variantToProduct.get(l.variantId);
+      if (!pid) continue;
+      const remaining = l.qtyOrdered.minus(l.qtyReceived);
+      const add = remaining.greaterThan(0) ? remaining : zero;
+      qtyOnPoByProduct.set(pid, (qtyOnPoByProduct.get(pid) ?? zero).plus(add));
+    }
+  }
+
+  // Blended WAC per product — only when cost is requested (permission-gated
+  // by the caller). Σ(qtyRemaining × unitCost) / Σ(qtyRemaining) over live
+  // FIFO layers across the product's variants/warehouses.
+  const wacByProduct = new Map<string, Prisma.Decimal | null>();
+  if (includeCost && variantIds.length > 0) {
+    const layers = await db.fifoLayer.findMany({
+      where: {
+        variantId: { in: variantIds },
+        deletedAt: null,
+        qtyRemaining: { gt: zero },
+      },
+      select: { variantId: true, qtyRemaining: true, unitCost: true },
+    });
+    const valByProduct = new Map<string, Prisma.Decimal>();
+    const qtyByProduct = new Map<string, Prisma.Decimal>();
+    for (const lyr of layers) {
+      const pid = variantToProduct.get(lyr.variantId);
+      if (!pid) continue;
+      valByProduct.set(
+        pid,
+        (valByProduct.get(pid) ?? zero).plus(lyr.qtyRemaining.times(lyr.unitCost)),
+      );
+      qtyByProduct.set(pid, (qtyByProduct.get(pid) ?? zero).plus(lyr.qtyRemaining));
+    }
+    for (const p of products) {
+      const q = qtyByProduct.get(p.id);
+      wacByProduct.set(
+        p.id,
+        q && q.greaterThan(0) ? valByProduct.get(p.id)!.dividedBy(q) : null,
+      );
+    }
+  }
+
   const rows: ProductListRow[] = products.map((p) => {
     let onHand = zero;
     let reserved = zero;
@@ -298,6 +379,8 @@ export async function listProductsPaged(
       tags: p.tags.map((pt) => pt.tag),
       vendorName,
       binLocation,
+      qtyOnPo: qtyOnPoByProduct.get(p.id) ?? zero,
+      wac: includeCost ? (wacByProduct.get(p.id) ?? null) : null,
     };
   });
 

@@ -45,6 +45,7 @@ export default async function EditProductPage({
     type: product.type,
     brand: product.brand ?? '',
     category: product.category ?? '',
+    manufacturerPartNumber: product.manufacturerPartNumber ?? '',
     basePrice: product.basePrice?.toString() ?? '',
     tracksInventory: product.tracksInventory,
     active: product.active,

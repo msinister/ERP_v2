@@ -8,6 +8,7 @@ export type ProductFieldKey =
   | 'longDescription'
   | 'brand'
   | 'category'
+  | 'manufacturerPartNumber'
   | 'basePrice'
   | 'weight'
   | 'weightUnit'
@@ -38,6 +39,7 @@ export const PRODUCT_FIELDS: ProductFieldDef[] = [
   { key: 'longDescription', label: 'Long description', aliases: ['longdescription', 'longdesc', 'description', 'desc', 'details'] },
   { key: 'brand', label: 'Brand', aliases: ['brand', 'manufacturer', 'make'] },
   { key: 'category', label: 'Category', aliases: ['category', 'cat', 'group', 'department'] },
+  { key: 'manufacturerPartNumber', label: 'MPN', aliases: ['mpn', 'manufacturerpartnumber', 'manufacturerpart', 'mfgpartnumber', 'mfgpart', 'mfrpartnumber', 'mfrpart'] },
   { key: 'basePrice', label: 'Base price', aliases: ['baseprice', 'price', 'unitprice', 'listprice', 'msrp', 'retailprice'] },
   { key: 'weight', label: 'Weight', aliases: ['weight', 'wt'] },
   { key: 'weightUnit', label: 'Weight unit (lb/kg)', aliases: ['weightunit', 'wtunit', 'weightuom'] },

@@ -61,6 +61,11 @@ export const PERMISSION_GROUPS = [
       { key: 'products.create', label: 'Create' },
       { key: 'products.edit', label: 'Edit' },
       { key: 'products.delete', label: 'Delete' },
+      {
+        key: 'products.view_cost',
+        label: 'View cost data',
+        hint: 'See WAC / cost / margin columns on product screens.',
+      },
     ],
   },
   {

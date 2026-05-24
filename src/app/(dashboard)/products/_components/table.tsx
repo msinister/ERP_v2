@@ -1,5 +1,7 @@
+'use client';
+
+import type { ReactNode } from 'react';
 import Link from 'next/link';
-import type { Prisma } from '@/generated/tenant';
 import {
   Table,
   TableBody,
@@ -11,8 +13,18 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency } from '@/lib/format';
 import { ProductThumbnail } from '@/components/shared/product-thumbnail';
-import { ProductImageToggle } from '@/components/shared/product-image-toggle';
+import { TableCustomizer } from '@/components/shared/table-customizer';
+import {
+  useTablePreferences,
+  type CustomizableColumn,
+  type TableViewPrefValue,
+} from '@/components/shared/use-table-preferences';
 
+// Money/qty arrive as decimal strings (Decimal.toString()) so nothing
+// non-serializable crosses the server → client boundary. createdAt stays a
+// Date (serializes fine) and is formatted UTC. wac is present only when the
+// caller had products.view_cost; otherwise it's null and the column option
+// is absent from the customizer.
 export type ProductRowData = {
   id: string;
   sku: string;
@@ -20,121 +32,255 @@ export type ProductRowData = {
   brand: string | null;
   vendorName: string | null;
   category: string | null;
+  manufacturerPartNumber: string | null;
   tags: Array<{ id: string; name: string }>;
   binLocation: string | null;
-  basePrice: Prisma.Decimal | null;
-  onHand: Prisma.Decimal;
-  available: Prisma.Decimal;
+  basePrice: string | null;
+  onHand: string;
+  available: string;
   status: 'active' | 'inactive' | 'archived';
   variantCount: number;
-  // Primary product image URL, or null when the product has no images.
   imageUrl: string | null;
+  createdAt: Date;
+  qtyOnPo: string;
+  wac: string | null;
 };
 
+const PREF_KEY = 'table.products';
 const MAX_VISIBLE_TAGS = 3;
 
-export function ProductsTable({ rows }: { rows: ProductRowData[] }) {
-  if (rows.length === 0) {
-    return (
-      <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
-        No products match these filters.
-      </div>
-    );
-  }
+type ProductColumn = CustomizableColumn & {
+  requiresCost?: boolean;
+  headClass?: string;
+  cellClass?: string;
+  render: (row: ProductRowData) => ReactNode;
+};
+
+// Single source of truth for the products table's columns: order, labels,
+// default visibility, locking, permission gating, and cell rendering.
+const PRODUCT_COLUMNS: ProductColumn[] = [
+  {
+    id: 'sku',
+    label: 'SKU',
+    defaultVisible: true,
+    locked: true,
+    cellClass: 'font-mono text-xs font-semibold',
+    render: (row) => (
+      <>
+        {/* Stretched-link overlay — whole row clickable. Lives in the
+            always-visible SKU cell so the row is always navigable. */}
+        <Link
+          href={`/products/${row.id}`}
+          className="absolute inset-0 rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <span className="sr-only">View {row.name}</span>
+        </Link>
+        {row.sku}
+      </>
+    ),
+  },
+  {
+    id: 'name',
+    label: 'Name',
+    defaultVisible: true,
+    render: (row) => (
+      <>
+        {row.name}
+        {row.variantCount > 1 ? (
+          <span className="ml-1.5 text-xs text-muted-foreground">
+            ({row.variantCount} variants)
+          </span>
+        ) : null}
+      </>
+    ),
+  },
+  {
+    id: 'brand',
+    label: 'Brand',
+    defaultVisible: true,
+    cellClass: 'text-muted-foreground',
+    render: (row) => row.brand ?? '—',
+  },
+  {
+    id: 'vendor',
+    label: 'Vendor',
+    defaultVisible: true,
+    cellClass: 'text-muted-foreground',
+    render: (row) => row.vendorName ?? '—',
+  },
+  {
+    id: 'category',
+    label: 'Category',
+    defaultVisible: true,
+    cellClass: 'text-muted-foreground',
+    render: (row) => row.category ?? '—',
+  },
+  {
+    id: 'tags',
+    label: 'Tags',
+    defaultVisible: true,
+    cellClass: 'relative z-10',
+    render: (row) => <TagPills tags={row.tags} />,
+  },
+  {
+    id: 'bin',
+    label: 'Bin',
+    defaultVisible: true,
+    cellClass: 'font-mono text-xs text-muted-foreground',
+    render: (row) => row.binLocation ?? '—',
+  },
+  {
+    id: 'onHand',
+    label: 'On hand',
+    defaultVisible: true,
+    headClass: 'text-right',
+    cellClass: 'text-right tabular-nums',
+    render: (row) => formatQty(row.onHand),
+  },
+  {
+    id: 'available',
+    label: 'Available',
+    defaultVisible: true,
+    headClass: 'text-right',
+    cellClass: 'text-right tabular-nums',
+    render: (row) => formatQty(row.available),
+  },
+  {
+    id: 'basePrice',
+    label: 'Price',
+    defaultVisible: true,
+    headClass: 'text-right',
+    cellClass: 'text-right tabular-nums',
+    render: (row) => (row.basePrice != null ? formatCurrency(row.basePrice) : '—'),
+  },
+  {
+    id: 'status',
+    label: 'Status',
+    defaultVisible: true,
+    render: (row) => <StatusBadge status={row.status} />,
+  },
+  {
+    id: 'createdAt',
+    label: 'Date created',
+    defaultVisible: false,
+    cellClass: 'text-muted-foreground whitespace-nowrap',
+    render: (row) => formatDate(row.createdAt),
+  },
+  {
+    id: 'mpn',
+    label: 'MPN',
+    defaultVisible: false,
+    cellClass: 'font-mono text-xs text-muted-foreground',
+    render: (row) => row.manufacturerPartNumber ?? '—',
+  },
+  {
+    id: 'qtyOnPo',
+    label: 'Qty on PO',
+    defaultVisible: false,
+    headClass: 'text-right',
+    cellClass: 'text-right tabular-nums',
+    render: (row) => formatQty(row.qtyOnPo),
+  },
+  {
+    id: 'wac',
+    label: 'WAC',
+    defaultVisible: false,
+    requiresCost: true,
+    headClass: 'text-right',
+    cellClass: 'text-right tabular-nums',
+    render: (row) => (row.wac != null ? formatCurrency(row.wac) : '—'),
+  },
+];
+
+export function ProductsTable({
+  rows,
+  canViewCost,
+  initialPrefs,
+}: {
+  rows: ProductRowData[];
+  // Drives whether the WAC column option + data are available at all.
+  canViewCost: boolean;
+  initialPrefs: TableViewPrefValue;
+}) {
+  // Cost columns are absent for users without the permission — not just
+  // hidden. They never reach the customizer or the render set.
+  const availableColumns = PRODUCT_COLUMNS.filter(
+    (c) => !c.requiresCost || canViewCost,
+  );
+  const customizerColumns: CustomizableColumn[] = availableColumns.map((c) => ({
+    id: c.id,
+    label: c.label,
+    defaultVisible: c.defaultVisible,
+    locked: c.locked,
+  }));
+
+  const { isVisible, toggleColumn, showImages, setShowImages } =
+    useTablePreferences({
+      prefKey: PREF_KEY,
+      columns: customizerColumns,
+      initial: initialPrefs,
+    });
+
+  const visibleColumns = availableColumns.filter((c) => isVisible(c.id));
 
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
-        <ProductImageToggle />
+        <TableCustomizer
+          columns={customizerColumns}
+          isVisible={isVisible}
+          onToggleColumn={toggleColumn}
+          showImages={showImages}
+          onToggleImages={setShowImages}
+        />
       </div>
 
-      <div className="rounded-lg border border-border">
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-muted/30 hover:bg-muted/30">
-              <TableHead className="w-[60px] [.hide-product-images_&]:hidden">
-                <span className="sr-only">Image</span>
-              </TableHead>
-              <TableHead>SKU</TableHead>
-              <TableHead>Name</TableHead>
-              <TableHead>Brand</TableHead>
-              <TableHead>Vendor</TableHead>
-              <TableHead>Category</TableHead>
-              <TableHead>Tags</TableHead>
-              <TableHead>Bin</TableHead>
-              <TableHead className="text-right">On hand</TableHead>
-              <TableHead className="text-right">Available</TableHead>
-              <TableHead className="text-right">Base price</TableHead>
-              <TableHead>Status</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((row) => (
-              <TableRow
-                key={row.id}
-                className="relative cursor-pointer hover:bg-muted/50"
-              >
-                {/* Thumbnail cell must sit above the row's stretched
-                    Link (rendered in the SKU cell below). Without
-                    relative+z-10, clicking the thumbnail would
-                    navigate to the detail page instead of opening
-                    the lightbox/preview. */}
-                <TableCell className="relative z-10 [.hide-product-images_&]:hidden">
-                  <ProductThumbnail
-                    src={row.imageUrl}
-                    productName={row.name}
-                  />
-                </TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">
-                  {/* Stretched-link overlay — whole row clickable. */}
-                  <Link
-                    href={`/products/${row.id}`}
-                    className="absolute inset-0 rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                  >
-                    <span className="sr-only">View {row.name}</span>
-                  </Link>
-                  {row.sku}
-                </TableCell>
-                <TableCell className="font-medium">
-                  {row.name}
-                  {row.variantCount > 1 ? (
-                    <span className="ml-1.5 text-xs text-muted-foreground">
-                      ({row.variantCount} variants)
-                    </span>
-                  ) : null}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {row.brand ?? '—'}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {row.vendorName ?? '—'}
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {row.category ?? '—'}
-                </TableCell>
-                <TableCell className="relative z-10">
-                  <TagPills tags={row.tags} />
-                </TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">
-                  {row.binLocation ?? '—'}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatQty(row.onHand)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatQty(row.available)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {row.basePrice != null ? formatCurrency(row.basePrice) : '—'}
-                </TableCell>
-                <TableCell>
-                  <StatusBadge status={row.status} />
-                </TableCell>
+      {rows.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
+          No products match these filters.
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/30 hover:bg-muted/30">
+                {showImages ? (
+                  <TableHead className="w-[60px]">
+                    <span className="sr-only">Image</span>
+                  </TableHead>
+                ) : null}
+                {visibleColumns.map((c) => (
+                  <TableHead key={c.id} className={c.headClass}>
+                    {c.label}
+                  </TableHead>
+                ))}
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow
+                  key={row.id}
+                  className="relative cursor-pointer hover:bg-muted/50"
+                >
+                  {showImages ? (
+                    // Thumbnail sits above the row's stretched link
+                    // (relative z-10) so clicking it opens the preview
+                    // rather than navigating.
+                    <TableCell className="relative z-10">
+                      <ProductThumbnail src={row.imageUrl} productName={row.name} />
+                    </TableCell>
+                  ) : null}
+                  {visibleColumns.map((c) => (
+                    <TableCell key={c.id} className={c.cellClass}>
+                      {c.render(row)}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   );
 }
@@ -187,9 +333,17 @@ function StatusBadge({
   }
 }
 
-function formatQty(qty: Prisma.Decimal): string {
-  // Strip trailing zeros: 5.00000 → "5", 1.50000 → "1.5".
-  const s = qty.toString();
-  if (!s.includes('.')) return s;
-  return s.replace(/\.?0+$/, '');
+function formatQty(qty: string): string {
+  // Strip trailing zeros: "5.00000" → "5", "1.50000" → "1.5".
+  if (!qty.includes('.')) return qty;
+  return qty.replace(/\.?0+$/, '');
+}
+
+function formatDate(d: Date): string {
+  return d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
 }

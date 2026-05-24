@@ -20,6 +20,7 @@ export const productCreateSchema = z.object({
   longDescription: z.string().optional(),
   brand: z.string().max(120).optional(),
   category: z.string().max(120).optional(),
+  manufacturerPartNumber: z.string().max(120).optional(),
   type: z
     .enum(['SIMPLE', 'DROP_SHIP', 'SERVICE', 'ASSEMBLED', 'BUNDLE'])
     .default('SIMPLE'),

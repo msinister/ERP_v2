@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Plus, Upload } from 'lucide-react';
 import { db } from '@/lib/db';
 import {
@@ -8,6 +9,9 @@ import {
   type ProductStatusFilter,
 } from '@/server/services/products';
 import { listAllTags } from '@/server/services/productTags';
+import { getActor } from '@/lib/permissions/getActor';
+import { hasPermission } from '@/lib/permissions/actor';
+import { getTableViewPref } from '@/server/services/userPreferences';
 import { Button } from '@/components/ui/button';
 import { ProductsFilters } from './_components/filters';
 import { ProductsTable, type ProductRowData } from './_components/table';
@@ -45,11 +49,28 @@ export default async function ProductsPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const [brands, categories, allTags, page] = await Promise.all([
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+  // Gates the WAC column + cost data end-to-end: when false, the service
+  // doesn't compute WAC, the row carries null, and the customizer never
+  // offers the column.
+  const canViewCost = hasPermission(actor, 'products.view_cost');
+
+  const [brands, categories, allTags, page, viewPref] = await Promise.all([
     listProductBrands(db),
     listProductCategories(db),
     listAllTags(db),
-    listProductsPaged(db, { q, status, brand, category, tagIds, skip, take }),
+    listProductsPaged(db, {
+      q,
+      status,
+      brand,
+      category,
+      tagIds,
+      skip,
+      take,
+      includeCost: canViewCost,
+    }),
+    getTableViewPref(db, actor.id, 'table.products'),
   ]);
 
   const tagOptions = allTags.map((t) => ({ id: t.id, name: t.name }));
@@ -61,11 +82,12 @@ export default async function ProductsPage({
     brand: p.brand,
     vendorName: p.vendorName,
     category: p.category,
+    manufacturerPartNumber: p.manufacturerPartNumber,
     tags: p.tags,
     binLocation: p.binLocation,
-    basePrice: p.basePrice,
-    onHand: p.inventoryAgg.onHand,
-    available: p.inventoryAgg.available,
+    basePrice: p.basePrice != null ? p.basePrice.toString() : null,
+    onHand: p.inventoryAgg.onHand.toString(),
+    available: p.inventoryAgg.available.toString(),
     status:
       p.deletedAt != null
         ? 'archived'
@@ -74,6 +96,11 @@ export default async function ProductsPage({
           : 'inactive',
     variantCount: p.variantCount,
     imageUrl: p.primaryImageUrl,
+    createdAt: p.createdAt,
+    qtyOnPo: p.qtyOnPo.toString(),
+    // Belt-and-suspenders: only surface WAC when permitted (service
+    // already returns null otherwise).
+    wac: canViewCost && p.wac != null ? p.wac.toString() : null,
   }));
 
   return (
@@ -104,7 +131,11 @@ export default async function ProductsPage({
         tags={tagOptions}
       />
 
-      <ProductsTable rows={tableRows} />
+      <ProductsTable
+        rows={tableRows}
+        canViewCost={canViewCost}
+        initialPrefs={viewPref}
+      />
 
       <ProductsPagination total={page.total} skip={skip} take={take} />
     </div>

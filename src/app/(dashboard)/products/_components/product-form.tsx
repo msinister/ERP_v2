@@ -73,6 +73,7 @@ const formSchema = z.object({
   type: productTypeEnum,
   brand: z.string().max(120).optional(),
   category: z.string().max(120).optional(),
+  manufacturerPartNumber: z.string().max(120).optional(),
   basePrice: nonNegDecimal,
   tracksInventory: z.boolean(),
   active: z.boolean(),
@@ -102,6 +103,7 @@ const DEFAULT_VALUES: ProductFormValues = {
   type: 'SIMPLE',
   brand: '',
   category: '',
+  manufacturerPartNumber: '',
   basePrice: '',
   tracksInventory: true,
   active: true,
@@ -175,6 +177,7 @@ export function ProductForm({
         type: values.type,
         brand: nullEmpty(values.brand),
         category: nullEmpty(values.category),
+        manufacturerPartNumber: nullEmpty(values.manufacturerPartNumber),
         basePrice: nullEmpty(values.basePrice),
         tracksInventory: values.tracksInventory,
         active: values.active,
@@ -321,6 +324,16 @@ export function ProductForm({
                 {...register('category')}
               />
               <FieldError errors={[errors.category]} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="manufacturerPartNumber">MPN</FieldLabel>
+              <Input
+                id="manufacturerPartNumber"
+                className="font-mono"
+                aria-invalid={!!errors.manufacturerPartNumber}
+                {...register('manufacturerPartNumber')}
+              />
+              <FieldError errors={[errors.manufacturerPartNumber]} />
             </Field>
             <Field>
               <FieldLabel htmlFor="basePrice">
