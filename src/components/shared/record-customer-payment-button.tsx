@@ -5,6 +5,7 @@ import { DollarSign } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   RecordCustomerPaymentDialog,
+  type PaymentPrefill,
   type TargetInvoice,
 } from './record-customer-payment-dialog';
 
@@ -23,6 +24,7 @@ export function RecordCustomerPaymentButton({
   customerId,
   customerName,
   targetInvoice,
+  prefill,
   size = 'sm',
   variant = 'default',
   children,
@@ -30,6 +32,8 @@ export function RecordCustomerPaymentButton({
   customerId: string;
   customerName: string;
   targetInvoice?: TargetInvoice;
+  // Pre-invoice deposit context (label + amount) for the customer-level case.
+  prefill?: PaymentPrefill;
   size?: 'sm' | 'default' | 'icon-sm';
   variant?: 'default' | 'outline' | 'ghost';
   children?: ReactNode;
@@ -56,6 +60,7 @@ export function RecordCustomerPaymentButton({
         customerId={customerId}
         customerName={customerName}
         targetInvoice={targetInvoice ?? null}
+        prefill={prefill ?? null}
         open={open}
         onOpenChange={setOpen}
       />

@@ -10,9 +10,13 @@ import { RecordCustomerPaymentButton } from '@/components/shared/record-customer
 export function OrderDepositCard({
   customerId,
   customerName,
+  prefill,
 }: {
   customerId: string;
   customerName: string;
+  // Pre-invoice figure shown at the top of the dialog + used to pre-fill the
+  // amount: the quoted order total (CONFIRMED) or shipped balance (DISPATCHED).
+  prefill: { label: string; amount: string };
 }) {
   return (
     <Card>
@@ -29,6 +33,7 @@ export function OrderDepositCard({
         <RecordCustomerPaymentButton
           customerId={customerId}
           customerName={customerName}
+          prefill={prefill}
         />
       </CardHeader>
     </Card>

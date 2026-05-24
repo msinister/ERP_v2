@@ -96,10 +96,21 @@ export type TargetInvoice = {
   remainingBalance: string;
 };
 
+// Pre-invoice context for a customer-level deposit (no targetInvoice yet):
+// a labelled figure (e.g. "Order Total" / "Balance Due") shown at the top
+// and used to pre-fill the amount. Display + pre-fill only — the payment is
+// still recorded as unapplied customer credit, never auto-applied.
+export type PaymentPrefill = {
+  label: string;
+  /** Decimal-as-string. */
+  amount: string;
+};
+
 export function RecordCustomerPaymentDialog({
   customerId,
   customerName,
   targetInvoice,
+  prefill = null,
   open,
   onOpenChange,
 }: {
@@ -107,6 +118,8 @@ export function RecordCustomerPaymentDialog({
   customerName: string;
   /** null = customer-level unapplied payment. */
   targetInvoice: TargetInvoice | null;
+  /** Pre-invoice deposit context (ignored when targetInvoice is set). */
+  prefill?: PaymentPrefill | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -125,13 +138,18 @@ export function RecordCustomerPaymentDialog({
   useEffect(() => {
     if (!open) return;
     setErrors({});
-    setAmount(targetInvoice?.remainingBalance ?? '');
+    // Pre-fill: invoice balance when bound, else the prefill amount (order
+    // total / shipped balance) when it's positive, else blank.
+    setAmount(
+      targetInvoice?.remainingBalance ??
+        (prefill && Number(prefill.amount) > 0 ? prefill.amount : ''),
+    );
     setMethod('CHECK');
     setCashAccountId('');
     setReceivedAt(new Date().toISOString().slice(0, 10));
     setReference('');
     setNotes('');
-  }, [open, targetInvoice?.remainingBalance]);
+  }, [open, targetInvoice?.remainingBalance, prefill]);
 
   function submit() {
     const next: Partial<Record<string, string>> = {};
@@ -214,13 +232,16 @@ export function RecordCustomerPaymentDialog({
   }
 
   // Display-only running figures (the service does the authoritative Decimal
-  // math on submit). Only meaningful when bound to an invoice.
-  const invoiceBalanceN = targetInvoice
+  // math on submit). Base balance = invoice balance when bound, else the
+  // pre-invoice deposit figure (order total / shipped balance).
+  const baseBalanceN = targetInvoice
     ? Number(targetInvoice.remainingBalance)
-    : null;
+    : prefill
+      ? Number(prefill.amount)
+      : null;
   const amtN = isPositiveDecimalInput(amount) ? Number(amount) : null;
   const afterBalance =
-    invoiceBalanceN != null && amtN != null ? invoiceBalanceN - amtN : null;
+    baseBalanceN != null && amtN != null ? baseBalanceN - amtN : null;
 
   const overpaying =
     targetInvoice != null &&
@@ -256,6 +277,15 @@ export function RecordCustomerPaymentDialog({
               </span>
               <span className="text-base font-semibold tabular-nums">
                 {formatCurrency(targetInvoice.remainingBalance)}
+              </span>
+            </div>
+          ) : prefill ? (
+            <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2">
+              <span className="text-sm text-muted-foreground">
+                {prefill.label}
+              </span>
+              <span className="text-base font-semibold tabular-nums">
+                {formatCurrency(prefill.amount)}
               </span>
             </div>
           ) : null}

@@ -1,7 +1,11 @@
 import { notFound, redirect } from 'next/navigation';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
-import { computeSalesOrderDisplayTotal } from '@/lib/ar/openSos';
+import {
+  computeSalesOrderDisplayTotal,
+  computeSalesOrderShippedTotal,
+  computeSalesOrderTotal,
+} from '@/lib/ar/openSos';
 import { getActor } from '@/lib/permissions/getActor';
 import { hasPermission } from '@/lib/permissions/actor';
 import { salesOrderScopeWhere } from '@/lib/permissions/scope';
@@ -244,6 +248,21 @@ export default async function SalesOrderDetailPage({
   // (Credit-limit math elsewhere stays on the qtyOrdered commitment via
   // computeSalesOrderTotal.)
   const displayTotal = computeSalesOrderDisplayTotal(so);
+
+  // Pre-invoice deposit figure shown on the OrderDepositCard's dialog:
+  //   CONFIRMED  → quoted Order Total (always qtyOrdered)
+  //   DISPATCHED → Balance Due = shipped value (qtyShipped lines only)
+  // Deposits are customer-level credit, so this is display/pre-fill only;
+  // we don't net out prior customer deposits (not reliably SO-attributable).
+  const depositPrefill =
+    so.status === 'CONFIRMED'
+      ? { label: 'Order Total', amount: computeSalesOrderTotal(so).toString() }
+      : so.status === 'DISPATCHED'
+        ? {
+            label: 'Balance Due',
+            amount: computeSalesOrderShippedTotal(so).toString(),
+          }
+        : null;
 
   // Invoice money snapshot for the Totals card (Paid / Credited /
   // Balance rows). Only present on CLOSED orders with a live invoice
@@ -488,10 +507,11 @@ export default async function SalesOrderDetailPage({
               customerName={so.customer.name}
               rows={appliedRows}
             />
-          ) : so.status === 'CONFIRMED' || so.status === 'DISPATCHED' ? (
+          ) : depositPrefill ? (
             <OrderDepositCard
               customerId={so.customer.id}
               customerName={so.customer.name}
+              prefill={depositPrefill}
             />
           ) : null}
 

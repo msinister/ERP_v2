@@ -63,6 +63,34 @@ export function computeSalesOrderDisplayTotal(
 }
 
 /**
+ * Strict shipped-value total — prices ONLY qtyShipped per line (a line with
+ * nothing shipped contributes 0), plus order-level adjustments. Used for the
+ * "Balance Due" shown when taking a deposit on a DISPATCHED order: it
+ * reflects what has actually shipped (and will be invoiced on close), not
+ * the full commitment. Distinct from computeSalesOrderDisplayTotal, which
+ * falls back to qtyOrdered for not-yet-shipped lines. Discount handling
+ * mirrors computeLineBillableTotal (flat discountAmount applied in full,
+ * else percent off the line).
+ */
+export function computeSalesOrderShippedTotal(
+  so: SOWithLines,
+): Prisma.Decimal {
+  const liveLines = so.lines.filter((l) => l.deletedAt === null);
+  const subtotal = liveLines.reduce((acc, l) => {
+    let lineTotal = l.qtyShipped.times(l.unitPrice);
+    if (l.discountAmount != null) {
+      lineTotal = lineTotal.minus(l.discountAmount);
+    } else if (l.discountPercent != null) {
+      lineTotal = lineTotal.minus(
+        lineTotal.times(l.discountPercent).dividedBy(100),
+      );
+    }
+    return acc.plus(lineTotal.lessThan(0) ? new Prisma.Decimal(0) : lineTotal);
+  }, new Prisma.Decimal(0));
+  return applyOrderAdjustments(so, subtotal);
+}
+
+/**
  * SUM of order totals across CONFIRMED + DISPATCHED (non-deleted) SOs
  * for the customer. Used by credit-limit enforcement at confirm-time
  * to compute projected exposure (AR + open SOs + this order).
