@@ -146,5 +146,6 @@ function formatTimestamp(d: Date): string {
     hour: 'numeric',
     minute: '2-digit',
     second: '2-digit',
+    timeZone: 'UTC',
   });
 }
