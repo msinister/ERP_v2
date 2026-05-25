@@ -10,7 +10,7 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -55,6 +55,21 @@ export function LifecycleActions(props: Props) {
   const canCancel = status === 'DRAFT' || status === 'CONFIRMED';
   const canDelete = status === 'DRAFT';
 
+  // Disable cancel when the service would reject it: CONFIRMED + an
+  // application needs reversal first. DRAFT cancels are always allowed.
+  const cancelDisabledReason =
+    status === 'CONFIRMED' && props.hasApplications
+      ? 'Reverse applications first'
+      : null;
+
+  // Cancel/Delete confirm dialogs are controlled here and rendered as
+  // siblings OUTSIDE the dropdown — a dialog nested inside
+  // DropdownMenuContent unmounts (only flashes) when the menu closes on
+  // item-press, since Base UI ignores preventDefault for the item close.
+  // See admin/payment-terms/.../term-row-actions.tsx for the canonical shape.
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
   return (
     <div className="flex items-center gap-2">
       {canConfirm ? <ConfirmAction {...props} /> : null}
@@ -84,14 +99,57 @@ export function LifecycleActions(props: Props) {
             <MoreVertical />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {canCancel ? <CancelMenuItem {...props} /> : null}
-            {canDelete ? <DeleteMenuItem {...props} /> : null}
+            {canCancel ? (
+              <DropdownMenuItem
+                disabled={!!cancelDisabledReason}
+                title={cancelDisabledReason ?? undefined}
+                onClick={() => setCancelOpen(true)}
+                variant="destructive"
+              >
+                <XCircle className="size-4" />
+                Cancel credit
+              </DropdownMenuItem>
+            ) : null}
+            {canDelete ? (
+              <DropdownMenuItem
+                onClick={() => setDeleteOpen(true)}
+                variant="destructive"
+              >
+                <Trash2 className="size-4" />
+                Delete credit
+              </DropdownMenuItem>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
+      ) : null}
+
+      {canCancel ? (
+        <CancelDialog
+          vendorCreditId={props.vendorCreditId}
+          vendorCreditNumber={props.vendorCreditNumber}
+          status={status}
+          open={cancelOpen}
+          onOpenChange={setCancelOpen}
+        />
+      ) : null}
+      {canDelete ? (
+        <DeleteDialog
+          vendorCreditId={props.vendorCreditId}
+          vendorCreditNumber={props.vendorCreditNumber}
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+        />
       ) : null}
     </div>
   );
 }
+
+type DialogProps = {
+  vendorCreditId: string;
+  vendorCreditNumber: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
 
 function ConfirmAction({ vendorCreditId, vendorCreditNumber }: Props) {
   const router = useRouter();
@@ -147,24 +205,17 @@ function ConfirmAction({ vendorCreditId, vendorCreditNumber }: Props) {
   );
 }
 
-function CancelMenuItem({
+function CancelDialog({
   vendorCreditId,
   vendorCreditNumber,
   status,
-  hasApplications,
-}: Props) {
+  open,
+  onOpenChange,
+}: DialogProps & { status: string }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
-
-  // Disable when the service would reject it. CONFIRMED + applications
-  // > 0 needs reversal first; DRAFT cancels are always allowed.
-  const disabledReason =
-    status === 'CONFIRMED' && hasApplications
-      ? 'Reverse applications first'
-      : null;
 
   function onCancel() {
     setError(null);
@@ -190,7 +241,7 @@ function CancelMenuItem({
           return;
         }
         toast.success(`Cancelled ${vendorCreditNumber}`);
-        setOpen(false);
+        onOpenChange(false);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
@@ -202,29 +253,13 @@ function CancelMenuItem({
     <AlertDialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
+        onOpenChange(o);
         if (!o) {
           setReason('');
           setError(null);
         }
       }}
     >
-      <DropdownMenuItem
-        disabled={!!disabledReason}
-        title={disabledReason ?? undefined}
-        onClick={(e) => {
-          if (disabledReason) {
-            e.preventDefault();
-            return;
-          }
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <XCircle className="size-4" />
-        Cancel credit
-      </DropdownMenuItem>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel this vendor credit?</AlertDialogTitle>
@@ -262,9 +297,13 @@ function CancelMenuItem({
   );
 }
 
-function DeleteMenuItem({ vendorCreditId, vendorCreditNumber }: Props) {
+function DeleteDialog({
+  vendorCreditId,
+  vendorCreditNumber,
+  open,
+  onOpenChange,
+}: DialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   function onDelete() {
@@ -281,7 +320,7 @@ function DeleteMenuItem({ vendorCreditId, vendorCreditNumber }: Props) {
           return;
         }
         toast.success(`Deleted ${vendorCreditNumber}`);
-        setOpen(false);
+        onOpenChange(false);
         router.push('/vendor-credits');
         router.refresh();
       } catch (err) {
@@ -291,17 +330,7 @@ function DeleteMenuItem({ vendorCreditId, vendorCreditNumber }: Props) {
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <Trash2 className="size-4" />
-        Delete credit
-      </DropdownMenuItem>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this vendor credit?</AlertDialogTitle>

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { Input } from '@/components/ui/input';
 
 // Inline-editable bin location for one InventoryItem. Click the value to

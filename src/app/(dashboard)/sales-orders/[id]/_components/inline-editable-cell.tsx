@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { Loader2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { useRouter } from 'next/navigation';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';

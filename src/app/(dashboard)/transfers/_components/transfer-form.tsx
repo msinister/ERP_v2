@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { ArrowRight, CreditCard, Landmark } from 'lucide-react';
 import { AccountType } from '@/generated/tenant';
 import { Button } from '@/components/ui/button';

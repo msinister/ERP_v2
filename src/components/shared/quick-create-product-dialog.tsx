@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useTransition } from 'react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 
 import {
   AlertDialog,

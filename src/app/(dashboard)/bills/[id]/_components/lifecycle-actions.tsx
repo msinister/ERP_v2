@@ -10,7 +10,7 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -59,6 +59,15 @@ export function LifecycleActions(props: Props) {
   const canCancel = status === 'CONFIRMED';
   const canDelete = status === 'DRAFT';
 
+  // The Cancel/Delete confirm dialogs are controlled here and rendered as
+  // siblings OUTSIDE the dropdown. A dialog nested inside
+  // DropdownMenuContent gets unmounted the instant the menu closes on
+  // item-press — Base UI emits the item's close unconditionally and
+  // ignores preventDefault — so the dialog only flashes. See
+  // admin/payment-terms/.../term-row-actions.tsx for the canonical shape.
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
   return (
     <div className="flex items-center gap-2">
       {canConfirm ? <ConfirmAction {...props} /> : null}
@@ -86,14 +95,60 @@ export function LifecycleActions(props: Props) {
             <MoreVertical />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {canCancel ? <CancelMenuItem {...props} /> : null}
-            {canDelete ? <DeleteMenuItem {...props} /> : null}
+            {canCancel ? (
+              <DropdownMenuItem
+                disabled={props.hasAppliedMoney}
+                title={
+                  props.hasAppliedMoney
+                    ? 'Reverse payments / applied credits first'
+                    : undefined
+                }
+                onClick={() => setCancelOpen(true)}
+                variant="destructive"
+              >
+                <XCircle className="size-4" />
+                Cancel bill
+              </DropdownMenuItem>
+            ) : null}
+            {canDelete ? (
+              <DropdownMenuItem
+                onClick={() => setDeleteOpen(true)}
+                variant="destructive"
+              >
+                <Trash2 className="size-4" />
+                Delete bill
+              </DropdownMenuItem>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
+      ) : null}
+
+      {canCancel ? (
+        <CancelDialog
+          billId={props.billId}
+          billNumber={props.billNumber}
+          open={cancelOpen}
+          onOpenChange={setCancelOpen}
+        />
+      ) : null}
+      {canDelete ? (
+        <DeleteDialog
+          billId={props.billId}
+          billNumber={props.billNumber}
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+        />
       ) : null}
     </div>
   );
 }
+
+type DialogProps = {
+  billId: string;
+  billNumber: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
 
 // =============================================================================
 // Confirm — DRAFT → CONFIRMED. Service posts AP JE + sets due date.
@@ -154,13 +209,13 @@ function ConfirmAction({ billId, billNumber }: Props) {
 
 // =============================================================================
 // Cancel — CONFIRMED → CANCELLED with reason. Service rejects when
-// amountPaid > 0 or amountCredited > 0 — we mirror that as a disabled
-// menu item with a hover hint.
+// amountPaid > 0 or amountCredited > 0 — the menu item is disabled in
+// that case (see LifecycleActions). Dialog is rendered as a dropdown
+// sibling, opened via the lifted `open` prop.
 // =============================================================================
 
-function CancelMenuItem({ billId, billNumber, hasAppliedMoney }: Props) {
+function CancelDialog({ billId, billNumber, open, onOpenChange }: DialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -186,7 +241,7 @@ function CancelMenuItem({ billId, billNumber, hasAppliedMoney }: Props) {
           return;
         }
         toast.success(`Cancelled ${billNumber}`);
-        setOpen(false);
+        onOpenChange(false);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
@@ -198,33 +253,13 @@ function CancelMenuItem({ billId, billNumber, hasAppliedMoney }: Props) {
     <AlertDialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
+        onOpenChange(o);
         if (!o) {
           setReason('');
           setError(null);
         }
       }}
     >
-      <DropdownMenuItem
-        disabled={hasAppliedMoney}
-        title={
-          hasAppliedMoney
-            ? 'Reverse payments / applied credits first'
-            : undefined
-        }
-        onClick={(e) => {
-          if (hasAppliedMoney) {
-            e.preventDefault();
-            return;
-          }
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <XCircle className="size-4" />
-        Cancel bill
-      </DropdownMenuItem>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel this bill?</AlertDialogTitle>
@@ -263,12 +298,11 @@ function CancelMenuItem({ billId, billNumber, hasAppliedMoney }: Props) {
 }
 
 // =============================================================================
-// Delete — soft-delete, DRAFT only.
+// Delete — soft-delete, DRAFT only. Dialog rendered as a dropdown sibling.
 // =============================================================================
 
-function DeleteMenuItem({ billId, billNumber }: Props) {
+function DeleteDialog({ billId, billNumber, open, onOpenChange }: DialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   function onDelete() {
@@ -285,7 +319,7 @@ function DeleteMenuItem({ billId, billNumber }: Props) {
           return;
         }
         toast.success(`Deleted ${billNumber}`);
-        setOpen(false);
+        onOpenChange(false);
         router.push('/bills');
         router.refresh();
       } catch (err) {
@@ -295,17 +329,7 @@ function DeleteMenuItem({ billId, billNumber }: Props) {
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <Trash2 className="size-4" />
-        Delete bill
-      </DropdownMenuItem>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this bill?</AlertDialogTitle>

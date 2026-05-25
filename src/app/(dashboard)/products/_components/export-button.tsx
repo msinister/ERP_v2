@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Papa from 'papaparse';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 

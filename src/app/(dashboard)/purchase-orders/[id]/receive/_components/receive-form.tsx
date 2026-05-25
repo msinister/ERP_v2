@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { AlertTriangle } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
