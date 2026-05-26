@@ -84,6 +84,17 @@ export function LifecycleActions(props: Props) {
     status === 'PARTIALLY_RECEIVED';
   const canDelete = status === 'DRAFT' || status === 'CANCELLED';
 
+  // The Cancel/Delete confirm dialogs are controlled here and rendered as
+  // siblings OUTSIDE the dropdown. A dialog nested inside
+  // DropdownMenuContent gets unmounted the instant the menu closes on
+  // item-press — Base UI emits the item's close unconditionally and
+  // ignores preventDefault — so the dialog only flashes. See
+  // admin/payment-terms/.../term-row-actions.tsx for the canonical shape.
+  // (Confirm/Close/Reopen are primary buttons with their own dialog, not
+  // dropdown items, so they're unaffected.)
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
   return (
     <div className="flex items-center gap-2">
       {canConfirm ? <ConfirmAction {...props} /> : null}
@@ -116,14 +127,54 @@ export function LifecycleActions(props: Props) {
             <MoreVertical />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {canCancel ? <CancelMenuItem {...props} /> : null}
-            {canDelete ? <DeleteMenuItem {...props} /> : null}
+            {canCancel ? (
+              <DropdownMenuItem
+                onClick={() => setCancelOpen(true)}
+                variant="destructive"
+              >
+                <XCircle className="size-4" />
+                Cancel PO
+              </DropdownMenuItem>
+            ) : null}
+            {canDelete ? (
+              <DropdownMenuItem
+                onClick={() => setDeleteOpen(true)}
+                variant="destructive"
+              >
+                <Trash2 className="size-4" />
+                Delete PO
+              </DropdownMenuItem>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
+      ) : null}
+
+      {canCancel ? (
+        <CancelDialog
+          purchaseOrderId={props.purchaseOrderId}
+          purchaseOrderNumber={props.purchaseOrderNumber}
+          open={cancelOpen}
+          onOpenChange={setCancelOpen}
+        />
+      ) : null}
+      {canDelete ? (
+        <DeleteDialog
+          purchaseOrderId={props.purchaseOrderId}
+          purchaseOrderNumber={props.purchaseOrderNumber}
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+        />
       ) : null}
     </div>
   );
 }
+
+type DialogProps = {
+  purchaseOrderId: string;
+  purchaseOrderNumber: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
 
 // =============================================================================
 // Confirm — simple POST, no payload. Service flips DRAFT → CONFIRMED.
@@ -389,12 +440,17 @@ function ReopenAction({ purchaseOrderId, purchaseOrderNumber }: Props) {
 
 // =============================================================================
 // Cancel — required reason. Service rejects when there are active
-// receipt lines linked to the PO.
+// receipt lines linked to the PO. Dialog is rendered as a dropdown
+// sibling, opened via the lifted `open` prop.
 // =============================================================================
 
-function CancelMenuItem({ purchaseOrderId, purchaseOrderNumber }: Props) {
+function CancelDialog({
+  purchaseOrderId,
+  purchaseOrderNumber,
+  open,
+  onOpenChange,
+}: DialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -423,7 +479,7 @@ function CancelMenuItem({ purchaseOrderId, purchaseOrderNumber }: Props) {
           return;
         }
         toast.success(`Cancelled ${purchaseOrderNumber}`);
-        setOpen(false);
+        onOpenChange(false);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
@@ -435,23 +491,13 @@ function CancelMenuItem({ purchaseOrderId, purchaseOrderNumber }: Props) {
     <AlertDialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
+        onOpenChange(o);
         if (!o) {
           setReason('');
           setError(null);
         }
       }}
     >
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <XCircle className="size-4" />
-        Cancel PO
-      </DropdownMenuItem>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel this PO?</AlertDialogTitle>
@@ -489,12 +535,17 @@ function CancelMenuItem({ purchaseOrderId, purchaseOrderNumber }: Props) {
 }
 
 // =============================================================================
-// Delete — soft-delete, DRAFT or CANCELLED only.
+// Delete — soft-delete, DRAFT or CANCELLED only. Dialog rendered as a
+// dropdown sibling.
 // =============================================================================
 
-function DeleteMenuItem({ purchaseOrderId, purchaseOrderNumber }: Props) {
+function DeleteDialog({
+  purchaseOrderId,
+  purchaseOrderNumber,
+  open,
+  onOpenChange,
+}: DialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   function onDelete() {
@@ -512,7 +563,7 @@ function DeleteMenuItem({ purchaseOrderId, purchaseOrderNumber }: Props) {
           return;
         }
         toast.success(`Deleted ${purchaseOrderNumber}`);
-        setOpen(false);
+        onOpenChange(false);
         router.push('/purchase-orders');
         router.refresh();
       } catch (err) {
@@ -522,17 +573,7 @@ function DeleteMenuItem({ purchaseOrderId, purchaseOrderNumber }: Props) {
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <Trash2 className="size-4" />
-        Delete PO
-      </DropdownMenuItem>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this PO?</AlertDialogTitle>
