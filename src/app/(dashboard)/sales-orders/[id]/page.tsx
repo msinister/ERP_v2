@@ -419,7 +419,15 @@ export default async function SalesOrderDetailPage({
           dispatchedAt: so.dispatchedAt,
           closedAt: so.closedAt,
           cancelledAt: so.cancelledAt,
-          invoice: so.invoice,
+          // Shape invoice to ONLY {id, number} — the header forwards it to
+          // <DocumentsMenu/> (client), and even though TS narrows to the
+          // header's declared shape, the runtime object carries every
+          // Invoice field (including Decimal total/amountPaid/amountCredited).
+          // Next.js 15 rejects raw Prisma.Decimal across the server→client
+          // boundary — so strip the extras here.
+          invoice: so.invoice
+            ? { id: so.invoice.id, number: so.invoice.number }
+            : null,
           shippingAmount: so.shippingAmount?.toString() ?? null,
           handlingAmount: so.handlingAmount?.toString() ?? null,
         }}
