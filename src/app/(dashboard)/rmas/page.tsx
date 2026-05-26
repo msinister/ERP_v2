@@ -5,6 +5,7 @@ import { Prisma, RmaStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listRmasPaged } from '@/server/services/rmas';
 import { listCustomers } from '@/server/services/customers';
+import { listAllOrderTags } from '@/server/services/orderTags';
 import { getActor } from '@/lib/permissions/getActor';
 import { rmaScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
@@ -42,6 +43,8 @@ export default async function RmasPage({
   const customerId = pickString(sp.customerId);
   const fromParam = pickString(sp.from);
   const toParam = pickString(sp.to);
+  const tagsParam = pickString(sp.tags);
+  const tagIds = tagsParam ? tagsParam.split(',').filter(Boolean) : undefined;
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
@@ -49,13 +52,15 @@ export default async function RmasPage({
   if (!actor) redirect('/login');
   const scope = rmaScopeWhere(actor);
 
-  const [customers, page] = await Promise.all([
+  const [customers, allOrderTags, page] = await Promise.all([
     listCustomers(db, { active: true, take: 1000 }),
+    listAllOrderTags(db),
     listRmasPaged(db, {
       status,
       customerId,
       createdAtFrom: fromParam ? new Date(fromParam) : undefined,
       createdAtTo: toParam ? new Date(`${toParam}T23:59:59.999Z`) : undefined,
+      tagIds,
       scope,
       skip,
       take,
@@ -67,6 +72,7 @@ export default async function RmasPage({
     code: c.code,
     name: c.name,
   }));
+  const tagOptions = allOrderTags.map((t) => ({ id: t.id, name: t.name }));
 
   const zero = new Prisma.Decimal(0);
   const tableRows: RmaRowData[] = page.rows.map((r) => {
@@ -95,6 +101,7 @@ export default async function RmasPage({
       status: r.status,
       returnless: r.returnless,
       hasCreditMemo: r.creditMemo != null,
+      tags: r.tags.map((a) => ({ id: a.tag.id, name: a.tag.name })),
     };
   });
 
@@ -115,7 +122,7 @@ export default async function RmasPage({
         </Button>
       </div>
 
-      <RmasFilters customers={customerOptions} />
+      <RmasFilters customers={customerOptions} tags={tagOptions} />
 
       <RmasTable rows={tableRows} />
 

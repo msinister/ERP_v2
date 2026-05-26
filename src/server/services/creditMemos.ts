@@ -672,6 +672,8 @@ export type CreditMemoListFilters = {
   createdAtFrom?: Date;
   createdAtTo?: Date;
   q?: string;
+  // Filter to CMs carrying ANY of these OrderTag ids.
+  tagIds?: string[];
   // Data-scope fragment from lib/permissions/scope.creditMemoScopeWhere.
   // ANDed in so a "view own" actor only sees their customers' memos.
   scope?: Prisma.CreditMemoWhereInput;
@@ -682,8 +684,16 @@ export type CreditMemoListFilters = {
 function creditMemoWhere(
   filters: Omit<CreditMemoListFilters, 'skip' | 'take'>,
 ): Prisma.CreditMemoWhereInput {
-  const { customerId, status, categoryId, createdAtFrom, createdAtTo, q, scope } =
-    filters;
+  const {
+    customerId,
+    status,
+    categoryId,
+    createdAtFrom,
+    createdAtTo,
+    q,
+    tagIds,
+    scope,
+  } = filters;
   const dateFilter: { gte?: Date; lte?: Date } = {};
   if (createdAtFrom) dateFilter.gte = createdAtFrom;
   if (createdAtTo) dateFilter.lte = createdAtTo;
@@ -696,6 +706,9 @@ function creditMemoWhere(
     ...(categoryId ? { categoryId } : {}),
     ...(createdAtFrom || createdAtTo ? { createdAt: dateFilter } : {}),
     ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
+    ...(tagIds && tagIds.length > 0
+      ? { tags: { some: { tagId: { in: tagIds } } } }
+      : {}),
   };
   return scope ? { AND: [base, scope] } : base;
 }
@@ -723,6 +736,7 @@ export async function listCreditMemosPaged(
       lines: CreditMemoLine[];
       customer: { id: string; code: string; name: string };
       category: { id: string; code: string; label: string };
+      tags: Array<{ tag: { id: string; name: string } }>;
     }
   >;
   total: number;
@@ -736,6 +750,10 @@ export async function listCreditMemosPaged(
         lines: { where: { deletedAt: null } },
         customer: { select: { id: true, code: true, name: true } },
         category: { select: { id: true, code: true, label: true } },
+        tags: {
+          include: { tag: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
       },
       orderBy: { createdAt: 'desc' },
       skip,

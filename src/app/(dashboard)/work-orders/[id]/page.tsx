@@ -22,6 +22,8 @@ import {
 } from '@/components/ui/table';
 import { formatCurrency, formatStatusLabel } from '@/lib/format';
 import { WorkOrderLifecycleActions } from './_components/lifecycle-actions';
+import { listTagsForWorkOrder } from '@/server/services/orderTags';
+import { OrderTagsEditor } from '@/components/shared/order-tags-editor';
 
 export const revalidate = 0;
 
@@ -35,7 +37,7 @@ export default async function WorkOrderDetailPage({
   if (!wo) notFound();
 
   // Pre-join product + warehouse + variant for the header.
-  const [product, variant, warehouse] = await Promise.all([
+  const [product, variant, warehouse, woTags] = await Promise.all([
     db.product.findUniqueOrThrow({
       where: { id: wo.productId },
       select: { id: true, sku: true, name: true },
@@ -48,6 +50,7 @@ export default async function WorkOrderDetailPage({
       where: { id: wo.warehouseId },
       select: { id: true, code: true, name: true },
     }),
+    listTagsForWorkOrder(db, wo.id),
   ]);
 
   // Stock availability per component, at the WO's warehouse, against
@@ -303,6 +306,17 @@ export default async function WorkOrderDetailPage({
               </CardContent>
             </Card>
           ) : null}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Tags</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <OrderTagsEditor
+                apiPath={`/api/work-orders/${wo.id}/tags`}
+                initialTags={woTags.map((t) => ({ id: t.id, name: t.name }))}
+              />
+            </CardContent>
+          </Card>
         </div>
       </div>
     </div>

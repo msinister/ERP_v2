@@ -4,6 +4,7 @@ import { Prisma, PurchaseOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listPurchaseOrdersPaged } from '@/server/services/purchaseOrders';
 import { listVendors } from '@/server/services/vendors';
+import { listAllOrderTags } from '@/server/services/orderTags';
 import { rollupShipmentStatus } from '@/lib/po/shipmentRollup';
 import { Button } from '@/components/ui/button';
 import {
@@ -59,6 +60,8 @@ export default async function PurchaseOrdersPage({
   const vendorId = pickString(sp.vendorId);
   const dateFrom = parseDateInput(pickString(sp.dateFrom), false);
   const dateTo = parseDateInput(pickString(sp.dateTo), true);
+  const tagsParam = pickString(sp.tags);
+  const tagIds = tagsParam ? tagsParam.split(',').filter(Boolean) : undefined;
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
   // Only 'balance' is a non-default sort (computed; sorted in-memory by the
@@ -66,16 +69,18 @@ export default async function PurchaseOrdersPage({
   const sort = pickString(sp.sort) === 'balance' ? ('balance' as const) : undefined;
   const dir = pickString(sp.dir) === 'asc' ? ('asc' as const) : ('desc' as const);
 
-  const [vendors, page] = await Promise.all([
+  const [vendors, allOrderTags, page] = await Promise.all([
     // Active vendors only in the filter dropdown — historical POs for
     // deactivated vendors still render via the vendor join.
     listVendors(db, { active: true, take: 1000 }),
+    listAllOrderTags(db),
     listPurchaseOrdersPaged(db, {
       q,
       status,
       vendorId,
       dateFrom,
       dateTo,
+      tagIds,
       sort,
       dir,
       skip,
@@ -87,6 +92,7 @@ export default async function PurchaseOrdersPage({
     id: v.id,
     label: `${v.name} (${v.code})`,
   }));
+  const tagOptions = allOrderTags.map((t) => ({ id: t.id, name: t.name }));
 
   const tableRows: PurchaseOrderRowData[] = page.rows.map((po) => {
     const total = po.lines.reduce(
@@ -115,6 +121,7 @@ export default async function PurchaseOrdersPage({
       hasPayments: po.payments.length > 0,
       // Remaining balance = line total − recorded payments/deposits.
       balance: total.minus(paid).toString(),
+      tags: po.tags.map((a) => ({ id: a.tag.id, name: a.tag.name })),
     };
   });
 
@@ -135,7 +142,7 @@ export default async function PurchaseOrdersPage({
         </Button>
       </div>
 
-      <PurchaseOrdersFilters vendors={vendorOptions} />
+      <PurchaseOrdersFilters vendors={vendorOptions} tags={tagOptions} />
 
       <PurchaseOrdersTable rows={tableRows} />
 

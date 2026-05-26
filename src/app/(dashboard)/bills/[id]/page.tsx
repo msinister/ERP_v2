@@ -23,6 +23,13 @@ import {
   AppliedCreditsCard,
   type AppliedCreditRow,
 } from './_components/applied-credits-card';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { OrderTagsEditor } from '@/components/shared/order-tags-editor';
 
 // Always live — bill status and payment denorms (amountPaid /
 // amountCredited / paymentStatus) flip as payments and credits are
@@ -102,6 +109,10 @@ export default async function BillDetailPage({
             vendorCredit: { select: { id: true, number: true } },
           },
           orderBy: { appliedAt: 'desc' },
+        },
+        tags: {
+          include: { tag: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
         },
       },
     }),
@@ -253,6 +264,21 @@ export default async function BillDetailPage({
             linkedReceipts={linkedReceipts}
             linkedPurchaseOrders={linkedPurchaseOrders}
           />
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Tags</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <OrderTagsEditor
+                apiPath={`/api/bills/${bill.id}/tags`}
+                initialTags={bill.tags.map((a) => ({
+                  id: a.tag.id,
+                  name: a.tag.name,
+                }))}
+              />
+            </CardContent>
+          </Card>
         </div>
 
         <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">

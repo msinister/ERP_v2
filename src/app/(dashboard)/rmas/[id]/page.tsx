@@ -18,6 +18,13 @@ import { RmaInfoCard } from './_components/info-card';
 import { RmaTotalsCard } from './_components/totals-card';
 import { LifecycleActions } from './_components/lifecycle-actions';
 import type { CategoryOption } from './_components/issue-credit-dialog';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { OrderTagsEditor } from '@/components/shared/order-tags-editor';
 
 export const revalidate = 0;
 
@@ -75,6 +82,10 @@ export default async function RmaDetailPage({
               },
             },
           },
+          orderBy: { createdAt: 'asc' },
+        },
+        tags: {
+          include: { tag: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -189,6 +200,21 @@ export default async function RmaDetailPage({
               effective,
             }}
           />
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Tags</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <OrderTagsEditor
+                apiPath={`/api/rmas/${rma.id}/tags`}
+                initialTags={rma.tags.map((a) => ({
+                  id: a.tag.id,
+                  name: a.tag.name,
+                }))}
+              />
+            </CardContent>
+          </Card>
         </div>
 
         <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">

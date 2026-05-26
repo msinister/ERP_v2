@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { TagPills } from '@/components/shared/tag-pills';
 import { formatCurrency } from '@/lib/format';
 
 export type VendorCreditRowData = {
@@ -26,6 +27,7 @@ export type VendorCreditRowData = {
   // this as an "Overpayment" badge so it's clear AP didn't enter it
   // manually.
   isOverpayment: boolean;
+  tags: Array<{ id: string; name: string }>;
 };
 
 export function VendorCreditsTable({ rows }: { rows: VendorCreditRowData[] }) {
@@ -50,6 +52,7 @@ export function VendorCreditsTable({ rows }: { rows: VendorCreditRowData[] }) {
             <TableHead className="text-right">Available</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Origin</TableHead>
+            <TableHead>Tags</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -107,6 +110,9 @@ export function VendorCreditsTable({ rows }: { rows: VendorCreditRowData[] }) {
                       Manual
                     </Badge>
                   )}
+                </TableCell>
+                <TableCell className="relative z-10">
+                  <TagPills tags={row.tags} />
                 </TableCell>
               </TableRow>
             );

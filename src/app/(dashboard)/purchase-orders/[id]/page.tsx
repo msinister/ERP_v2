@@ -18,6 +18,13 @@ import {
   type PoPaymentRow,
   type CashAccountOption,
 } from './_components/po-payments-card';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { OrderTagsEditor } from '@/components/shared/order-tags-editor';
 
 // Always live (no caching) — PO status and qtyReceived flip as
 // receipts get posted; we want every visit to reflect current state.
@@ -94,6 +101,10 @@ export default async function PurchaseOrderDetailPage({
               include: { bill: { select: { id: true, number: true } } },
             },
           },
+        },
+        tags: {
+          include: { tag: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
         },
       },
     }),
@@ -257,6 +268,21 @@ export default async function PurchaseOrderDetailPage({
               closeReason: po.closeReason,
             }}
           />
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Tags</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <OrderTagsEditor
+                apiPath={`/api/purchase-orders/${po.id}/tags`}
+                initialTags={po.tags.map((a) => ({
+                  id: a.tag.id,
+                  name: a.tag.name,
+                }))}
+              />
+            </CardContent>
+          </Card>
 
           <PurchaseOrderReceiptsTable receipts={receipts} />
         </div>

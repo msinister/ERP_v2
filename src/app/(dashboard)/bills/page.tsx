@@ -8,6 +8,7 @@ import {
 import { db } from '@/lib/db';
 import { listBillsPaged } from '@/server/services/bills';
 import { listVendors } from '@/server/services/vendors';
+import { listAllOrderTags } from '@/server/services/orderTags';
 import { Button } from '@/components/ui/button';
 import { BillsFilters, type VendorOption } from './_components/filters';
 import { BillsTable, type BillRowData } from './_components/table';
@@ -70,13 +71,16 @@ export default async function BillsPage({
   const vendorId = pickString(sp.vendorId);
   const dateFrom = parseDateInput(pickString(sp.dateFrom), false);
   const dateTo = parseDateInput(pickString(sp.dateTo), true);
+  const tagsParam = pickString(sp.tags);
+  const tagIds = tagsParam ? tagsParam.split(',').filter(Boolean) : undefined;
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const [vendors, page] = await Promise.all([
+  const [vendors, allOrderTags, page] = await Promise.all([
     // Active vendors only in the filter dropdown — historical bills for
     // deactivated vendors still render via the vendor join.
     listVendors(db, { active: true, take: 1000 }),
+    listAllOrderTags(db),
     listBillsPaged(db, {
       q,
       status,
@@ -85,6 +89,7 @@ export default async function BillsPage({
       vendorId,
       billDateFrom: dateFrom,
       billDateTo: dateTo,
+      tagIds,
       skip,
       take,
     }),
@@ -94,6 +99,7 @@ export default async function BillsPage({
     id: v.id,
     label: `${v.name} (${v.code})`,
   }));
+  const tagOptions = allOrderTags.map((t) => ({ id: t.id, name: t.name }));
 
   const tableRows: BillRowData[] = page.rows.map((b) => ({
     id: b.id,
@@ -111,6 +117,7 @@ export default async function BillsPage({
     // Balance = total − amountPaid − amountCredited. The denorms are
     // recomputed by the service on every payment/credit movement.
     balance: b.total.minus(b.amountPaid).minus(b.amountCredited),
+    tags: b.tags.map((a) => ({ id: a.tag.id, name: a.tag.name })),
   }));
 
   return (
@@ -129,7 +136,7 @@ export default async function BillsPage({
         </Button>
       </div>
 
-      <BillsFilters vendors={vendorOptions} />
+      <BillsFilters vendors={vendorOptions} tags={tagOptions} />
 
       <BillsTable rows={tableRows} />
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Search, X } from 'lucide-react';
+import { Search, X, Tag as TagIcon, ChevronDown } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -13,6 +13,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 const VC_STATUSES: Array<{ value: string; label: string }> = [
   { value: 'DRAFT', label: 'Draft' },
@@ -23,11 +29,14 @@ const VC_STATUSES: Array<{ value: string; label: string }> = [
 const ALL_VALUE = '__all__';
 
 export type VendorOption = { id: string; label: string };
+export type TagOption = { id: string; name: string };
 
 export function VendorCreditsFilters({
   vendors,
+  tags,
 }: {
   vendors: VendorOption[];
+  tags: TagOption[];
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -36,6 +45,9 @@ export function VendorCreditsFilters({
   const currentQ = params.get('q') ?? '';
   const currentStatus = params.get('status') ?? ALL_VALUE;
   const currentVendor = params.get('vendorId') ?? ALL_VALUE;
+  const selectedTagIds = (params.get('tags') ?? '')
+    .split(',')
+    .filter(Boolean);
 
   const [qInput, setQInput] = useState(currentQ);
 
@@ -66,6 +78,14 @@ export function VendorCreditsFilters({
     });
   }
 
+  function toggleTag(tagId: string, checked: boolean) {
+    const next = new Set(selectedTagIds);
+    if (checked) next.add(tagId);
+    else next.delete(tagId);
+    const value = Array.from(next).join(',');
+    apply({ tags: value || null, skip: '0' });
+  }
+
   function clearAll() {
     setQInput('');
     startTransition(() => {
@@ -76,7 +96,8 @@ export function VendorCreditsFilters({
   const hasFilters =
     currentQ !== '' ||
     currentStatus !== ALL_VALUE ||
-    currentVendor !== ALL_VALUE;
+    currentVendor !== ALL_VALUE ||
+    selectedTagIds.length > 0;
 
   return (
     <div className="flex flex-wrap items-end gap-3">
@@ -145,6 +166,39 @@ export function VendorCreditsFilters({
           </SelectContent>
         </Select>
       </div>
+
+      {tags.length > 0 ? (
+        <div className="space-y-1.5">
+          <Label>Tags</Label>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="outline" className="w-48 justify-between">
+                  <span className="flex items-center gap-1.5 truncate">
+                    <TagIcon className="size-3.5" />
+                    {selectedTagIds.length > 0
+                      ? `${selectedTagIds.length} selected`
+                      : 'Any tags'}
+                  </span>
+                  <ChevronDown className="size-3.5 text-muted-foreground" />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="start" className="max-h-72 overflow-auto">
+              {tags.map((t) => (
+                <DropdownMenuCheckboxItem
+                  key={t.id}
+                  checked={selectedTagIds.includes(t.id)}
+                  onCheckedChange={(checked) => toggleTag(t.id, checked === true)}
+                  closeOnClick={false}
+                >
+                  {t.name}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ) : null}
 
       {hasFilters ? (
         <Button

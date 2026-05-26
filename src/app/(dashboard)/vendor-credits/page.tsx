@@ -4,6 +4,7 @@ import { VendorCreditStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listVendorCreditsPaged } from '@/server/services/vendorCredits';
 import { listVendors } from '@/server/services/vendors';
+import { listAllOrderTags } from '@/server/services/orderTags';
 import { Button } from '@/components/ui/button';
 import {
   VendorCreditsFilters,
@@ -43,18 +44,22 @@ export default async function VendorCreditsPage({
   const statusRaw = pickString(sp.status);
   const status = isVendorCreditStatus(statusRaw) ? statusRaw : undefined;
   const vendorId = pickString(sp.vendorId);
+  const tagsParam = pickString(sp.tags);
+  const tagIds = tagsParam ? tagsParam.split(',').filter(Boolean) : undefined;
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const [vendors, page] = await Promise.all([
+  const [vendors, allOrderTags, page] = await Promise.all([
     listVendors(db, { active: true, take: 1000 }),
-    listVendorCreditsPaged(db, { q, status, vendorId, skip, take }),
+    listAllOrderTags(db),
+    listVendorCreditsPaged(db, { q, status, vendorId, tagIds, skip, take }),
   ]);
 
   const vendorOptions: VendorOption[] = vendors.map((v) => ({
     id: v.id,
     label: `${v.name} (${v.code})`,
   }));
+  const tagOptions = allOrderTags.map((t) => ({ id: t.id, name: t.name }));
 
   const tableRows: VendorCreditRowData[] = page.rows.map((vc) => ({
     id: vc.id,
@@ -70,6 +75,7 @@ export default async function VendorCreditsPage({
     // the bill-payment overpayment path. Anything else (null or
     // other prefix) is treated as manual entry.
     isOverpayment: !!vc.sourceTag && vc.sourceTag.startsWith('OVERPAYMENT:'),
+    tags: vc.tags.map((a) => ({ id: a.tag.id, name: a.tag.name })),
   }));
 
   return (
@@ -91,7 +97,7 @@ export default async function VendorCreditsPage({
         </Button>
       </div>
 
-      <VendorCreditsFilters vendors={vendorOptions} />
+      <VendorCreditsFilters vendors={vendorOptions} tags={tagOptions} />
 
       <VendorCreditsTable rows={tableRows} />
 

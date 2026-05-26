@@ -10,6 +10,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { TagPills } from '@/components/shared/tag-pills';
 import { formatCurrency } from '@/lib/format';
 import { BalanceSortHeader } from './balance-sort-header';
 
@@ -32,6 +33,7 @@ export type PurchaseOrderRowData = {
   hasPayments: boolean;
   // Remaining balance (line total − recorded payments), decimal string.
   balance: string;
+  tags: Array<{ id: string; name: string }>;
 };
 
 export function PurchaseOrdersTable({
@@ -57,6 +59,7 @@ export function PurchaseOrdersTable({
             <TableHead>Order date</TableHead>
             <TableHead>Expected</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead>Tags</TableHead>
             <TableHead>Shipment</TableHead>
             <TableHead className="text-right">Lines</TableHead>
             <TableHead className="text-right">Total</TableHead>
@@ -111,6 +114,9 @@ export function PurchaseOrdersTable({
               </TableCell>
               <TableCell>
                 <StatusBadge entityType="PurchaseOrder" status={row.status} />
+              </TableCell>
+              <TableCell className="relative z-10">
+                <TagPills tags={row.tags} />
               </TableCell>
               <TableCell>
                 {row.shipmentRollup ? (

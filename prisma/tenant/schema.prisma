@@ -882,11 +882,12 @@ model PurchaseOrder {
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
-  vendor    Vendor              @relation(fields: [vendorId], references: [id])
+  vendor    Vendor                       @relation(fields: [vendorId], references: [id])
   lines     PurchaseOrderLine[]
   billLinks BillPurchaseOrder[]
   shipments PoShipment[]
   payments  PoPayment[]
+  tags      PurchaseOrderTagAssignment[]
 
   @@index([vendorId, status])
   @@index([status, expectedReceiveDate])
@@ -1543,20 +1544,25 @@ model ProductTag {
 }
 
 // Shared "operational workflow" tag dictionary — created lazily on first
-// use via the autocomplete editor. Designed to be reused across the
-// operational entities (SalesOrder, PurchaseOrder, Bill, CreditMemo, Rma,
-// WorkOrder, VendorCredit) so a tag like "URGENT" or "Q3" applies to any
-// record and the autocomplete pool stays consistent. Each entity adds its
-// own assignment table that FKs into this dictionary (only the SO join
-// exists today — PO/Bill/etc. are layered in when those modules get tag
-// UIs). Distinct from Product `Tag` (product attributes) and `CustomerTag`
-// (customer categorization), which keep their own dictionaries.
+// use via the autocomplete editor. Reused across the operational entities
+// (SalesOrder, PurchaseOrder, Bill, CreditMemo, Rma, WorkOrder,
+// VendorCredit) so a tag like "URGENT" or "Q3" applies to any record and
+// the autocomplete pool stays consistent. Each entity has its own
+// assignment table that FKs into this dictionary. Distinct from Product
+// `Tag` (product attributes) and `CustomerTag` (customer categorization),
+// which keep their own dictionaries.
 model OrderTag {
   id        String   @id @default(cuid())
   name      String   @unique @db.Citext
   createdAt DateTime @default(now())
 
-  salesOrderAssignments SalesOrderTagAssignment[]
+  salesOrderAssignments    SalesOrderTagAssignment[]
+  purchaseOrderAssignments PurchaseOrderTagAssignment[]
+  billAssignments          BillTagAssignment[]
+  creditMemoAssignments    CreditMemoTagAssignment[]
+  rmaAssignments           RmaTagAssignment[]
+  workOrderAssignments     WorkOrderTagAssignment[]
+  vendorCreditAssignments  VendorCreditTagAssignment[]
 }
 
 model SalesOrderTagAssignment {
@@ -1568,6 +1574,78 @@ model SalesOrderTagAssignment {
   tag        OrderTag   @relation(fields: [tagId], references: [id])
 
   @@id([salesOrderId, tagId])
+  @@index([tagId])
+}
+
+model PurchaseOrderTagAssignment {
+  purchaseOrderId String
+  tagId           String
+  createdAt       DateTime @default(now())
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  tag           OrderTag      @relation(fields: [tagId], references: [id])
+
+  @@id([purchaseOrderId, tagId])
+  @@index([tagId])
+}
+
+model BillTagAssignment {
+  billId    String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  bill Bill     @relation(fields: [billId], references: [id])
+  tag  OrderTag @relation(fields: [tagId], references: [id])
+
+  @@id([billId, tagId])
+  @@index([tagId])
+}
+
+model CreditMemoTagAssignment {
+  creditMemoId String
+  tagId        String
+  createdAt    DateTime @default(now())
+
+  creditMemo CreditMemo @relation(fields: [creditMemoId], references: [id])
+  tag        OrderTag   @relation(fields: [tagId], references: [id])
+
+  @@id([creditMemoId, tagId])
+  @@index([tagId])
+}
+
+model RmaTagAssignment {
+  rmaId     String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  rma Rma      @relation(fields: [rmaId], references: [id])
+  tag OrderTag @relation(fields: [tagId], references: [id])
+
+  @@id([rmaId, tagId])
+  @@index([tagId])
+}
+
+model WorkOrderTagAssignment {
+  workOrderId String
+  tagId       String
+  createdAt   DateTime @default(now())
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [id])
+  tag       OrderTag  @relation(fields: [tagId], references: [id])
+
+  @@id([workOrderId, tagId])
+  @@index([tagId])
+}
+
+model VendorCreditTagAssignment {
+  vendorCreditId String
+  tagId          String
+  createdAt      DateTime @default(now())
+
+  vendorCredit VendorCredit @relation(fields: [vendorCreditId], references: [id])
+  tag          OrderTag     @relation(fields: [tagId], references: [id])
+
+  @@id([vendorCreditId, tagId])
   @@index([tagId])
 }
 
@@ -1884,12 +1962,13 @@ model CreditMemo {
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
 
-  customer     Customer            @relation(fields: [customerId], references: [id])
-  invoice      Invoice?            @relation(fields: [invoiceId], references: [id])
-  category     CreditMemoCategory  @relation(fields: [categoryId], references: [id])
+  customer     Customer                  @relation(fields: [customerId], references: [id])
+  invoice      Invoice?                  @relation(fields: [invoiceId], references: [id])
+  category     CreditMemoCategory        @relation(fields: [categoryId], references: [id])
   rma          Rma?
   lines        CreditMemoLine[]
   applications CreditApplication[]
+  tags         CreditMemoTagAssignment[]
 
   @@index([customerId, status])
   @@index([invoiceId])
@@ -1939,10 +2018,11 @@ model Rma {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  customer   Customer    @relation(fields: [customerId], references: [id])
-  invoice    Invoice     @relation(fields: [invoiceId], references: [id])
-  creditMemo CreditMemo? @relation(fields: [creditMemoId], references: [id])
+  customer   Customer           @relation(fields: [customerId], references: [id])
+  invoice    Invoice            @relation(fields: [invoiceId], references: [id])
+  creditMemo CreditMemo?        @relation(fields: [creditMemoId], references: [id])
   lines      RmaLine[]
+  tags       RmaTagAssignment[]
 
   @@index([customerId, status])
   @@index([status])
@@ -2262,6 +2342,7 @@ model Bill {
   receipts              BillReceipt[]
   purchaseOrders        BillPurchaseOrder[]
   poPaymentApplications PoPaymentApplication[]
+  tags                  BillTagAssignment[]
 
   @@index([vendorId, status])
   @@index([status, billDate])
@@ -2414,9 +2495,10 @@ model VendorCredit {
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
 
-  vendor       Vendor                    @relation(fields: [vendorId], references: [id])
+  vendor       Vendor                      @relation(fields: [vendorId], references: [id])
   lines        VendorCreditLine[]
   applications VendorCreditApplication[]
+  tags         VendorCreditTagAssignment[]
 
   @@index([vendorId, status])
   @@index([sourceTag])
@@ -2718,11 +2800,12 @@ model WorkOrder {
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
-  product     Product               @relation("WorkOrderProduct", fields: [productId], references: [id])
-  variant     ProductVariant        @relation("WorkOrderFinishedVariant", fields: [variantId], references: [id])
-  warehouse   Warehouse             @relation(fields: [warehouseId], references: [id])
+  product     Product                  @relation("WorkOrderProduct", fields: [productId], references: [id])
+  variant     ProductVariant           @relation("WorkOrderFinishedVariant", fields: [variantId], references: [id])
+  warehouse   Warehouse                @relation(fields: [warehouseId], references: [id])
   components  WorkOrderComponent[]
   completions WorkOrderCompletion[]
+  tags        WorkOrderTagAssignment[]
 
   @@index([productId])
   @@index([status])

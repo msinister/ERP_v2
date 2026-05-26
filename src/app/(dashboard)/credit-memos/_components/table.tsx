@@ -9,6 +9,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { TagPills } from '@/components/shared/tag-pills';
 import { formatCurrency } from '@/lib/format';
 
 export type CreditMemoRowData = {
@@ -27,6 +28,7 @@ export type CreditMemoRowData = {
   netCredit: Prisma.Decimal;
   appliedAmount: Prisma.Decimal;
   status: string;
+  tags: Array<{ id: string; name: string }>;
 };
 
 export function CreditMemosTable({ rows }: { rows: CreditMemoRowData[] }) {
@@ -51,6 +53,7 @@ export function CreditMemosTable({ rows }: { rows: CreditMemoRowData[] }) {
             <TableHead className="text-right">Applied</TableHead>
             <TableHead className="text-right">Available</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead>Tags</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -100,6 +103,9 @@ export function CreditMemosTable({ rows }: { rows: CreditMemoRowData[] }) {
                 </TableCell>
                 <TableCell>
                   <StatusBadge entityType="CreditMemo" status={row.status} />
+                </TableCell>
+                <TableCell className="relative z-10">
+                  <TagPills tags={row.tags} />
                 </TableCell>
               </TableRow>
             );

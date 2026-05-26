@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { TagPills } from '@/components/shared/tag-pills';
 import { formatCurrency } from '@/lib/format';
 
 export type BillRowData = {
@@ -26,6 +27,7 @@ export type BillRowData = {
   source: string;
   total: Prisma.Decimal;
   balance: Prisma.Decimal;
+  tags: Array<{ id: string; name: string }>;
 };
 
 export function BillsTable({ rows }: { rows: BillRowData[] }) {
@@ -50,6 +52,7 @@ export function BillsTable({ rows }: { rows: BillRowData[] }) {
             <TableHead>Source</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Payment</TableHead>
+            <TableHead>Tags</TableHead>
             <TableHead className="text-right">Total</TableHead>
             <TableHead className="text-right">Balance</TableHead>
           </TableRow>
@@ -107,6 +110,9 @@ export function BillsTable({ rows }: { rows: BillRowData[] }) {
                 ) : (
                   <span className="text-xs text-muted-foreground">—</span>
                 )}
+              </TableCell>
+              <TableCell className="relative z-10">
+                <TagPills tags={row.tags} />
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {formatCurrency(row.total)}

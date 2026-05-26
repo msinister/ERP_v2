@@ -3,7 +3,9 @@ import { Wrench } from 'lucide-react';
 import { Prisma, WorkOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listWorkOrdersPaged } from '@/server/services/workOrders';
+import { listAllOrderTags } from '@/server/services/orderTags';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { TagPills } from '@/components/shared/tag-pills';
 import {
   Table,
   TableBody,
@@ -13,6 +15,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatStatusLabel } from '@/lib/format';
+import { WorkOrderTagFilter } from './_components/tag-filter';
 
 export const revalidate = 0;
 
@@ -38,11 +41,18 @@ export default async function WorkOrdersPage({
   const sp = await searchParams;
   const statusRaw = pickString(sp.status);
   const status = isWorkOrderStatus(statusRaw) ? statusRaw : undefined;
+  const tagsParam = pickString(sp.tags);
+  const tagIds = tagsParam ? tagsParam.split(',').filter(Boolean) : undefined;
 
-  const page = await listWorkOrdersPaged(db, {
-    status,
-    take: DEFAULT_PAGE_SIZE,
-  });
+  const [allOrderTags, page] = await Promise.all([
+    listAllOrderTags(db),
+    listWorkOrdersPaged(db, {
+      status,
+      tagIds,
+      take: DEFAULT_PAGE_SIZE,
+    }),
+  ]);
+  const tagOptions = allOrderTags.map((t) => ({ id: t.id, name: t.name }));
 
   return (
     <div className="space-y-6">
@@ -58,7 +68,10 @@ export default async function WorkOrdersPage({
         </div>
       </div>
 
-      <StatusTabs current={status} />
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <StatusTabs current={status} />
+        <WorkOrderTagFilter tags={tagOptions} />
+      </div>
 
       {page.rows.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
@@ -77,6 +90,7 @@ export default async function WorkOrdersPage({
                 <TableHead>Warehouse</TableHead>
                 <TableHead className="text-right">Qty</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Tags</TableHead>
                 <TableHead>Created</TableHead>
               </TableRow>
             </TableHeader>
@@ -105,6 +119,14 @@ export default async function WorkOrdersPage({
                   </TableCell>
                   <TableCell>
                     <StatusBadge entityType="WorkOrder" status={wo.status} />
+                  </TableCell>
+                  <TableCell>
+                    <TagPills
+                      tags={wo.tags.map((a) => ({
+                        id: a.tag.id,
+                        name: a.tag.name,
+                      }))}
+                    />
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {wo.createdAt.toLocaleDateString()}

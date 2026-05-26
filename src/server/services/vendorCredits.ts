@@ -674,6 +674,8 @@ export type VendorCreditListFilters = {
   vendorId?: string;
   status?: VendorCreditStatus | VendorCreditStatus[];
   q?: string;
+  // Filter to VCs carrying ANY of these OrderTag ids.
+  tagIds?: string[];
   skip?: number;
   take?: number;
 };
@@ -681,7 +683,7 @@ export type VendorCreditListFilters = {
 function vendorCreditWhere(
   filters: Omit<VendorCreditListFilters, 'skip' | 'take'>,
 ): Prisma.VendorCreditWhereInput {
-  const { vendorId, status, q } = filters;
+  const { vendorId, status, q, tagIds } = filters;
   return {
     deletedAt: null,
     ...(vendorId ? { vendorId } : {}),
@@ -689,6 +691,9 @@ function vendorCreditWhere(
       ? { status: Array.isArray(status) ? { in: status } : status }
       : {}),
     ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
+    ...(tagIds && tagIds.length > 0
+      ? { tags: { some: { tagId: { in: tagIds } } } }
+      : {}),
   };
 }
 
@@ -722,6 +727,7 @@ export async function listVendorCreditsPaged(
     VendorCredit & {
       lines: VendorCreditLine[];
       vendor: { id: string; code: string; name: string };
+      tags: Array<{ tag: { id: string; name: string } }>;
     }
   >;
   total: number;
@@ -734,6 +740,10 @@ export async function listVendorCreditsPaged(
       include: {
         lines: { where: { deletedAt: null }, orderBy: { lineNumber: 'asc' } },
         vendor: { select: { id: true, code: true, name: true } },
+        tags: {
+          include: { tag: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
       },
       orderBy: { createdAt: 'desc' },
       skip,

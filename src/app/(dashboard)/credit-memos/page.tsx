@@ -6,6 +6,7 @@ import { db } from '@/lib/db';
 import { listCreditMemosPaged } from '@/server/services/creditMemos';
 import { listCustomers } from '@/server/services/customers';
 import { listCategories } from '@/server/services/creditMemoCategories';
+import { listAllOrderTags } from '@/server/services/orderTags';
 import { getActor } from '@/lib/permissions/getActor';
 import { creditMemoScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
@@ -49,6 +50,8 @@ export default async function CreditMemosPage({
   const categoryId = pickString(sp.categoryId);
   const fromParam = pickString(sp.from);
   const toParam = pickString(sp.to);
+  const tagsParam = pickString(sp.tags);
+  const tagIds = tagsParam ? tagsParam.split(',').filter(Boolean) : undefined;
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
@@ -56,9 +59,10 @@ export default async function CreditMemosPage({
   if (!actor) redirect('/login');
   const scope = creditMemoScopeWhere(actor);
 
-  const [customers, categories, page] = await Promise.all([
+  const [customers, categories, allOrderTags, page] = await Promise.all([
     listCustomers(db, { active: true, take: 1000 }),
     listCategories(db, { active: true, take: 200 }),
+    listAllOrderTags(db),
     listCreditMemosPaged(db, {
       q,
       status,
@@ -68,6 +72,7 @@ export default async function CreditMemosPage({
       // "to" is a calendar date — extend to end-of-day so a same-day
       // filter doesn't exclude the day's own rows.
       createdAtTo: toParam ? new Date(`${toParam}T23:59:59.999Z`) : undefined,
+      tagIds,
       scope,
       skip,
       take,
@@ -84,6 +89,7 @@ export default async function CreditMemosPage({
     code: c.code,
     label: c.label,
   }));
+  const tagOptions = allOrderTags.map((t) => ({ id: t.id, name: t.name }));
 
   const tableRows: CreditMemoRowData[] = page.rows.map((cm) => ({
     id: cm.id,
@@ -99,6 +105,7 @@ export default async function CreditMemosPage({
     netCredit: cm.netCredit,
     appliedAmount: cm.appliedAmount,
     status: cm.status,
+    tags: cm.tags.map((a) => ({ id: a.tag.id, name: a.tag.name })),
   }));
 
   return (
@@ -123,6 +130,7 @@ export default async function CreditMemosPage({
       <CreditMemosFilters
         customers={customerOptions}
         categories={categoryOptions}
+        tags={tagOptions}
       />
 
       <CreditMemosTable rows={tableRows} />

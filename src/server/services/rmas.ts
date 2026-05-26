@@ -469,6 +469,8 @@ export type RmaListFilters = {
   status?: RmaStatus | RmaStatus[];
   createdAtFrom?: Date;
   createdAtTo?: Date;
+  // Filter to RMAs carrying ANY of these OrderTag ids.
+  tagIds?: string[];
   // Data-scope fragment from lib/permissions/scope.rmaScopeWhere.
   scope?: Prisma.RmaWhereInput;
   skip?: number;
@@ -478,8 +480,15 @@ export type RmaListFilters = {
 function rmaWhere(
   filters: Omit<RmaListFilters, 'skip' | 'take'>,
 ): Prisma.RmaWhereInput {
-  const { customerId, invoiceId, status, createdAtFrom, createdAtTo, scope } =
-    filters;
+  const {
+    customerId,
+    invoiceId,
+    status,
+    createdAtFrom,
+    createdAtTo,
+    tagIds,
+    scope,
+  } = filters;
   const dateFilter: { gte?: Date; lte?: Date } = {};
   if (createdAtFrom) dateFilter.gte = createdAtFrom;
   if (createdAtTo) dateFilter.lte = createdAtTo;
@@ -491,6 +500,9 @@ function rmaWhere(
       ? { status: Array.isArray(status) ? { in: status } : status }
       : {}),
     ...(createdAtFrom || createdAtTo ? { createdAt: dateFilter } : {}),
+    ...(tagIds && tagIds.length > 0
+      ? { tags: { some: { tagId: { in: tagIds } } } }
+      : {}),
   };
   return scope ? { AND: [base, scope] } : base;
 }
@@ -522,6 +534,7 @@ export async function listRmasPaged(
       customer: { id: string; code: string; name: string };
       invoice: { id: string; number: string };
       creditMemo: { id: string; number: string } | null;
+      tags: Array<{ tag: { id: string; name: string } }>;
     }
   >;
   total: number;
@@ -539,6 +552,10 @@ export async function listRmasPaged(
         customer: { select: { id: true, code: true, name: true } },
         invoice: { select: { id: true, number: true } },
         creditMemo: { select: { id: true, number: true } },
+        tags: {
+          include: { tag: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
       },
       orderBy: { createdAt: 'desc' },
       skip,

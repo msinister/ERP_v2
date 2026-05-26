@@ -359,6 +359,8 @@ export async function listWorkOrdersPaged(
     status?: WorkOrderStatus;
     productId?: string;
     warehouseId?: string;
+    // Filter to WOs carrying ANY of these OrderTag ids.
+    tagIds?: string[];
     skip?: number;
     take?: number;
   } = {},
@@ -367,6 +369,7 @@ export async function listWorkOrdersPaged(
     product: { id: string; sku: string; name: string };
     variant: { id: string; sku: string; name: string | null };
     warehouse: { id: string; code: string; name: string };
+    tags: Array<{ tag: { id: string; name: string } }>;
   })[];
   total: number;
 }> {
@@ -374,6 +377,9 @@ export async function listWorkOrdersPaged(
   if (opts.status) where.status = opts.status;
   if (opts.productId) where.productId = opts.productId;
   if (opts.warehouseId) where.warehouseId = opts.warehouseId;
+  if (opts.tagIds && opts.tagIds.length > 0) {
+    where.tags = { some: { tagId: { in: opts.tagIds } } };
+  }
 
   const [rows, total] = await Promise.all([
     db.workOrder.findMany({
@@ -382,6 +388,10 @@ export async function listWorkOrdersPaged(
         product: { select: { id: true, sku: true, name: true } },
         variant: { select: { id: true, sku: true, name: true } },
         warehouse: { select: { id: true, code: true, name: true } },
+        tags: {
+          include: { tag: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
       },
       orderBy: { createdAt: 'desc' },
       skip: opts.skip ?? 0,

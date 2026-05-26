@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { TagPills } from '@/components/shared/tag-pills';
 import { formatCurrency } from '@/lib/format';
 
 export type RmaRowData = {
@@ -27,6 +28,7 @@ export type RmaRowData = {
   status: string;
   returnless: boolean;
   hasCreditMemo: boolean;
+  tags: Array<{ id: string; name: string }>;
 };
 
 export function RmasTable({ rows }: { rows: RmaRowData[] }) {
@@ -50,6 +52,7 @@ export function RmasTable({ rows }: { rows: RmaRowData[] }) {
             <TableHead className="text-right">Items</TableHead>
             <TableHead className="text-right">Total</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead>Tags</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -102,6 +105,9 @@ export function RmasTable({ rows }: { rows: RmaRowData[] }) {
                     </Badge>
                   ) : null}
                 </div>
+              </TableCell>
+              <TableCell className="relative z-10">
+                <TagPills tags={row.tags} />
               </TableCell>
             </TableRow>
           ))}

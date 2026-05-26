@@ -552,6 +552,8 @@ export type PurchaseOrderListFilters = {
   // Substring match on PO number (case-insensitive). Numbers look like
   // PO-2026-00001 so partial matches are useful.
   q?: string;
+  // Filter to POs carrying ANY of these OrderTag ids — `some`, not `every`.
+  tagIds?: string[];
   // Optional sort. Only 'balance' is supported as a non-default sort; it's
   // a computed value (line total − recorded payments), so it can't be a DB
   // orderBy and is sorted in-memory across all matching rows. Omitted →
@@ -582,7 +584,7 @@ export function purchaseOrderBalance(po: {
 function purchaseOrderWhere(
   filters: Omit<PurchaseOrderListFilters, 'skip' | 'take'>,
 ): Prisma.PurchaseOrderWhereInput {
-  const { status, vendorId, dateFrom, dateTo, q } = filters;
+  const { status, vendorId, dateFrom, dateTo, q, tagIds } = filters;
   const dateClause: Prisma.DateTimeFilter | undefined =
     dateFrom || dateTo
       ? {
@@ -596,6 +598,9 @@ function purchaseOrderWhere(
     ...(vendorId ? { vendorId } : {}),
     ...(dateClause ? { createdAt: dateClause } : {}),
     ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
+    ...(tagIds && tagIds.length > 0
+      ? { tags: { some: { tagId: { in: tagIds } } } }
+      : {}),
   };
 }
 
@@ -613,6 +618,7 @@ export async function listPurchaseOrdersPaged(
       vendor: { id: string; code: string; name: string };
       shipments: { shipmentStatus: PoShipmentStatus }[];
       payments: { amount: Prisma.Decimal }[];
+      tags: Array<{ tag: { id: string; name: string } }>;
     }
   >;
   total: number;
@@ -631,6 +637,10 @@ export async function listPurchaseOrdersPaged(
     payments: {
       where: { deletedAt: null, status: 'RECORDED' },
       select: { amount: true },
+    },
+    tags: {
+      include: { tag: { select: { id: true, name: true } } },
+      orderBy: { createdAt: 'asc' as const },
     },
   } satisfies Prisma.PurchaseOrderInclude;
 

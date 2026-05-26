@@ -773,6 +773,8 @@ export type BillListFilters = {
   billDateFrom?: Date;
   billDateTo?: Date;
   q?: string;
+  // Filter to Bills carrying ANY of these OrderTag ids.
+  tagIds?: string[];
   skip?: number;
   take?: number;
 };
@@ -780,8 +782,16 @@ export type BillListFilters = {
 function billWhere(
   filters: Omit<BillListFilters, 'skip' | 'take'>,
 ): Prisma.BillWhereInput {
-  const { vendorId, status, paymentStatus, source, billDateFrom, billDateTo, q } =
-    filters;
+  const {
+    vendorId,
+    status,
+    paymentStatus,
+    source,
+    billDateFrom,
+    billDateTo,
+    q,
+    tagIds,
+  } = filters;
   const dateFilter: { gte?: Date; lte?: Date } = {};
   if (billDateFrom) dateFilter.gte = billDateFrom;
   if (billDateTo) dateFilter.lte = billDateTo;
@@ -807,6 +817,9 @@ function billWhere(
             { vendorReference: { contains: q, mode: 'insensitive' as const } },
           ],
         }
+      : {}),
+    ...(tagIds && tagIds.length > 0
+      ? { tags: { some: { tagId: { in: tagIds } } } }
       : {}),
   };
 }
@@ -842,6 +855,7 @@ export async function listBillsPaged(
     Bill & {
       lines: BillLine[];
       vendor: { id: string; code: string; name: string };
+      tags: Array<{ tag: { id: string; name: string } }>;
     }
   >;
   total: number;
@@ -854,6 +868,10 @@ export async function listBillsPaged(
       include: {
         lines: { where: { deletedAt: null }, orderBy: { lineNumber: 'asc' } },
         vendor: { select: { id: true, code: true, name: true } },
+        tags: {
+          include: { tag: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
       },
       orderBy: { createdAt: 'desc' },
       skip,

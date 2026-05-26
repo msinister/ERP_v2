@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Search, X } from 'lucide-react';
+import { X, Tag as TagIcon, ChevronDown } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -13,6 +13,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 // Friendly labels mirror the spec wording — the enum value is PENDING
 // on the server but reads as "Pending Review" to operators.
@@ -29,11 +35,14 @@ const RMA_STATUSES: Array<{ value: string; label: string }> = [
 const ALL_VALUE = '__all__';
 
 export type CustomerOption = { id: string; code: string; name: string };
+export type TagOption = { id: string; name: string };
 
 export function RmasFilters({
   customers,
+  tags,
 }: {
   customers: CustomerOption[];
+  tags: TagOption[];
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -43,6 +52,9 @@ export function RmasFilters({
   const currentCustomer = params.get('customerId') ?? ALL_VALUE;
   const currentFrom = params.get('from') ?? '';
   const currentTo = params.get('to') ?? '';
+  const selectedTagIds = (params.get('tags') ?? '')
+    .split(',')
+    .filter(Boolean);
 
   const [fromInput, setFromInput] = useState(currentFrom);
   const [toInput, setToInput] = useState(currentTo);
@@ -68,6 +80,14 @@ export function RmasFilters({
     });
   }
 
+  function toggleTag(tagId: string, checked: boolean) {
+    const next = new Set(selectedTagIds);
+    if (checked) next.add(tagId);
+    else next.delete(tagId);
+    const value = Array.from(next).join(',');
+    apply({ tags: value || null, skip: '0' });
+  }
+
   function clearAll() {
     setFromInput('');
     setToInput('');
@@ -80,7 +100,8 @@ export function RmasFilters({
     currentStatus !== ALL_VALUE ||
     currentCustomer !== ALL_VALUE ||
     currentFrom !== '' ||
-    currentTo !== '';
+    currentTo !== '' ||
+    selectedTagIds.length > 0;
 
   return (
     <div className="flex flex-wrap items-end gap-3">
@@ -163,6 +184,39 @@ export function RmasFilters({
           className="w-40"
         />
       </div>
+
+      {tags.length > 0 ? (
+        <div className="space-y-1.5">
+          <Label>Tags</Label>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="outline" className="w-48 justify-between">
+                  <span className="flex items-center gap-1.5 truncate">
+                    <TagIcon className="size-3.5" />
+                    {selectedTagIds.length > 0
+                      ? `${selectedTagIds.length} selected`
+                      : 'Any tags'}
+                  </span>
+                  <ChevronDown className="size-3.5 text-muted-foreground" />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="start" className="max-h-72 overflow-auto">
+              {tags.map((t) => (
+                <DropdownMenuCheckboxItem
+                  key={t.id}
+                  checked={selectedTagIds.includes(t.id)}
+                  onCheckedChange={(checked) => toggleTag(t.id, checked === true)}
+                  closeOnClick={false}
+                >
+                  {t.name}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ) : null}
 
       {hasFilters ? (
         <Button
