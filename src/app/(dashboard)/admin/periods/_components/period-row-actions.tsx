@@ -29,6 +29,11 @@ import {
 import { Field, FieldError, FieldLabel } from '@/components/ui/field';
 import { Textarea } from '@/components/ui/textarea';
 
+type PeriodProps = {
+  periodId: string;
+  periodCode: string;
+};
+
 export function PeriodRowActions({
   periodId,
   periodCode,
@@ -41,6 +46,15 @@ export function PeriodRowActions({
   const canSoftClose = status === 'OPEN';
   const canHardClose = status === 'OPEN' || status === 'SOFT_CLOSED';
   const canReopen = status === 'SOFT_CLOSED' || status === 'HARD_CLOSED';
+
+  // Dialogs are controlled here and rendered as siblings OUTSIDE the
+  // dropdown — a dialog nested inside DropdownMenuContent unmounts (only
+  // flashes) when the menu closes on item-press, since Base UI ignores
+  // preventDefault for the item close. See
+  // admin/payment-terms/.../term-row-actions.tsx for the canonical shape.
+  const [openDialog, setOpenDialog] = useState<
+    'soft' | 'hard' | 'reopen' | null
+  >(null);
 
   return (
     <div className="flex items-center gap-2">
@@ -58,33 +72,68 @@ export function PeriodRowActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           {canSoftClose ? (
-            <SoftCloseItem periodId={periodId} periodCode={periodCode} />
+            <DropdownMenuItem onClick={() => setOpenDialog('soft')}>
+              <Lock className="size-4" />
+              Soft close
+            </DropdownMenuItem>
           ) : null}
           {canHardClose ? (
-            <HardCloseItem periodId={periodId} periodCode={periodCode} />
+            <DropdownMenuItem
+              onClick={() => setOpenDialog('hard')}
+              variant="destructive"
+            >
+              <LockKeyhole className="size-4" />
+              Hard close
+            </DropdownMenuItem>
           ) : null}
           {canReopen ? (
-            <ReopenItem periodId={periodId} periodCode={periodCode} />
+            <DropdownMenuItem onClick={() => setOpenDialog('reopen')}>
+              <Unlock className="size-4" />
+              Reopen
+            </DropdownMenuItem>
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {canSoftClose ? (
+        <SoftCloseDialog
+          periodId={periodId}
+          periodCode={periodCode}
+          open={openDialog === 'soft'}
+          onOpenChange={(o) => setOpenDialog(o ? 'soft' : null)}
+        />
+      ) : null}
+      {canHardClose ? (
+        <HardCloseDialog
+          periodId={periodId}
+          periodCode={periodCode}
+          open={openDialog === 'hard'}
+          onOpenChange={(o) => setOpenDialog(o ? 'hard' : null)}
+        />
+      ) : null}
+      {canReopen ? (
+        <ReopenDialog
+          periodId={periodId}
+          periodCode={periodCode}
+          open={openDialog === 'reopen'}
+          onOpenChange={(o) => setOpenDialog(o ? 'reopen' : null)}
+        />
+      ) : null}
     </div>
   );
 }
+
+type DialogProps = PeriodProps & {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
 
 // =============================================================================
 // Soft close — OPEN → SOFT_CLOSED. No JE block; informational only.
 // =============================================================================
 
-function SoftCloseItem({
-  periodId,
-  periodCode,
-}: {
-  periodId: string;
-  periodCode: string;
-}) {
+function SoftCloseDialog({ periodId, periodCode, open, onOpenChange }: DialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   function onConfirm() {
@@ -102,7 +151,7 @@ function SoftCloseItem({
           return;
         }
         toast.success(`Soft-closed ${periodCode}`);
-        setOpen(false);
+        onOpenChange(false);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
@@ -111,16 +160,7 @@ function SoftCloseItem({
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-      >
-        <Lock className="size-4" />
-        Soft close
-      </DropdownMenuItem>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Soft-close {periodCode}?</AlertDialogTitle>
@@ -148,15 +188,8 @@ function SoftCloseItem({
 // (with reason) overrides discrepancies — separate dialog state.
 // =============================================================================
 
-function HardCloseItem({
-  periodId,
-  periodCode,
-}: {
-  periodId: string;
-  periodCode: string;
-}) {
+function HardCloseDialog({ periodId, periodCode, open, onOpenChange }: DialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   // Two-step flow: bare hard-close attempt first; on rejection the
   // operator can supply a force-with-reason. The pending discrepancy
@@ -214,7 +247,7 @@ function HardCloseItem({
           return;
         }
         toast.success(`Hard-closed ${periodCode}`);
-        setOpen(false);
+        onOpenChange(false);
         reset();
         router.refresh();
       } catch (err) {
@@ -227,20 +260,10 @@ function HardCloseItem({
     <AlertDialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
+        onOpenChange(o);
         if (!o) reset();
       }}
     >
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <LockKeyhole className="size-4" />
-        Hard close
-      </DropdownMenuItem>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>
@@ -305,15 +328,8 @@ function HardCloseItem({
 // action: writes a PERIOD_REOPENED audit row.
 // =============================================================================
 
-function ReopenItem({
-  periodId,
-  periodCode,
-}: {
-  periodId: string;
-  periodCode: string;
-}) {
+function ReopenDialog({ periodId, periodCode, open, onOpenChange }: DialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -342,7 +358,7 @@ function ReopenItem({
           return;
         }
         toast.success(`Reopened ${periodCode}`);
-        setOpen(false);
+        onOpenChange(false);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
@@ -354,22 +370,13 @@ function ReopenItem({
     <AlertDialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
+        onOpenChange(o);
         if (!o) {
           setReason('');
           setError(null);
         }
       }}
     >
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-      >
-        <Unlock className="size-4" />
-        Reopen
-      </DropdownMenuItem>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>Reopen {periodCode}?</AlertDialogTitle>

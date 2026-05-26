@@ -2,8 +2,9 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Trash2 } from 'lucide-react';
+import { MoreVertical, Trash2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
+import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,11 +15,21 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 // Soft-delete a customer. The server (softDeleteCustomer) refuses to
 // delete a customer that still owns non-deleted sales orders and
 // surfaces the message verbatim, which we display in the toast.
+//
+// Self-contained: owns the ⋮ menu AND renders the AlertDialog as a
+// sibling OUTSIDE the dropdown. A dialog nested inside DropdownMenuContent
+// unmounts (only flashes) the instant the Base UI menu closes on
+// item-press. See term-row-actions for the canonical shape.
 
 export function DeleteCustomerAction({
   customerId,
@@ -55,37 +66,45 @@ export function DeleteCustomerAction({
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <DropdownMenuItem
-        // Open the dialog via local state instead of nesting an
-        // AlertDialogTrigger so the menu closes cleanly first and the
-        // dialog takes over.
-        onClick={() => setOpen(true)}
-        variant="destructive"
-      >
-        <Trash2 className="size-4" />
-        Delete customer
-      </DropdownMenuItem>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete this customer?</AlertDialogTitle>
-          <AlertDialogDescription>
-            <span className="font-medium text-foreground">{customerName}</span>{' '}
-            will be hidden from lists but remain in the audit log. The server
-            blocks deletion when the customer still has open sales orders.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={onConfirm}
-            disabled={pending}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-          >
-            {pending ? 'Deleting…' : 'Delete'}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="outline" size="icon-sm" aria-label="More actions" />
+          }
+        >
+          <MoreVertical />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => setOpen(true)} variant="destructive">
+            <Trash2 className="size-4" />
+            Delete customer
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this customer?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="font-medium text-foreground">{customerName}</span>{' '}
+              will be hidden from lists but remain in the audit log. The server
+              blocks deletion when the customer still has open sales orders.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={onConfirm}
+              disabled={pending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {pending ? 'Deleting…' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }

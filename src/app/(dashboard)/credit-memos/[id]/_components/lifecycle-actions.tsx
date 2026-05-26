@@ -60,6 +60,18 @@ export function LifecycleActions(props: Props) {
   const canEdit = status === 'DRAFT';
   const canVoid = status === 'DRAFT' || status === 'CONFIRMED';
 
+  // RMA-sourced CMs can't be voided here — void via the RMA flow.
+  const voidDisabledReason = props.isFromRma
+    ? 'CM was created from an RMA — void via the RMA flow'
+    : null;
+
+  // Void confirm dialog is controlled here and rendered as a sibling
+  // OUTSIDE the dropdown — a dialog nested inside DropdownMenuContent
+  // unmounts (only flashes) when the menu closes on item-press, since
+  // Base UI ignores preventDefault for the item close. See
+  // admin/payment-terms/.../term-row-actions.tsx for the canonical shape.
+  const [voidOpen, setVoidOpen] = useState(false);
+
   return (
     <div className="flex items-center gap-2">
       {canConfirm ? <ConfirmAction {...props} /> : null}
@@ -89,9 +101,21 @@ export function LifecycleActions(props: Props) {
             <MoreVertical />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <VoidMenuItem {...props} />
+            <DropdownMenuItem
+              disabled={!!voidDisabledReason}
+              title={voidDisabledReason ?? undefined}
+              onClick={() => setVoidOpen(true)}
+              variant="destructive"
+            >
+              <XCircle className="size-4" />
+              Void credit memo
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+      ) : null}
+
+      {canVoid ? (
+        <VoidDialog {...props} open={voidOpen} onOpenChange={setVoidOpen} />
       ) : null}
     </div>
   );
@@ -151,26 +175,24 @@ function ConfirmAction({ creditMemoId, creditMemoNumber }: Props) {
   );
 }
 
-function VoidMenuItem({
+// =============================================================================
+// Void — required reason. Service offsetting-JE on CONFIRMED, status flip
+// on DRAFT; rejects when manual applications exist. Dialog rendered as a
+// dropdown sibling.
+// =============================================================================
+
+function VoidDialog({
   creditMemoId,
   creditMemoNumber,
   status,
   hasApplications,
-  isFromRma,
-}: Props) {
+  open,
+  onOpenChange,
+}: Props & { open: boolean; onOpenChange: (open: boolean) => void }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
-
-  // Mirror the service-side rejection: CONFIRMED + non-auto
-  // applications fail. We don't know here whether the apps are auto
-  // or manual — show a guidance line, and surface the server error
-  // verbatim when it rejects.
-  const disabledReason = isFromRma
-    ? 'CM was created from an RMA — void via the RMA flow'
-    : null;
 
   function onVoid() {
     setError(null);
@@ -193,7 +215,7 @@ function VoidMenuItem({
           return;
         }
         toast.success(`Voided ${creditMemoNumber}`);
-        setOpen(false);
+        onOpenChange(false);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
@@ -205,29 +227,13 @@ function VoidMenuItem({
     <AlertDialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
+        onOpenChange(o);
         if (!o) {
           setReason('');
           setError(null);
         }
       }}
     >
-      <DropdownMenuItem
-        disabled={!!disabledReason}
-        title={disabledReason ?? undefined}
-        onClick={(e) => {
-          if (disabledReason) {
-            e.preventDefault();
-            return;
-          }
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <XCircle className="size-4" />
-        Void credit memo
-      </DropdownMenuItem>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>Void this credit memo?</AlertDialogTitle>

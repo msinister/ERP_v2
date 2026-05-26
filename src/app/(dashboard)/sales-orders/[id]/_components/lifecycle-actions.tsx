@@ -83,7 +83,7 @@ export function LifecycleActions(props: Props) {
   // visible error. By keeping the dialogs OUTSIDE the menu in the
   // React tree we sidestep that portal lifetime coupling entirely.
   const [openDialog, setOpenDialog] = useState<
-    'undispatch' | 'reopen' | null
+    'undispatch' | 'reopen' | 'cancel' | 'delete' | null
   >(null);
 
   return (
@@ -137,8 +137,24 @@ export function LifecycleActions(props: Props) {
                 Reopen order
               </DropdownMenuItem>
             ) : null}
-            {canCancel ? <CancelMenuItem {...props} /> : null}
-            {canDelete ? <DeleteMenuItem {...props} /> : null}
+            {canCancel ? (
+              <DropdownMenuItem
+                onClick={() => setOpenDialog('cancel')}
+                variant="destructive"
+              >
+                <XCircle className="size-4" />
+                Cancel order
+              </DropdownMenuItem>
+            ) : null}
+            {canDelete ? (
+              <DropdownMenuItem
+                onClick={() => setOpenDialog('delete')}
+                variant="destructive"
+              >
+                <Trash2 className="size-4" />
+                Delete order
+              </DropdownMenuItem>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
@@ -153,6 +169,16 @@ export function LifecycleActions(props: Props) {
       <ReopenDialog
         {...props}
         open={openDialog === 'reopen'}
+        onClose={() => setOpenDialog(null)}
+      />
+      <CancelDialog
+        {...props}
+        open={openDialog === 'cancel'}
+        onClose={() => setOpenDialog(null)}
+      />
+      <DeleteDialog
+        {...props}
+        open={openDialog === 'delete'}
         onClose={() => setOpenDialog(null)}
       />
     </div>
@@ -808,9 +834,13 @@ function ReopenDialog({
   );
 }
 
-function CancelMenuItem({ salesOrderId, salesOrderNumber }: Props) {
+function CancelDialog({
+  salesOrderId,
+  salesOrderNumber,
+  open,
+  onClose,
+}: Props & { open: boolean; onClose: () => void }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -846,7 +876,7 @@ function CancelMenuItem({ salesOrderId, salesOrderNumber }: Props) {
           return;
         }
         toast.success(`Cancelled ${salesOrderNumber}`);
-        setOpen(false);
+        onClose();
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
@@ -858,24 +888,14 @@ function CancelMenuItem({ salesOrderId, salesOrderNumber }: Props) {
     <AlertDialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) {
+        if (!o && !pending) {
           setReason('');
           setError(null);
           setPaymentBlock(null);
+          onClose();
         }
       }}
     >
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <XCircle className="size-4" />
-        Cancel order
-      </DropdownMenuItem>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel this order?</AlertDialogTitle>
@@ -929,9 +949,13 @@ function CancelMenuItem({ salesOrderId, salesOrderNumber }: Props) {
 // Delete — soft-delete, DRAFT or CANCELLED only.
 // =============================================================================
 
-function DeleteMenuItem({ salesOrderId, salesOrderNumber }: Props) {
+function DeleteDialog({
+  salesOrderId,
+  salesOrderNumber,
+  open,
+  onClose,
+}: Props & { open: boolean; onClose: () => void }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   function onDelete() {
@@ -948,7 +972,7 @@ function DeleteMenuItem({ salesOrderId, salesOrderNumber }: Props) {
           return;
         }
         toast.success(`Deleted ${salesOrderNumber}`);
-        setOpen(false);
+        onClose();
         router.push('/sales-orders');
         router.refresh();
       } catch (err) {
@@ -958,17 +982,12 @@ function DeleteMenuItem({ salesOrderId, salesOrderNumber }: Props) {
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <Trash2 className="size-4" />
-        Delete order
-      </DropdownMenuItem>
+    <AlertDialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o && !pending) onClose();
+      }}
+    >
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this order?</AlertDialogTitle>

@@ -1,13 +1,8 @@
 import Link from 'next/link';
-import { ChevronLeft, MoreVertical, Pencil } from 'lucide-react';
+import { ChevronLeft, Pencil } from 'lucide-react';
 import type { Vendor } from '@/generated/tenant';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { DeleteVendorAction } from './delete-action';
 
 // Detail-page header — back link, vendor code + name + type/status
@@ -54,25 +49,7 @@ export function VendorHeader({ vendor }: { vendor: Vendor }) {
             <Pencil />
             Edit
           </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label="More actions"
-                />
-              }
-            >
-              <MoreVertical />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DeleteVendorAction
-                vendorId={vendor.id}
-                vendorName={vendor.name}
-              />
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <DeleteVendorAction vendorId={vendor.id} vendorName={vendor.name} />
         </div>
       </div>
     </div>

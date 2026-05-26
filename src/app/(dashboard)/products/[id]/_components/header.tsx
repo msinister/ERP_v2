@@ -1,13 +1,8 @@
 import Link from 'next/link';
-import { MoreVertical, Pencil, Wrench } from 'lucide-react';
+import { Pencil, Wrench } from 'lucide-react';
 import type { Product } from '@/generated/tenant';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { ArchiveProductAction } from './archive-action';
 
 export function ProductHeader({
@@ -79,25 +74,10 @@ export function ProductHeader({
             </Button>
           ) : null}
           {!archived ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="outline"
-                    size="icon-sm"
-                    aria-label="More actions"
-                  />
-                }
-              >
-                <MoreVertical />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <ArchiveProductAction
-                  productId={product.id}
-                  productName={product.name}
-                />
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <ArchiveProductAction
+              productId={product.id}
+              productName={product.name}
+            />
           ) : null}
         </div>
     </div>

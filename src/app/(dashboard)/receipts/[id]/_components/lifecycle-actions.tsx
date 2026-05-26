@@ -49,6 +49,14 @@ export function ReceiptLifecycleActions(props: Props) {
   const canCancel = status === 'POSTED';
   const canDelete = status === 'DRAFT' || status === 'CANCELLED';
 
+  // Cancel/Delete confirm dialogs are controlled here and rendered as
+  // siblings OUTSIDE the dropdown — a dialog nested inside
+  // DropdownMenuContent unmounts (only flashes) when the menu closes on
+  // item-press, since Base UI ignores preventDefault for the item close.
+  // See admin/payment-terms/.../term-row-actions.tsx for the canonical shape.
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
   return (
     <div className="flex items-center gap-2">
       {canPost ? <PostAction {...props} /> : null}
@@ -66,14 +74,42 @@ export function ReceiptLifecycleActions(props: Props) {
             <MoreVertical />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {canCancel ? <CancelMenuItem {...props} /> : null}
-            {canDelete ? <DeleteMenuItem {...props} /> : null}
+            {canCancel ? (
+              <DropdownMenuItem
+                onClick={() => setCancelOpen(true)}
+                variant="destructive"
+              >
+                <XCircle className="size-4" />
+                Cancel receipt
+              </DropdownMenuItem>
+            ) : null}
+            {canDelete ? (
+              <DropdownMenuItem
+                onClick={() => setDeleteOpen(true)}
+                variant="destructive"
+              >
+                <Trash2 className="size-4" />
+                Delete receipt
+              </DropdownMenuItem>
+            ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
+      ) : null}
+
+      {canCancel ? (
+        <CancelDialog {...props} open={cancelOpen} onOpenChange={setCancelOpen} />
+      ) : null}
+      {canDelete ? (
+        <DeleteDialog {...props} open={deleteOpen} onOpenChange={setDeleteOpen} />
       ) : null}
     </div>
   );
 }
+
+type DialogProps = Props & {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+};
 
 // =============================================================================
 // Post — simple POST. Service auto-drafts a vendor bill on success.
@@ -145,12 +181,16 @@ function PostAction({ receiptId, receiptNumber }: Props) {
 // =============================================================================
 // Cancel — required reason. Service rejects when a CONFIRMED bill links
 // to the receipt or when any FIFO layer from this receipt has been
-// consumed.
+// consumed. Dialog rendered as a dropdown sibling.
 // =============================================================================
 
-function CancelMenuItem({ receiptId, receiptNumber }: Props) {
+function CancelDialog({
+  receiptId,
+  receiptNumber,
+  open,
+  onOpenChange,
+}: DialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -176,7 +216,7 @@ function CancelMenuItem({ receiptId, receiptNumber }: Props) {
           return;
         }
         toast.success(`Cancelled ${receiptNumber}`);
-        setOpen(false);
+        onOpenChange(false);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
@@ -188,23 +228,13 @@ function CancelMenuItem({ receiptId, receiptNumber }: Props) {
     <AlertDialog
       open={open}
       onOpenChange={(o) => {
-        setOpen(o);
+        onOpenChange(o);
         if (!o) {
           setReason('');
           setError(null);
         }
       }}
     >
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <XCircle className="size-4" />
-        Cancel receipt
-      </DropdownMenuItem>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel this receipt?</AlertDialogTitle>
@@ -243,12 +273,17 @@ function CancelMenuItem({ receiptId, receiptNumber }: Props) {
 }
 
 // =============================================================================
-// Delete — soft-delete, DRAFT or CANCELLED only.
+// Delete — soft-delete, DRAFT or CANCELLED only. Dialog rendered as a
+// dropdown sibling.
 // =============================================================================
 
-function DeleteMenuItem({ receiptId, receiptNumber }: Props) {
+function DeleteDialog({
+  receiptId,
+  receiptNumber,
+  open,
+  onOpenChange,
+}: DialogProps) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
   function onDelete() {
@@ -265,7 +300,7 @@ function DeleteMenuItem({ receiptId, receiptNumber }: Props) {
           return;
         }
         toast.success(`Deleted ${receiptNumber}`);
-        setOpen(false);
+        onOpenChange(false);
         router.push('/purchase-orders');
         router.refresh();
       } catch (err) {
@@ -275,17 +310,7 @@ function DeleteMenuItem({ receiptId, receiptNumber }: Props) {
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <DropdownMenuItem
-        onClick={(e) => {
-          e.preventDefault();
-          setOpen(true);
-        }}
-        variant="destructive"
-      >
-        <Trash2 className="size-4" />
-        Delete receipt
-      </DropdownMenuItem>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this receipt?</AlertDialogTitle>

@@ -3,7 +3,6 @@ import {
   ChevronLeft,
   ExternalLink,
   FileText,
-  MoreVertical,
   Pencil,
   Printer,
 } from 'lucide-react';
@@ -97,25 +96,10 @@ export function CustomerHeader({ customer }: { customer: Customer }) {
             <Pencil />
             Edit
           </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="icon-sm"
-                  aria-label="More actions"
-                />
-              }
-            >
-              <MoreVertical />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DeleteCustomerAction
-                customerId={customer.id}
-                customerName={customer.name}
-              />
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <DeleteCustomerAction
+            customerId={customer.id}
+            customerName={customer.name}
+          />
         </div>
       </div>
     </div>

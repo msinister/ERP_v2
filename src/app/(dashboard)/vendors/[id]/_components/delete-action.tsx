@@ -2,8 +2,9 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Trash2 } from 'lucide-react';
+import { MoreVertical, Trash2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
+import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,11 +15,21 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 // Soft-delete a vendor. softDeleteVendor refuses if non-deleted POs or
 // receipts reference the vendor and surfaces the message verbatim,
 // which we display in the toast.
+//
+// Self-contained: owns the ⋮ menu AND renders the AlertDialog as a
+// sibling OUTSIDE the dropdown. A dialog nested inside DropdownMenuContent
+// unmounts (only flashes) the instant the Base UI menu closes on
+// item-press. See term-row-actions for the canonical shape.
 
 export function DeleteVendorAction({
   vendorId,
@@ -55,35 +66,46 @@ export function DeleteVendorAction({
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <DropdownMenuItem
-        onClick={() => setOpen(true)}
-        variant="destructive"
-      >
-        <Trash2 className="size-4" />
-        Delete vendor
-      </DropdownMenuItem>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete this vendor?</AlertDialogTitle>
-          <AlertDialogDescription>
-            <span className="font-medium text-foreground">{vendorName}</span>{' '}
-            will be hidden from lists but remain in the audit log. The server
-            blocks deletion when the vendor still has open purchase orders or
-            receipts.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={onConfirm}
-            disabled={pending}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-          >
-            {pending ? 'Deleting…' : 'Delete'}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="outline" size="icon-sm" aria-label="More actions" />
+          }
+        >
+          <MoreVertical />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => setOpen(true)} variant="destructive">
+            <Trash2 className="size-4" />
+            Delete vendor
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this vendor?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="font-medium text-foreground">{vendorName}</span>{' '}
+              will be hidden from lists but remain in the audit log. The server
+              blocks deletion when the vendor still has open purchase orders or
+              receipts.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={onConfirm}
+              disabled={pending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {pending ? 'Deleting…' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
