@@ -10,7 +10,9 @@ export function ProductHeader({
   product,
   hasBom = false,
 }: {
-  product: Product;
+  product: Product & {
+    shopifyVariants: Array<{ id: string; isPrimary: boolean }>;
+  };
   hasBom?: boolean;
 }) {
   const archived = product.deletedAt != null;
@@ -33,7 +35,7 @@ export function ProductHeader({
               {product.name}
             </h1>
             <StatusBadge status={status} />
-            {product.shopifyProductId ? (
+            {product.shopifyVariants?.some(v => v.isPrimary) ? (
               <Badge
                 variant="outline"
                 title={
@@ -83,7 +85,7 @@ export function ProductHeader({
               Build
             </Button>
           ) : null}
-          {!archived && product.shopifyProductId ? (
+          {!archived && product.shopifyVariants?.some(v => v.isPrimary) ? (
             <ShopifySyncButton productId={product.id} />
           ) : null}
           {!archived ? (

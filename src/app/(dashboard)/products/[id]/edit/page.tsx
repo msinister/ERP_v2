@@ -60,7 +60,6 @@ export default async function EditProductPage({
     countryOfOrigin: product.countryOfOrigin ?? '',
     hsCode: product.hsCode ?? '',
     hazmat: product.hazmat,
-    shopifyProductId: product.shopifyProductId ?? '',
   };
 
   return (

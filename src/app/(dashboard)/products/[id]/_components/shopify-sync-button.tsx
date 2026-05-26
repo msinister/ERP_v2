@@ -7,7 +7,7 @@ import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 
 // Re-pull this product from Shopify and re-run the upsert. Only rendered
-// when product.shopifyProductId is set.
+// when the product has a primary ProductShopifyVariant junction row.
 
 export function ShopifySyncButton({ productId }: { productId: string }) {
   const router = useRouter();

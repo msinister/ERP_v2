@@ -35,7 +35,6 @@ export const productCreateSchema = z.object({
   countryOfOrigin: z.string().max(120).optional(),
   hsCode: z.string().max(64).optional(),
   hazmat: z.boolean().default(false),
-  shopifyProductId: z.string().optional(),
   active: z.boolean().default(true),
   defaultVariant: defaultVariantSeedSchema.optional(),
 });

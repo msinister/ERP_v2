@@ -88,7 +88,6 @@ const formSchema = z.object({
   countryOfOrigin: z.string().max(120).optional(),
   hsCode: z.string().max(64).optional(),
   hazmat: z.boolean(),
-  shopifyProductId: z.string().max(64).optional(),
 });
 
 export type ProductFormValues = z.infer<typeof formSchema>;
@@ -118,7 +117,6 @@ const DEFAULT_VALUES: ProductFormValues = {
   countryOfOrigin: '',
   hsCode: '',
   hazmat: false,
-  shopifyProductId: '',
 };
 
 function nullEmpty(v: string | undefined): string | undefined {
@@ -192,7 +190,6 @@ export function ProductForm({
         countryOfOrigin: nullEmpty(values.countryOfOrigin),
         hsCode: nullEmpty(values.hsCode),
         hazmat: values.hazmat,
-        shopifyProductId: nullEmpty(values.shopifyProductId),
       };
       // Always seed a default variant on create so the product appears
       // in order-entry SKU dropdowns (which query ProductVariant, not Product).
@@ -347,18 +344,6 @@ export function ProductForm({
                 {...register('basePrice')}
               />
               <FieldError errors={[errors.basePrice]} />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="shopifyProductId">
-                Shopify product ID (optional)
-              </FieldLabel>
-              <Input
-                id="shopifyProductId"
-                className="font-mono"
-                aria-invalid={!!errors.shopifyProductId}
-                {...register('shopifyProductId')}
-              />
-              <FieldError errors={[errors.shopifyProductId]} />
             </Field>
             <Field orientation="horizontal" className="md:items-start md:pt-2">
               <Controller

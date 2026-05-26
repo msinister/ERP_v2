@@ -35,7 +35,16 @@ export async function POST(req: Request) {
       accessToken: secrets.accessToken,
     });
 
+    // Accept optional baseUrl override in request body (useful in dev with a
+    // tunnel URL before the env var is set). Falls back to env → request origin.
+    let bodyBaseUrl: string | undefined;
+    try {
+      const body = await req.json();
+      if (typeof body?.baseUrl === 'string') bodyBaseUrl = body.baseUrl.replace(/\/+$/, '');
+    } catch { /* no body or not JSON — that's fine */ }
+
     const base =
+      bodyBaseUrl ||
       process.env.SHOPIFY_PUBLIC_BASE_URL?.replace(/\/+$/, '') ||
       new URL(req.url).origin;
 

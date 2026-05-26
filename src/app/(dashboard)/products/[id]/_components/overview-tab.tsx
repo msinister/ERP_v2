@@ -16,7 +16,13 @@ export function OverviewTab({
   vendors,
   paymentTerms,
 }: {
-  product: Product;
+  product: Product & {
+    shopifyVariants: Array<{
+      id: string;
+      shopifyProductId: string;
+      isPrimary: boolean;
+    }>;
+  };
   tags: Array<{ id: string; name: string }>;
   vendor: { id: string; name: string } | null;
   vendors: VendorOption[];
@@ -47,7 +53,25 @@ export function OverviewTab({
                 />
               </dd>
             </div>
-            <Row label="Shopify product ID" value={product.shopifyProductId ?? '—'} mono={!!product.shopifyProductId} />
+            {product.shopifyVariants && product.shopifyVariants.length > 0 ? (
+              <div className="space-y-0.5 md:col-span-2">
+                <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Shopify listings
+                </dt>
+                <dd className="space-y-1">
+                  {product.shopifyVariants.map((v) => (
+                    <div key={v.id} className="flex items-center gap-2 text-sm font-mono">
+                      <span>{v.shopifyProductId}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {v.isPrimary ? '(primary)' : '(secondary)'}
+                      </span>
+                    </div>
+                  ))}
+                </dd>
+              </div>
+            ) : (
+              <Row label="Shopify product ID" value="—" />
+            )}
             <Row label="Last updated" value={formatDate(product.updatedAt)} />
           </dl>
         </CardContent>

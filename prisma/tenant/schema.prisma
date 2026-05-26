@@ -349,14 +349,11 @@ model Product {
   countryOfOrigin  String?
   hsCode           String?
   hazmat           Boolean     @default(false)
-  shopifyProductId String?
-  // Variant id from Shopify. In the flat-variant sync model each Shopify
-  // variant maps to its own ERP Product, so the variant id is stored
-  // here on Product (not on ProductVariant). Siblings from the same
-  // Shopify product are linked via ProductVariant.variantGroup.
-  shopifyVariantId String?     @unique
-  // Stamped on every successful upsertProductFromShopify run so the
-  // detail page can show "Synced from Shopify · {when}".
+  // Stamped on every successful upsertProductFromShopify run (primary
+  // variant only) so the detail page can show "Synced from Shopify ·
+  // {when}" without a join. All Shopify product/variant IDs live in
+  // ProductShopifyVariant (junction); a product can link to multiple
+  // Shopify listings (primary + deal/bundle secondaries).
   shopifySyncedAt  DateTime?
   active           Boolean     @default(true)
   // Flat-dollar labor cost rolled into the cost of every finished
@@ -370,6 +367,7 @@ model Product {
   updatedAt        DateTime    @updatedAt
 
   variants                 ProductVariant[]
+  shopifyVariants          ProductShopifyVariant[]
   images                   ProductImage[]
   tags                     ProductTag[]
   bomLines                 BomLine[]        @relation("ProductBomLines")
@@ -381,7 +379,6 @@ model Product {
 
   @@index([category])
   @@index([brand])
-  @@index([shopifyProductId])
 }
 
 // Product-level image gallery. Multiple images per product with one
@@ -418,6 +415,35 @@ model ProductImage {
   @@index([productId, isPrimary])
   @@index([deletedAt])
   @@index([shopifyImageId])
+}
+
+// One row per (ERP product, Shopify variant) pairing. An ERP product can
+// link to multiple Shopify listings — the primary listing (isPrimary=true)
+// drives catalog fields (name, description, images, tags). Secondary rows
+// represent deal/bundle/mix-and-match Shopify products whose variants map
+// to the same physical SKU; the sync registers them here without
+// overwriting catalog data or creating duplicate ERP products.
+//
+// shopifyVariantId is globally unique (one Shopify variant → one ERP
+// product). shopifyProductId is NOT unique — the same Shopify product
+// can appear against many ERP products (one row per variant).
+//
+// When the ERP pushes inventory to Shopify it fans out to every row
+// for the product, keeping all Shopify listings in sync.
+model ProductShopifyVariant {
+  id               String   @id @default(cuid())
+  productId        String
+  shopifyProductId String
+  shopifyVariantId String   @unique
+  isPrimary        Boolean  @default(false)
+  syncedAt         DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([productId])
+  @@index([shopifyProductId])
 }
 
 model ProductVariant {

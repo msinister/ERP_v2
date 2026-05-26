@@ -58,6 +58,16 @@ export default async function ProductDetailPage({
           { createdAt: 'asc' },
         ],
       },
+      shopifyVariants: {
+        select: {
+          id: true,
+          shopifyProductId: true,
+          shopifyVariantId: true,
+          isPrimary: true,
+          syncedAt: true,
+        },
+        orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+      },
     },
   });
   // We allow archived products to render so operators can audit them
