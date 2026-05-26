@@ -7,6 +7,7 @@ import { listCreditMemosPaged } from '@/server/services/creditMemos';
 import { listCustomers } from '@/server/services/customers';
 import { listCategories } from '@/server/services/creditMemoCategories';
 import { listAllOrderTags } from '@/server/services/orderTags';
+import { getTableViewPref } from '@/server/services/userPreferences';
 import { getActor } from '@/lib/permissions/getActor';
 import { creditMemoScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
@@ -59,7 +60,7 @@ export default async function CreditMemosPage({
   if (!actor) redirect('/login');
   const scope = creditMemoScopeWhere(actor);
 
-  const [customers, categories, allOrderTags, page] = await Promise.all([
+  const [customers, categories, allOrderTags, page, viewPref] = await Promise.all([
     listCustomers(db, { active: true, take: 1000 }),
     listCategories(db, { active: true, take: 200 }),
     listAllOrderTags(db),
@@ -77,6 +78,7 @@ export default async function CreditMemosPage({
       skip,
       take,
     }),
+    getTableViewPref(db, actor.id, 'table.creditMemos'),
   ]);
 
   const customerOptions: CustomerOption[] = customers.map((c) => ({
@@ -101,9 +103,10 @@ export default async function CreditMemosPage({
     categoryCode: cm.category.code,
     categoryLabel: cm.category.label,
     creditDate: cm.issuedAt ?? cm.createdAt,
-    amount: cm.amount,
-    netCredit: cm.netCredit,
-    appliedAmount: cm.appliedAmount,
+    // Decimals → numbers across the Server→Client boundary.
+    amount: cm.amount.toNumber(),
+    netCredit: cm.netCredit.toNumber(),
+    appliedAmount: cm.appliedAmount.toNumber(),
     status: cm.status,
     tags: cm.tags.map((a) => ({ id: a.tag.id, name: a.tag.name })),
   }));
@@ -133,7 +136,7 @@ export default async function CreditMemosPage({
         tags={tagOptions}
       />
 
-      <CreditMemosTable rows={tableRows} />
+      <CreditMemosTable rows={tableRows} initialPrefs={viewPref} />
 
       <CreditMemosPagination total={page.total} skip={skip} take={take} />
     </div>

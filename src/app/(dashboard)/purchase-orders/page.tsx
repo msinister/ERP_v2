@@ -5,6 +5,9 @@ import { db } from '@/lib/db';
 import { listPurchaseOrdersPaged } from '@/server/services/purchaseOrders';
 import { listVendors } from '@/server/services/vendors';
 import { listAllOrderTags } from '@/server/services/orderTags';
+import { getTableViewPref } from '@/server/services/userPreferences';
+import { redirect } from 'next/navigation';
+import { getActor } from '@/lib/permissions/getActor';
 import { rollupShipmentStatus } from '@/lib/po/shipmentRollup';
 import { Button } from '@/components/ui/button';
 import {
@@ -69,7 +72,10 @@ export default async function PurchaseOrdersPage({
   const sort = pickString(sp.sort) === 'balance' ? ('balance' as const) : undefined;
   const dir = pickString(sp.dir) === 'asc' ? ('asc' as const) : ('desc' as const);
 
-  const [vendors, allOrderTags, page] = await Promise.all([
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+
+  const [vendors, allOrderTags, page, viewPref] = await Promise.all([
     // Active vendors only in the filter dropdown — historical POs for
     // deactivated vendors still render via the vendor join.
     listVendors(db, { active: true, take: 1000 }),
@@ -86,6 +92,7 @@ export default async function PurchaseOrdersPage({
       skip,
       take,
     }),
+    getTableViewPref(db, actor.id, 'table.purchaseOrders'),
   ]);
 
   const vendorOptions: VendorOption[] = vendors.map((v) => ({
@@ -113,14 +120,16 @@ export default async function PurchaseOrdersPage({
       expectedReceiveDate: po.expectedReceiveDate,
       status: po.status,
       lineCount: po.lines.length,
-      total,
+      // Decimals → numbers across the Server→Client boundary. Decimal
+      // math happens here on the server; only the JS Number crosses.
+      total: total.toNumber(),
       shipmentRollup: rollupShipmentStatus(
         po.shipments.map((s) => s.shipmentStatus),
       ),
-      paid: paid.toString(),
+      paid: paid.toNumber(),
       hasPayments: po.payments.length > 0,
       // Remaining balance = line total − recorded payments/deposits.
-      balance: total.minus(paid).toString(),
+      balance: total.minus(paid).toNumber(),
       tags: po.tags.map((a) => ({ id: a.tag.id, name: a.tag.name })),
     };
   });
@@ -144,7 +153,7 @@ export default async function PurchaseOrdersPage({
 
       <PurchaseOrdersFilters vendors={vendorOptions} tags={tagOptions} />
 
-      <PurchaseOrdersTable rows={tableRows} />
+      <PurchaseOrdersTable rows={tableRows} initialPrefs={viewPref} />
 
       <PurchaseOrdersPagination total={page.total} skip={skip} take={take} />
     </div>

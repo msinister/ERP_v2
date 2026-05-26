@@ -1,10 +1,13 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { VendorCreditStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listVendorCreditsPaged } from '@/server/services/vendorCredits';
 import { listVendors } from '@/server/services/vendors';
 import { listAllOrderTags } from '@/server/services/orderTags';
+import { getTableViewPref } from '@/server/services/userPreferences';
+import { getActor } from '@/lib/permissions/getActor';
 import { Button } from '@/components/ui/button';
 import {
   VendorCreditsFilters,
@@ -49,10 +52,14 @@ export default async function VendorCreditsPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const [vendors, allOrderTags, page] = await Promise.all([
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+
+  const [vendors, allOrderTags, page, viewPref] = await Promise.all([
     listVendors(db, { active: true, take: 1000 }),
     listAllOrderTags(db),
     listVendorCreditsPaged(db, { q, status, vendorId, tagIds, skip, take }),
+    getTableViewPref(db, actor.id, 'table.vendorCredits'),
   ]);
 
   const vendorOptions: VendorOption[] = vendors.map((v) => ({
@@ -68,8 +75,9 @@ export default async function VendorCreditsPage({
     vendorCode: vc.vendor.code,
     vendorName: vc.vendor.name,
     creditDate: vc.creditDate,
-    amount: vc.amount,
-    appliedAmount: vc.appliedAmount,
+    // Decimals → numbers across the Server→Client boundary.
+    amount: vc.amount.toNumber(),
+    appliedAmount: vc.appliedAmount.toNumber(),
     status: vc.status,
     // sourceTag = "OVERPAYMENT:<billPaymentId>" when auto-created by
     // the bill-payment overpayment path. Anything else (null or
@@ -99,7 +107,7 @@ export default async function VendorCreditsPage({
 
       <VendorCreditsFilters vendors={vendorOptions} tags={tagOptions} />
 
-      <VendorCreditsTable rows={tableRows} />
+      <VendorCreditsTable rows={tableRows} initialPrefs={viewPref} />
 
       <VendorCreditsPagination total={page.total} skip={skip} take={take} />
     </div>

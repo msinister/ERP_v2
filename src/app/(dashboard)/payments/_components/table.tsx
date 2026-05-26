@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -11,12 +12,17 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { StatusBadge } from '@/components/shared/status-badge';
+import { TableCustomizer } from '@/components/shared/table-customizer';
+import {
+  useTablePreferences,
+  type CustomizableColumn,
+  type TableViewPrefValue,
+} from '@/components/shared/use-table-preferences';
 import { formatCurrency } from '@/lib/format';
 
-// Money fields are plain numbers, not Prisma.Decimal: this is a client
-// component and Decimal instances lose their methods crossing the RSC
+// Money fields are plain numbers, not Prisma.Decimal: client component
 // boundary. The page derives them (with Decimal precision) and converts
-// to number for display + comparison here.
+// to number here for display + comparison.
 export type PaymentRowData = {
   id: string;
   number: string;
@@ -39,6 +45,8 @@ export type PaymentRowData = {
   sourceSalesOrderId: string | null;
 };
 
+const PREF_KEY = 'table.payments';
+
 const METHOD_LABELS: Record<string, string> = {
   CREDIT_CARD: 'Credit card',
   ACH: 'ACH',
@@ -49,101 +57,192 @@ const METHOD_LABELS: Record<string, string> = {
   APPLIED_CREDIT: 'Applied credit',
 };
 
-export function PaymentsTable({ rows }: { rows: PaymentRowData[] }) {
-  const router = useRouter();
+type Column = CustomizableColumn & {
+  headClass?: string;
+  cellClass?: string;
+  render: (row: PaymentRowData) => ReactNode;
+};
 
-  if (rows.length === 0) {
-    return (
-      <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
-        No payments match these filters.
+const PAYMENT_COLUMNS: Column[] = [
+  {
+    id: 'number',
+    label: 'Payment #',
+    defaultVisible: true,
+    locked: true,
+    cellClass: 'font-mono text-xs',
+    // The row's onClick navigates to the source SO; the # Link stops
+    // propagation so a click on it still opens the payment detail.
+    render: (row) => (
+      <Link
+        href={`/payments/${row.id}`}
+        onClick={(e) => e.stopPropagation()}
+        className="text-primary hover:underline"
+      >
+        {row.number}
+      </Link>
+    ),
+  },
+  {
+    id: 'date',
+    label: 'Date',
+    defaultVisible: true,
+    cellClass: 'text-muted-foreground whitespace-nowrap',
+    render: (row) => formatDate(row.receivedAt),
+  },
+  {
+    id: 'customer',
+    label: 'Customer',
+    defaultVisible: true,
+    render: (row) => (
+      <div className="flex flex-col text-sm leading-tight">
+        <span className="font-medium">{row.customerName}</span>
+        <span className="font-mono text-[10px] text-muted-foreground">
+          {row.customerCode}
+        </span>
       </div>
-    );
-  }
+    ),
+  },
+  {
+    id: 'method',
+    label: 'Method',
+    defaultVisible: true,
+    cellClass: 'text-muted-foreground',
+    render: (row) => METHOD_LABELS[row.method] ?? row.method,
+  },
+  {
+    id: 'reference',
+    label: 'Reference',
+    defaultVisible: true,
+    cellClass: 'font-mono text-xs text-muted-foreground',
+    render: (row) => row.reference ?? '—',
+  },
+  {
+    id: 'amount',
+    label: 'Amount',
+    defaultVisible: true,
+    headClass: 'text-right',
+    cellClass: 'text-right tabular-nums font-medium',
+    render: (row) => formatCurrency(row.amount),
+  },
+  {
+    id: 'applied',
+    label: 'Applied',
+    defaultVisible: true,
+    headClass: 'text-right',
+    cellClass: 'text-right tabular-nums text-muted-foreground',
+    render: (row) => formatCurrency(row.applied),
+  },
+  {
+    id: 'unapplied',
+    label: 'Unapplied',
+    defaultVisible: true,
+    headClass: 'text-right',
+    // Amber for RECORDED payments with money still sitting unapplied —
+    // signals "credit on account" that AR may want to allocate.
+    render: (row) => {
+      const showAmber = row.status === 'RECORDED' && row.unapplied > 0;
+      return (
+        <span
+          className={
+            showAmber
+              ? 'font-semibold text-amber-600'
+              : 'text-muted-foreground'
+          }
+        >
+          {row.status === 'RECORDED' ? formatCurrency(row.unapplied) : '—'}
+        </span>
+      );
+    },
+    cellClass: 'text-right tabular-nums',
+  },
+  {
+    id: 'status',
+    label: 'Status',
+    defaultVisible: true,
+    render: (row) => <StatusBadge entityType="Payment" status={row.status} />,
+  },
+];
+
+export function PaymentsTable({
+  rows,
+  initialPrefs,
+}: {
+  rows: PaymentRowData[];
+  initialPrefs: TableViewPrefValue;
+}) {
+  const router = useRouter();
+  const colById = new Map(PAYMENT_COLUMNS.map((c) => [c.id, c]));
+  const customizerColumns: CustomizableColumn[] = PAYMENT_COLUMNS.map((c) => ({
+    id: c.id,
+    label: c.label,
+    defaultVisible: c.defaultVisible,
+    locked: c.locked,
+  }));
+
+  const { isVisible, toggleColumn, orderedColumnIds, moveColumn } =
+    useTablePreferences({
+      prefKey: PREF_KEY,
+      columns: customizerColumns,
+      initial: initialPrefs,
+    });
+
+  const orderedColumns = orderedColumnIds
+    .map((id) => colById.get(id))
+    .filter((c): c is Column => c != null);
+  const visibleColumns = orderedColumns.filter((c) => isVisible(c.id));
 
   return (
-    <div className="rounded-lg border border-border">
-      <Table>
-        <TableHeader>
-          <TableRow className="bg-muted/30 hover:bg-muted/30">
-            <TableHead>Payment #</TableHead>
-            <TableHead>Date</TableHead>
-            <TableHead>Customer</TableHead>
-            <TableHead>Method</TableHead>
-            <TableHead>Reference</TableHead>
-            <TableHead className="text-right">Amount</TableHead>
-            <TableHead className="text-right">Applied</TableHead>
-            <TableHead className="text-right">Unapplied</TableHead>
-            <TableHead>Status</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => {
-            // Row navigates to the source SO (per spec); fall back to the
-            // payment detail when there's no live SO link.
-            const rowHref = row.sourceSalesOrderId
-              ? `/sales-orders/${row.sourceSalesOrderId}`
-              : `/payments/${row.id}`;
-            const showAmber = row.status === 'RECORDED' && row.unapplied > 0;
-            return (
-              <TableRow
-                key={row.id}
-                className="cursor-pointer hover:bg-muted/50"
-                onClick={() => router.push(rowHref)}
-              >
-                <TableCell className="font-mono text-xs">
-                  {/* Distinct link to the payment detail; stops the row's
-                      SO navigation so both destinations stay reachable. */}
-                  <Link
-                    href={`/payments/${row.id}`}
-                    onClick={(e) => e.stopPropagation()}
-                    className="text-primary hover:underline"
-                  >
-                    {row.number}
-                  </Link>
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {formatDate(row.receivedAt)}
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-col text-sm leading-tight">
-                    <span className="font-medium">{row.customerName}</span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {row.customerCode}
-                    </span>
-                  </div>
-                </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {METHOD_LABELS[row.method] ?? row.method}
-                </TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">
-                  {row.reference ?? '—'}
-                </TableCell>
-                <TableCell className="text-right tabular-nums font-medium">
-                  {formatCurrency(row.amount)}
-                </TableCell>
-                <TableCell className="text-right tabular-nums text-muted-foreground">
-                  {formatCurrency(row.applied)}
-                </TableCell>
-                <TableCell
-                  className={
-                    'text-right tabular-nums ' +
-                    (showAmber
-                      ? 'font-semibold text-amber-600'
-                      : 'text-muted-foreground')
-                  }
-                >
-                  {row.status === 'RECORDED'
-                    ? formatCurrency(row.unapplied)
-                    : '—'}
-                </TableCell>
-                <TableCell>
-                  <StatusBadge entityType="Payment" status={row.status} />
-                </TableCell>
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <TableCustomizer
+          columns={orderedColumns}
+          isVisible={isVisible}
+          onToggleColumn={toggleColumn}
+          onReorder={moveColumn}
+        />
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
+          No payments match these filters.
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/30 hover:bg-muted/30">
+                {visibleColumns.map((c) => (
+                  <TableHead key={c.id} className={c.headClass}>
+                    {c.label}
+                  </TableHead>
+                ))}
               </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => {
+                // Row navigates to the source SO (per spec); fall back to
+                // the payment detail when there's no live SO link.
+                const rowHref = row.sourceSalesOrderId
+                  ? `/sales-orders/${row.sourceSalesOrderId}`
+                  : `/payments/${row.id}`;
+                return (
+                  <TableRow
+                    key={row.id}
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => router.push(rowHref)}
+                  >
+                    {visibleColumns.map((c) => (
+                      <TableCell key={c.id} className={c.cellClass}>
+                        {c.render(row)}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   );
 }

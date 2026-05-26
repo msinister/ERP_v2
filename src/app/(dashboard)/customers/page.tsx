@@ -6,6 +6,7 @@ import { CustomerType } from '@/generated/tenant';
 import { listCustomersPaged } from '@/server/services/customers';
 import { listSalesReps } from '@/server/services/salesReps';
 import { arBalanceForCustomer } from '@/server/services/ar';
+import { getTableViewPref } from '@/server/services/userPreferences';
 import { getActor } from '@/lib/permissions/getActor';
 import { customerScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
@@ -57,9 +58,10 @@ export default async function CustomersPage({
   if (!actor) redirect('/login');
   const scope = customerScopeWhere(actor);
 
-  const [salesReps, page] = await Promise.all([
+  const [salesReps, page, viewPref] = await Promise.all([
     listSalesReps(db, { active: true }),
     listCustomersPaged(db, { q, type, active, salesRepId, scope, skip, take }),
+    getTableViewPref(db, actor.id, 'table.customers'),
   ]);
 
   // Resolve sales-rep names off the rep list rather than re-querying
@@ -86,7 +88,8 @@ export default async function CustomersPage({
     salesRepName: repName.get(c.salesRepId) ?? '—',
     primaryPhone: c.primaryPhone,
     primaryEmail: c.primaryEmail,
-    arBalance: balances[i].arBalance,
+    // Decimal → number across the Server→Client boundary.
+    arBalance: balances[i].arBalance.toNumber(),
     active: c.active,
   }));
 
@@ -107,7 +110,7 @@ export default async function CustomersPage({
 
       <CustomersFilters salesReps={repOptions} />
 
-      <CustomersTable rows={tableRows} />
+      <CustomersTable rows={tableRows} initialPrefs={viewPref} />
 
       <CustomersPagination total={page.total} skip={skip} take={take} />
     </div>

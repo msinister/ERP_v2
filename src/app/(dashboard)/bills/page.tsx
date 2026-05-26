@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import {
   BillPaymentStatus,
@@ -9,6 +10,8 @@ import { db } from '@/lib/db';
 import { listBillsPaged } from '@/server/services/bills';
 import { listVendors } from '@/server/services/vendors';
 import { listAllOrderTags } from '@/server/services/orderTags';
+import { getTableViewPref } from '@/server/services/userPreferences';
+import { getActor } from '@/lib/permissions/getActor';
 import { Button } from '@/components/ui/button';
 import { BillsFilters, type VendorOption } from './_components/filters';
 import { BillsTable, type BillRowData } from './_components/table';
@@ -76,7 +79,10 @@ export default async function BillsPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const [vendors, allOrderTags, page] = await Promise.all([
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+
+  const [vendors, allOrderTags, page, viewPref] = await Promise.all([
     // Active vendors only in the filter dropdown — historical bills for
     // deactivated vendors still render via the vendor join.
     listVendors(db, { active: true, take: 1000 }),
@@ -93,6 +99,7 @@ export default async function BillsPage({
       skip,
       take,
     }),
+    getTableViewPref(db, actor.id, 'table.bills'),
   ]);
 
   const vendorOptions: VendorOption[] = vendors.map((v) => ({
@@ -113,10 +120,11 @@ export default async function BillsPage({
     status: b.status,
     paymentStatus: b.paymentStatus,
     source: b.source,
-    total: b.total,
+    // Decimals → numbers across the Server→Client boundary.
+    total: b.total.toNumber(),
     // Balance = total − amountPaid − amountCredited. The denorms are
     // recomputed by the service on every payment/credit movement.
-    balance: b.total.minus(b.amountPaid).minus(b.amountCredited),
+    balance: b.total.minus(b.amountPaid).minus(b.amountCredited).toNumber(),
     tags: b.tags.map((a) => ({ id: a.tag.id, name: a.tag.name })),
   }));
 
@@ -138,7 +146,7 @@ export default async function BillsPage({
 
       <BillsFilters vendors={vendorOptions} tags={tagOptions} />
 
-      <BillsTable rows={tableRows} />
+      <BillsTable rows={tableRows} initialPrefs={viewPref} />
 
       <BillsPagination total={page.total} skip={skip} take={take} />
     </div>

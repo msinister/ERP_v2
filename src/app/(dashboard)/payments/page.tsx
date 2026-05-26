@@ -9,6 +9,7 @@ import { listCustomers } from '@/server/services/customers';
 import { listSalesReps } from '@/server/services/salesReps';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
 import { getActor } from '@/lib/permissions/getActor';
+import { getTableViewPref } from '@/server/services/userPreferences';
 import { customerScopeWhere, paymentScopeWhere } from '@/lib/permissions/scope';
 import { redirect } from 'next/navigation';
 import { PaymentsFilters, type CustomerOption } from './_components/filters';
@@ -60,7 +61,7 @@ export default async function PaymentsPage({
   if (!actor) redirect('/login');
   const scope = paymentScopeWhere(actor);
 
-  const [customers, page, salesReps, paymentTerms] = await Promise.all([
+  const [customers, page, salesReps, paymentTerms, viewPref] = await Promise.all([
     // Record-payment dialog + filter picker — scoped to the rep's own
     // customers under "view own".
     listCustomers(db, {
@@ -83,6 +84,7 @@ export default async function PaymentsPage({
     }),
     listSalesReps(db, { active: true, take: 1000 }),
     listPaymentTerms(db, { active: true }),
+    getTableViewPref(db, actor.id, 'table.payments'),
   ]);
 
   const customerOptions: CustomerOption[] = customers.map((c) => ({
@@ -149,7 +151,7 @@ export default async function PaymentsPage({
 
       <PaymentsFilters customers={customerOptions} />
 
-      <PaymentsTable rows={rows} />
+      <PaymentsTable rows={rows} initialPrefs={viewPref} />
 
       <PaymentsPagination total={page.total} skip={skip} take={take} />
     </div>

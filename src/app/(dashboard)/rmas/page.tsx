@@ -6,6 +6,7 @@ import { db } from '@/lib/db';
 import { listRmasPaged } from '@/server/services/rmas';
 import { listCustomers } from '@/server/services/customers';
 import { listAllOrderTags } from '@/server/services/orderTags';
+import { getTableViewPref } from '@/server/services/userPreferences';
 import { getActor } from '@/lib/permissions/getActor';
 import { rmaScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
@@ -53,7 +54,7 @@ export default async function RmasPage({
   if (!actor) redirect('/login');
   const scope = rmaScopeWhere(actor);
 
-  const [customers, allOrderTags, page] = await Promise.all([
+  const [customers, allOrderTags, page, viewPref] = await Promise.all([
     listCustomers(db, { active: true, take: 1000 }),
     listAllOrderTags(db),
     listRmasPaged(db, {
@@ -67,6 +68,7 @@ export default async function RmasPage({
       skip,
       take,
     }),
+    getTableViewPref(db, actor.id, 'table.rmas'),
   ]);
 
   const customerOptions: CustomerOption[] = customers.map((c) => ({
@@ -95,11 +97,11 @@ export default async function RmasPage({
       invoiceNumber: r.invoice.number,
       createdAt: r.createdAt,
       itemCount: r.lines.length,
-      totalQty: r.lines.reduce(
-        (acc, l) => acc.plus(l.qty),
-        new Prisma.Decimal(0),
-      ),
-      total,
+      // Decimals → numbers across the Server→Client boundary.
+      totalQty: r.lines
+        .reduce((acc, l) => acc.plus(l.qty), new Prisma.Decimal(0))
+        .toNumber(),
+      total: total.toNumber(),
       status: r.status,
       returnless: r.returnless,
       hasCreditMemo: r.creditMemo != null,
@@ -126,7 +128,7 @@ export default async function RmasPage({
 
       <RmasFilters customers={customerOptions} tags={tagOptions} />
 
-      <RmasTable rows={tableRows} />
+      <RmasTable rows={tableRows} initialPrefs={viewPref} />
 
       <RmasPagination total={page.total} skip={skip} take={take} />
     </div>

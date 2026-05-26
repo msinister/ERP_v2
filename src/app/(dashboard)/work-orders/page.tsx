@@ -1,22 +1,19 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Wrench } from 'lucide-react';
-import { Prisma, WorkOrderStatus } from '@/generated/tenant';
+import { WorkOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listWorkOrdersPaged } from '@/server/services/workOrders';
 import { listAllOrderTags } from '@/server/services/orderTags';
-import { StatusBadge } from '@/components/shared/status-badge';
-import { TagPills } from '@/components/shared/tag-pills';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { getTableViewPref } from '@/server/services/userPreferences';
+import { getActor } from '@/lib/permissions/getActor';
 import { formatStatusLabel } from '@/lib/format';
 import { WorkOrderTagFilter } from './_components/tag-filter';
 import { WorkOrderSearchInput } from './_components/search-input';
+import {
+  WorkOrdersTable,
+  type WorkOrderRowData,
+} from './_components/table';
 
 export const revalidate = 0;
 
@@ -46,7 +43,10 @@ export default async function WorkOrdersPage({
   const tagsParam = pickString(sp.tags);
   const tagIds = tagsParam ? tagsParam.split(',').filter(Boolean) : undefined;
 
-  const [allOrderTags, page] = await Promise.all([
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+
+  const [allOrderTags, page, viewPref] = await Promise.all([
     listAllOrderTags(db),
     listWorkOrdersPaged(db, {
       q,
@@ -54,8 +54,23 @@ export default async function WorkOrdersPage({
       tagIds,
       take: DEFAULT_PAGE_SIZE,
     }),
+    getTableViewPref(db, actor.id, 'table.workOrders'),
   ]);
   const tagOptions = allOrderTags.map((t) => ({ id: t.id, name: t.name }));
+
+  // Decimals → numbers across the Server→Client boundary.
+  const rows: WorkOrderRowData[] = page.rows.map((wo) => ({
+    id: wo.id,
+    number: wo.number,
+    productName: wo.product.name,
+    variantSku: wo.variant.sku,
+    warehouseCode: wo.warehouse.code,
+    qtyToBuild: wo.qtyToBuild.toNumber(),
+    qtyCompleted: wo.qtyCompleted.toNumber(),
+    status: wo.status,
+    createdAt: wo.createdAt,
+    tags: wo.tags.map((a) => ({ id: a.tag.id, name: a.tag.name })),
+  }));
 
   return (
     <div className="space-y-6">
@@ -78,7 +93,7 @@ export default async function WorkOrdersPage({
 
       <StatusTabs current={status} />
 
-      {page.rows.length === 0 ? (
+      {rows.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
           <Wrench className="mx-auto mb-2 size-6 opacity-50" />
           No work orders {status ? `in ${formatStatusLabel(status)}` : 'yet'}.
@@ -86,61 +101,7 @@ export default async function WorkOrdersPage({
           create one.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <Table>
-            <TableHeader>
-              <TableRow className="bg-muted/30 hover:bg-muted/30">
-                <TableHead>Number</TableHead>
-                <TableHead>Product</TableHead>
-                <TableHead>Warehouse</TableHead>
-                <TableHead className="text-right">Qty</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Tags</TableHead>
-                <TableHead>Created</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {page.rows.map((wo) => (
-                <TableRow key={wo.id}>
-                  <TableCell className="font-mono text-xs">
-                    <Link
-                      href={`/work-orders/${wo.id}`}
-                      className="hover:underline"
-                    >
-                      {wo.number}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <div className="font-medium">{wo.product.name}</div>
-                    <div className="font-mono text-xs text-muted-foreground">
-                      {wo.variant.sku}
-                    </div>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
-                    {wo.warehouse.code}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatQty(wo.qtyCompleted)} / {formatQty(wo.qtyToBuild)}
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge entityType="WorkOrder" status={wo.status} />
-                  </TableCell>
-                  <TableCell>
-                    <TagPills
-                      tags={wo.tags.map((a) => ({
-                        id: a.tag.id,
-                        name: a.tag.name,
-                      }))}
-                    />
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {wo.createdAt.toLocaleDateString()}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <WorkOrdersTable rows={rows} initialPrefs={viewPref} />
       )}
     </div>
   );
@@ -176,10 +137,4 @@ function StatusTabs({ current }: { current: WorkOrderStatus | undefined }) {
       })}
     </div>
   );
-}
-
-function formatQty(qty: Prisma.Decimal): string {
-  const s = qty.toString();
-  if (!s.includes('.')) return s;
-  return s.replace(/\.?0+$/, '');
 }

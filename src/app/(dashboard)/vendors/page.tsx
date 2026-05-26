@@ -1,9 +1,12 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { db } from '@/lib/db';
 import { VendorType } from '@/generated/tenant';
 import { listVendorsPaged } from '@/server/services/vendors';
 import { apBalanceForVendor } from '@/server/services/ap';
+import { getTableViewPref } from '@/server/services/userPreferences';
+import { getActor } from '@/lib/permissions/getActor';
 import { Button } from '@/components/ui/button';
 import { VendorsFilters } from './_components/filters';
 import { VendorsTable, type VendorRowData } from './_components/table';
@@ -42,7 +45,13 @@ export default async function VendorsPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const page = await listVendorsPaged(db, { q, type, active, skip, take });
+  const actor = await getActor();
+  if (!actor) redirect('/login');
+
+  const [page, viewPref] = await Promise.all([
+    listVendorsPaged(db, { q, type, active, skip, take }),
+    getTableViewPref(db, actor.id, 'table.vendors'),
+  ]);
 
   // Per-row AP balance + primary contact. N+1 by design — pilot scale
   // is ~40-200 rows per page max. AP balance reuses apBalanceForVendor
@@ -91,7 +100,8 @@ export default async function VendorsPage({
       // VendorContact has both phone + mobile; prefer phone, fall back
       // to mobile so a mobile-only contact still renders.
       primaryContactPhone: c?.phone ?? c?.mobile ?? null,
-      apBalance: balances[i].apBalance,
+      // Decimal → number across the Server→Client boundary.
+      apBalance: balances[i].apBalance.toNumber(),
       active: v.active,
     };
   });
@@ -113,7 +123,7 @@ export default async function VendorsPage({
 
       <VendorsFilters />
 
-      <VendorsTable rows={tableRows} />
+      <VendorsTable rows={tableRows} initialPrefs={viewPref} />
 
       <VendorsPagination total={page.total} skip={skip} take={take} />
     </div>

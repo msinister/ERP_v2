@@ -1,5 +1,7 @@
+'use client';
+
+import type { ReactNode } from 'react';
 import Link from 'next/link';
-import type { Prisma } from '@/generated/tenant';
 import {
   Table,
   TableBody,
@@ -9,8 +11,15 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
+import { TableCustomizer } from '@/components/shared/table-customizer';
+import {
+  useTablePreferences,
+  type CustomizableColumn,
+  type TableViewPrefValue,
+} from '@/components/shared/use-table-preferences';
 import { formatCurrency, formatStatusLabel } from '@/lib/format';
 
+// Money values arrive as JS numbers (Decimal.toNumber()).
 export type CustomerRowData = {
   id: string;
   code: string;
@@ -19,81 +28,161 @@ export type CustomerRowData = {
   salesRepName: string;
   primaryPhone: string | null;
   primaryEmail: string | null;
-  arBalance: Prisma.Decimal;
+  arBalance: number;
   active: boolean;
 };
 
-export function CustomersTable({ rows }: { rows: CustomerRowData[] }) {
-  if (rows.length === 0) {
-    return (
-      <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
-        No customers match these filters.
-      </div>
-    );
-  }
+const PREF_KEY = 'table.customers';
+
+type Column = CustomizableColumn & {
+  headClass?: string;
+  cellClass?: string;
+  render: (row: CustomerRowData) => ReactNode;
+};
+
+const CUSTOMER_COLUMNS: Column[] = [
+  {
+    id: 'code',
+    label: 'Code',
+    defaultVisible: true,
+    locked: true,
+    cellClass: 'font-mono text-xs text-muted-foreground',
+    render: (row) => (
+      <>
+        <Link
+          href={`/customers/${row.id}`}
+          className="absolute inset-0 rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          <span className="sr-only">View {row.name}</span>
+        </Link>
+        {row.code}
+      </>
+    ),
+  },
+  {
+    id: 'name',
+    label: 'Name',
+    defaultVisible: true,
+    cellClass: 'font-medium',
+    render: (row) => row.name,
+  },
+  {
+    id: 'type',
+    label: 'Type',
+    defaultVisible: true,
+    cellClass: 'text-muted-foreground',
+    render: (row) => formatCustomerType(row.type),
+  },
+  {
+    id: 'salesRep',
+    label: 'Sales rep',
+    defaultVisible: true,
+    cellClass: 'text-muted-foreground',
+    render: (row) => row.salesRepName,
+  },
+  {
+    id: 'contact',
+    label: 'Contact',
+    defaultVisible: true,
+    cellClass: 'text-muted-foreground',
+    render: (row) => (
+      <ContactCell phone={row.primaryPhone} email={row.primaryEmail} />
+    ),
+  },
+  {
+    id: 'arBalance',
+    label: 'AR balance',
+    defaultVisible: true,
+    headClass: 'text-right',
+    cellClass: 'text-right tabular-nums',
+    render: (row) => formatCurrency(row.arBalance),
+  },
+  {
+    id: 'status',
+    label: 'Status',
+    defaultVisible: true,
+    render: (row) =>
+      row.active ? (
+        <Badge variant="secondary">Active</Badge>
+      ) : (
+        <Badge variant="outline" className="text-muted-foreground">
+          Inactive
+        </Badge>
+      ),
+  },
+];
+
+export function CustomersTable({
+  rows,
+  initialPrefs,
+}: {
+  rows: CustomerRowData[];
+  initialPrefs: TableViewPrefValue;
+}) {
+  const colById = new Map(CUSTOMER_COLUMNS.map((c) => [c.id, c]));
+  const customizerColumns: CustomizableColumn[] = CUSTOMER_COLUMNS.map((c) => ({
+    id: c.id,
+    label: c.label,
+    defaultVisible: c.defaultVisible,
+    locked: c.locked,
+  }));
+
+  const { isVisible, toggleColumn, orderedColumnIds, moveColumn } =
+    useTablePreferences({
+      prefKey: PREF_KEY,
+      columns: customizerColumns,
+      initial: initialPrefs,
+    });
+
+  const orderedColumns = orderedColumnIds
+    .map((id) => colById.get(id))
+    .filter((c): c is Column => c != null);
+  const visibleColumns = orderedColumns.filter((c) => isVisible(c.id));
 
   return (
-    <div className="rounded-lg border border-border">
-      <Table>
-        <TableHeader>
-          <TableRow className="bg-muted/30 hover:bg-muted/30">
-            <TableHead>Code</TableHead>
-            <TableHead>Name</TableHead>
-            <TableHead>Type</TableHead>
-            <TableHead>Sales rep</TableHead>
-            <TableHead>Contact</TableHead>
-            <TableHead className="text-right">AR balance</TableHead>
-            <TableHead>Status</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => (
-            <TableRow
-              key={row.id}
-              className="relative cursor-pointer hover:bg-muted/50"
-            >
-              <TableCell className="font-mono text-xs text-muted-foreground">
-                {/* Stretched-link overlay: makes the whole row clickable
-                    while preserving middle-click / cmd-click to open in
-                    a new tab. position:relative on <tr> is supported in
-                    all modern browsers. */}
-                <Link
-                  href={`/customers/${row.id}`}
-                  className="absolute inset-0 rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <TableCustomizer
+          columns={orderedColumns}
+          isVisible={isVisible}
+          onToggleColumn={toggleColumn}
+          onReorder={moveColumn}
+        />
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
+          No customers match these filters.
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/30 hover:bg-muted/30">
+                {visibleColumns.map((c) => (
+                  <TableHead key={c.id} className={c.headClass}>
+                    {c.label}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow
+                  key={row.id}
+                  className="relative cursor-pointer hover:bg-muted/50"
                 >
-                  <span className="sr-only">View {row.name}</span>
-                </Link>
-                {row.code}
-              </TableCell>
-              <TableCell className="font-medium">{row.name}</TableCell>
-              <TableCell className="text-muted-foreground">
-                {formatCustomerType(row.type)}
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {row.salesRepName}
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                <ContactCell
-                  phone={row.primaryPhone}
-                  email={row.primaryEmail}
-                />
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {formatCurrency(row.arBalance)}
-              </TableCell>
-              <TableCell>
-                {row.active ? (
-                  <Badge variant="secondary">Active</Badge>
-                ) : (
-                  <Badge variant="outline" className="text-muted-foreground">
-                    Inactive
-                  </Badge>
-                )}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+                  {visibleColumns.map((c) => (
+                    <TableCell key={c.id} className={c.cellClass}>
+                      {c.render(row)}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   );
 }

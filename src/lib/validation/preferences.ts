@@ -22,6 +22,15 @@ export type TableViewPref = z.infer<typeof tableViewPrefSchema>;
 export const PREFERENCE_SCHEMAS = {
   'table.products': tableViewPrefSchema,
   'table.salesOrders': tableViewPrefSchema,
+  'table.purchaseOrders': tableViewPrefSchema,
+  'table.bills': tableViewPrefSchema,
+  'table.creditMemos': tableViewPrefSchema,
+  'table.rmas': tableViewPrefSchema,
+  'table.vendorCredits': tableViewPrefSchema,
+  'table.payments': tableViewPrefSchema,
+  'table.workOrders': tableViewPrefSchema,
+  'table.customers': tableViewPrefSchema,
+  'table.vendors': tableViewPrefSchema,
 } as const;
 
 export type PreferenceKey = keyof typeof PREFERENCE_SCHEMAS;
