@@ -21,6 +21,7 @@ export type TableViewPref = z.infer<typeof tableViewPrefSchema>;
 // Registry of known preference keys → value schema.
 export const PREFERENCE_SCHEMAS = {
   'table.products': tableViewPrefSchema,
+  'table.salesOrders': tableViewPrefSchema,
 } as const;
 
 export type PreferenceKey = keyof typeof PREFERENCE_SCHEMAS;

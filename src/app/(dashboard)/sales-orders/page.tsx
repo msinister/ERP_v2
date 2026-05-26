@@ -158,16 +158,20 @@ export default async function SalesOrdersPage({
       status: so.status,
       // Effective rep: per-order override when set, else the customer's rep.
       salesRepName: repName.get(so.salesRepId ?? so.customer.salesRepId) ?? '—',
-      total: displayTotal.toString(),
-      amountPaid: amountPaid.toString(),
-      balanceDue: balanceDue.toString(),
-      credits: amountCredited.toString(),
-      shippingFee: shipping.toString(),
-      discounts: discounts.toString(),
-      netTotal: netTotal.toString(),
+      // Decimals → numbers across the Server→Client boundary. Money fits
+      // safely in JS Number (~15 digits of precision); Decimal math has
+      // already happened on the server, so the only thing left here is
+      // the eventual two-decimal display in formatCurrency.
+      total: displayTotal.toNumber(),
+      amountPaid: amountPaid.toNumber(),
+      balanceDue: balanceDue.toNumber(),
+      credits: amountCredited.toNumber(),
+      shippingFee: shipping.toNumber(),
+      discounts: discounts.toNumber(),
+      netTotal: netTotal.toNumber(),
       // cogsAtClose is already null when !canViewCost (service-side gate).
       totalCogs:
-        canViewCost && inv?.cogsAtClose != null ? inv.cogsAtClose.toString() : null,
+        canViewCost && inv?.cogsAtClose != null ? inv.cogsAtClose.toNumber() : null,
       tags: so.tags.map((a) => ({ id: a.tag.id, name: a.tag.name })),
     };
   });

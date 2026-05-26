@@ -20,9 +20,12 @@ import {
   type TableViewPrefValue,
 } from '@/components/shared/use-table-preferences';
 
-// Money values arrive as decimal strings (Decimal.toString()) so nothing
-// non-serializable crosses the server→client boundary. orderDate stays a
-// Date (serializes fine). totalCogs is present only when the caller had
+// Money values arrive as JS numbers (Decimal.toNumber()) so nothing
+// non-serializable crosses the server→client boundary — Next.js 15
+// rejects raw Prisma.Decimal instances on the client boundary. Math
+// has already happened on the server; the only thing left is the
+// two-decimal display in formatCurrency. orderDate stays a Date
+// (serializes fine). totalCogs is present only when the caller had
 // products.view_cost; null otherwise (column also absent from customizer).
 export type SalesOrderRowData = {
   id: string;
@@ -32,14 +35,14 @@ export type SalesOrderRowData = {
   orderDate: Date;
   status: string;
   salesRepName: string;
-  total: string;
-  amountPaid: string;
-  balanceDue: string;
-  credits: string;
-  shippingFee: string;
-  discounts: string;
-  netTotal: string;
-  totalCogs: string | null;
+  total: number;
+  amountPaid: number;
+  balanceDue: number;
+  credits: number;
+  shippingFee: number;
+  discounts: number;
+  netTotal: number;
+  totalCogs: number | null;
   tags: Array<{ id: string; name: string }>;
 };
 
