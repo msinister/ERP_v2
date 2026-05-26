@@ -6,7 +6,7 @@ import {
   CheckCircle2,
   MoreVertical,
   Trash2,
-  XCircle,
+  Undo2,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
@@ -26,8 +26,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Field, FieldError, FieldLabel } from '@/components/ui/field';
-import { Textarea } from '@/components/ui/textarea';
+import { ReverseReceiptDialog } from '@/components/shared/reverse-receipt-dialog';
 
 type Props = {
   receiptId: string;
@@ -38,29 +37,28 @@ type Props = {
 // Receipt lifecycle:
 //   DRAFT → POSTED (manual; consumes inventory, FIFO layer, GL leg,
 //                    auto-drafts a vendor bill)
-//   POSTED → CANCELLED (manual, blocked if a CONFIRMED bill linked
-//                       or if any layer from this receipt has been
-//                       consumed)
+//   POSTED → CANCELLED ("Reverse receipt"; backs out inventory, blocked
+//                       if a CONFIRMED bill linked or if any layer from
+//                       this receipt has been consumed)
 //   DRAFT or CANCELLED → soft-deleted
 
 export function ReceiptLifecycleActions(props: Props) {
   const { status } = props;
   const canPost = status === 'DRAFT';
-  const canCancel = status === 'POSTED';
+  const canReverse = status === 'POSTED';
   const canDelete = status === 'DRAFT' || status === 'CANCELLED';
 
-  // Cancel/Delete confirm dialogs are controlled here and rendered as
-  // siblings OUTSIDE the dropdown — a dialog nested inside
-  // DropdownMenuContent unmounts (only flashes) when the menu closes on
-  // item-press, since Base UI ignores preventDefault for the item close.
-  // See admin/payment-terms/.../term-row-actions.tsx for the canonical shape.
-  const [cancelOpen, setCancelOpen] = useState(false);
+  // Reverse/Delete dialogs are controlled here and rendered as siblings
+  // OUTSIDE the dropdown — a dialog nested inside DropdownMenuContent
+  // unmounts (only flashes) when the menu closes on item-press, since
+  // Base UI ignores preventDefault for the item close.
+  const [reverseOpen, setReverseOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   return (
     <div className="flex items-center gap-2">
       {canPost ? <PostAction {...props} /> : null}
-      {canCancel || canDelete ? (
+      {canReverse || canDelete ? (
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -74,13 +72,13 @@ export function ReceiptLifecycleActions(props: Props) {
             <MoreVertical />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {canCancel ? (
+            {canReverse ? (
               <DropdownMenuItem
-                onClick={() => setCancelOpen(true)}
+                onClick={() => setReverseOpen(true)}
                 variant="destructive"
               >
-                <XCircle className="size-4" />
-                Cancel receipt
+                <Undo2 className="size-4" />
+                Reverse receipt
               </DropdownMenuItem>
             ) : null}
             {canDelete ? (
@@ -96,8 +94,13 @@ export function ReceiptLifecycleActions(props: Props) {
         </DropdownMenu>
       ) : null}
 
-      {canCancel ? (
-        <CancelDialog {...props} open={cancelOpen} onOpenChange={setCancelOpen} />
+      {canReverse ? (
+        <ReverseReceiptDialog
+          receiptId={props.receiptId}
+          receiptNumber={props.receiptNumber}
+          open={reverseOpen}
+          onOpenChange={setReverseOpen}
+        />
       ) : null}
       {canDelete ? (
         <DeleteDialog {...props} open={deleteOpen} onOpenChange={setDeleteOpen} />
@@ -105,11 +108,6 @@ export function ReceiptLifecycleActions(props: Props) {
     </div>
   );
 }
-
-type DialogProps = Props & {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-};
 
 // =============================================================================
 // Post — simple POST. Service auto-drafts a vendor bill on success.
@@ -179,100 +177,6 @@ function PostAction({ receiptId, receiptNumber }: Props) {
 }
 
 // =============================================================================
-// Cancel — required reason. Service rejects when a CONFIRMED bill links
-// to the receipt or when any FIFO layer from this receipt has been
-// consumed. Dialog rendered as a dropdown sibling.
-// =============================================================================
-
-function CancelDialog({
-  receiptId,
-  receiptNumber,
-  open,
-  onOpenChange,
-}: DialogProps) {
-  const router = useRouter();
-  const [pending, startTransition] = useTransition();
-  const [reason, setReason] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  function onCancel() {
-    setError(null);
-    if (reason.trim().length === 0) {
-      setError('Reason is required');
-      return;
-    }
-    startTransition(async () => {
-      try {
-        const res = await fetch(`/api/receipts/${receiptId}/cancel`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: reason.trim() }),
-        });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as {
-            error?: string;
-          };
-          toast.error(body.error ?? `Cancel failed (${res.status})`);
-          return;
-        }
-        toast.success(`Cancelled ${receiptNumber}`);
-        onOpenChange(false);
-        router.refresh();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Network error');
-      }
-    });
-  }
-
-  return (
-    <AlertDialog
-      open={open}
-      onOpenChange={(o) => {
-        onOpenChange(o);
-        if (!o) {
-          setReason('');
-          setError(null);
-        }
-      }}
-    >
-      <AlertDialogContent className="sm:max-w-md">
-        <AlertDialogHeader>
-          <AlertDialogTitle>Cancel this receipt?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Reverses the inventory movement, soft-deletes the FIFO layers,
-            posts a sign-mirror GL leg, and cancels any auto-drafted bill.
-            Blocked when a CONFIRMED bill links to this receipt or when
-            any layer from it has been consumed by a sale.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <Field>
-          <FieldLabel htmlFor="receipt-cancel-reason">Reason</FieldLabel>
-          <Textarea
-            id="receipt-cancel-reason"
-            rows={3}
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="e.g. wrong vendor shipped, damaged in transit, etc."
-            aria-invalid={!!error}
-          />
-          {error ? <FieldError errors={[{ message: error }]} /> : null}
-        </Field>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={pending}>Keep receipt</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={onCancel}
-            disabled={pending}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-          >
-            {pending ? 'Cancelling…' : 'Cancel receipt'}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
-// =============================================================================
 // Delete — soft-delete, DRAFT or CANCELLED only. Dialog rendered as a
 // dropdown sibling.
 // =============================================================================
@@ -282,7 +186,7 @@ function DeleteDialog({
   receiptNumber,
   open,
   onOpenChange,
-}: DialogProps) {
+}: Props & { open: boolean; onOpenChange: (open: boolean) => void }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 

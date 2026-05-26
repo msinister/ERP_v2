@@ -16,6 +16,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { formatCurrency, formatStatusLabel } from '@/lib/format';
+import { ReverseReceiptButton } from '@/components/shared/reverse-receipt-dialog';
 
 export type ReceiptRow = {
   id: string;
@@ -64,7 +65,10 @@ export function PurchaseOrderReceiptsTable({
               <TableHead>Date</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Lines</TableHead>
-              <TableHead className="pr-6 text-right">Value</TableHead>
+              <TableHead className="text-right">Value</TableHead>
+              <TableHead className="pr-6 text-right">
+                <span className="sr-only">Actions</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -103,8 +107,16 @@ export function PurchaseOrderReceiptsTable({
                   <TableCell className="text-right tabular-nums text-muted-foreground">
                     {r.matchingLines.length}
                   </TableCell>
-                  <TableCell className="pr-6 text-right tabular-nums">
+                  <TableCell className="text-right tabular-nums">
                     {formatCurrency(value)}
+                  </TableCell>
+                  <TableCell className="pr-6 text-right">
+                    {r.status === 'POSTED' ? (
+                      <ReverseReceiptButton
+                        receiptId={r.id}
+                        receiptNumber={r.number}
+                      />
+                    ) : null}
                   </TableCell>
                 </TableRow>
               );

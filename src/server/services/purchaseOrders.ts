@@ -7,6 +7,7 @@ import type {
 } from '@/generated/tenant';
 import { audit, type AuditContext } from '@/lib/audit/audit';
 import { getNextSequence } from '@/lib/sequences/sequences';
+import { PurchaseOrderCancelBlockedError } from '@/lib/errors/purchasing';
 import {
   addPurchaseOrderLinesInputSchema,
   cancelPurchaseOrderInputSchema,
@@ -429,7 +430,14 @@ export async function cancelPurchaseOrder(
     const before = await tx.purchaseOrder.findUnique({
       where: { id },
       include: {
-        lines: { include: { receiptLines: { where: { deletedAt: null } } } },
+        lines: {
+          include: {
+            receiptLines: {
+              where: { deletedAt: null },
+              include: { receipt: { select: { id: true, number: true } } },
+            },
+          },
+        },
       },
     });
     if (!before) throw new Error(`PurchaseOrder not found: ${id}`);
@@ -439,9 +447,22 @@ export async function cancelPurchaseOrder(
     if (before.status === PurchaseOrderStatus.CANCELLED) {
       throw new Error('PurchaseOrder is already CANCELLED');
     }
-    const hasActiveReceiptLines = before.lines.some((l) => l.receiptLines.length > 0);
-    if (hasActiveReceiptLines) {
-      throw new Error('Cannot cancel PurchaseOrder with active receipt lines');
+    // Active receipt lines (not soft-deleted) belong to POSTED receipts —
+    // reversing a receipt soft-deletes its lines, which clears this. Throw
+    // a typed error naming the blockers so the cancel dialog can link them.
+    const blockingReceipts = new Map<string, { id: string; number: string }>();
+    for (const line of before.lines) {
+      for (const rl of line.receiptLines) {
+        if (rl.receipt) blockingReceipts.set(rl.receipt.id, rl.receipt);
+      }
+    }
+    if (blockingReceipts.size > 0) {
+      throw new PurchaseOrderCancelBlockedError({
+        purchaseOrderId: id,
+        receipts: Array.from(blockingReceipts.values()).sort((a, b) =>
+          a.number.localeCompare(b.number),
+        ),
+      });
     }
 
     const after = await tx.purchaseOrder.update({

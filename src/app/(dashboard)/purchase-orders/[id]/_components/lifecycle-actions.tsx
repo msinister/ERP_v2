@@ -454,6 +454,11 @@ function CancelDialog({
   const [pending, startTransition] = useTransition();
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Set when the server rejects because POSTED receipts still reference
+  // the PO. We render them as links so the operator can reverse each one.
+  const [receiptBlock, setReceiptBlock] = useState<
+    Array<{ id: string; number: string }> | null
+  >(null);
 
   function onCancel() {
     setError(null);
@@ -473,8 +478,14 @@ function CancelDialog({
         );
         if (!res.ok) {
           const body = (await res.json().catch(() => ({}))) as {
+            code?: string;
             error?: string;
+            receipts?: Array<{ id: string; number: string }>;
           };
+          if (body.code === 'PO_CANCEL_BLOCKED_BY_RECEIPTS') {
+            setReceiptBlock(body.receipts ?? []);
+            return;
+          }
           toast.error(body.error ?? `Cancel failed (${res.status})`);
           return;
         }
@@ -495,6 +506,7 @@ function CancelDialog({
         if (!o) {
           setReason('');
           setError(null);
+          setReceiptBlock(null);
         }
       }}
     >
@@ -519,6 +531,29 @@ function CancelDialog({
           />
           {error ? <FieldError errors={[{ message: error }]} /> : null}
         </Field>
+        {receiptBlock ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs">
+            <div className="mb-1 font-medium text-destructive">
+              Cancel blocked — active receipt{receiptBlock.length === 1 ? '' : 's'}
+            </div>
+            <p className="mb-2 text-muted-foreground">
+              Reverse {receiptBlock.length === 1 ? 'this receipt' : 'these receipts'}{' '}
+              first, then try cancelling again:
+            </p>
+            <ul className="space-y-1">
+              {receiptBlock.map((r) => (
+                <li key={r.id}>
+                  <Link
+                    href={`/receipts/${r.id}`}
+                    className="font-mono text-foreground underline underline-offset-2 hover:text-destructive"
+                  >
+                    {r.number}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>Keep PO</AlertDialogCancel>
           <AlertDialogAction
