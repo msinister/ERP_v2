@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Search, X } from 'lucide-react';
+import { Search, X, Tag as TagIcon, ChevronDown } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -13,6 +13,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 // Mirror of the SalesOrderStatus enum in prisma/tenant/schema.prisma.
 // If the enum changes, add it here in lockstep.
@@ -27,11 +33,14 @@ const STATUSES: Array<{ value: string; label: string }> = [
 const ALL_VALUE = '__all__';
 
 export type SalesRepOption = { id: string; label: string };
+export type TagOption = { id: string; name: string };
 
 export function SalesOrdersFilters({
   salesReps,
+  tags,
 }: {
   salesReps: SalesRepOption[];
+  tags: TagOption[];
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -42,6 +51,9 @@ export function SalesOrdersFilters({
   const currentSalesRep = params.get('salesRepId') ?? ALL_VALUE;
   const currentFrom = params.get('dateFrom') ?? '';
   const currentTo = params.get('dateTo') ?? '';
+  const selectedTagIds = (params.get('tags') ?? '')
+    .split(',')
+    .filter(Boolean);
 
   const [qInput, setQInput] = useState(currentQ);
 
@@ -73,6 +85,14 @@ export function SalesOrdersFilters({
     });
   }
 
+  function toggleTag(tagId: string, checked: boolean) {
+    const next = new Set(selectedTagIds);
+    if (checked) next.add(tagId);
+    else next.delete(tagId);
+    const value = Array.from(next).join(',');
+    apply({ tags: value || null, skip: '0' });
+  }
+
   function clearAll() {
     setQInput('');
     startTransition(() => {
@@ -85,7 +105,8 @@ export function SalesOrdersFilters({
     currentStatus !== ALL_VALUE ||
     currentSalesRep !== ALL_VALUE ||
     currentFrom !== '' ||
-    currentTo !== '';
+    currentTo !== '' ||
+    selectedTagIds.length > 0;
 
   return (
     <div className="flex flex-wrap items-end gap-3">
@@ -176,6 +197,40 @@ export function SalesOrdersFilters({
           onChange={(e) => apply({ dateTo: e.target.value || null, skip: '0' })}
         />
       </div>
+
+      {tags.length > 0 ? (
+        <div className="space-y-1.5">
+          <Label>Tags</Label>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="outline" className="w-48 justify-between">
+                  <span className="flex items-center gap-1.5 truncate">
+                    <TagIcon className="size-3.5" />
+                    {selectedTagIds.length > 0
+                      ? `${selectedTagIds.length} selected`
+                      : 'Any tags'}
+                  </span>
+                  <ChevronDown className="size-3.5 text-muted-foreground" />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="start" className="max-h-72 overflow-auto">
+              {tags.map((t) => (
+                <DropdownMenuCheckboxItem
+                  key={t.id}
+                  checked={selectedTagIds.includes(t.id)}
+                  onCheckedChange={(checked) => toggleTag(t.id, checked === true)}
+                  // Keep the menu open while toggling multiple tags.
+                  closeOnClick={false}
+                >
+                  {t.name}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ) : null}
 
       {hasFilters ? (
         <Button variant="ghost" size="sm" onClick={clearAll} disabled={pending}>

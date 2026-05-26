@@ -31,6 +31,13 @@ import {
 } from '@/components/shared/journal-entries-card';
 import { journalEntriesForInvoice } from '@/server/services/reports/financial';
 import { availableFundsForCustomer } from '@/server/services/ar';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { OrderTagsEditor } from '@/components/shared/order-tags-editor';
 
 // Always live (no caching) — SO lifecycle / reservations / invoice
 // linkage change frequently. Same convention as customer detail.
@@ -121,6 +128,10 @@ export default async function SalesOrderDetailPage({
             orderBy: { appliedAt: 'asc' },
           },
         },
+      },
+      tags: {
+        include: { tag: { select: { id: true, name: true } } },
+        orderBy: { createdAt: 'asc' },
       },
     },
   });
@@ -481,6 +492,21 @@ export default async function SalesOrderDetailPage({
                 : null
             }
           />
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Tags</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <OrderTagsEditor
+                apiPath={`/api/sales-orders/${so.id}/tags`}
+                initialTags={so.tags.map((a) => ({
+                  id: a.tag.id,
+                  name: a.tag.name,
+                }))}
+              />
+            </CardContent>
+          </Card>
 
           {/* Payments & credits. With a live invoice (CLOSED) → the
               invoice-bound card that lists applications + hosts the

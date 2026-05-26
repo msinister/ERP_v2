@@ -1828,16 +1828,24 @@ export type SalesOrderListFilters = {
   // Substring match on SO number (case-insensitive). Numbers look like
   // SO-2026-00001 so partial matches are useful.
   q?: string;
+  // Filter to SOs carrying ANY of these OrderTag ids (matches the
+  // product-list "tags" filter semantics — `some` not `every`).
+  tagIds?: string[];
   // Data-scope fragment from lib/permissions/scope.salesOrderScopeWhere.
   scope?: Prisma.SalesOrderWhereInput;
+  // When true the list result carries invoice.cogsAtClose; otherwise the
+  // service omits it from the select. Mirrors products.view_cost gating —
+  // belt-and-suspenders so a missing UI gate can never leak cost data.
+  includeCogs?: boolean;
   skip?: number;
   take?: number;
 };
 
 function salesOrderWhere(
-  filters: Omit<SalesOrderListFilters, 'skip' | 'take'>,
+  filters: Omit<SalesOrderListFilters, 'skip' | 'take' | 'includeCogs'>,
 ): Prisma.SalesOrderWhereInput {
-  const { status, customerId, salesRepId, dateFrom, dateTo, q, scope } = filters;
+  const { status, customerId, salesRepId, dateFrom, dateTo, q, tagIds, scope } =
+    filters;
   const dateClause: Prisma.DateTimeFilter | undefined =
     dateFrom || dateTo
       ? {
@@ -1861,36 +1869,74 @@ function salesOrderWhere(
       : {}),
     ...(dateClause ? { orderDate: dateClause } : {}),
     ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
+    // Match `some` (not `every`) — SOs carrying ANY of the selected tags.
+    ...(tagIds && tagIds.length > 0
+      ? { tags: { some: { tagId: { in: tagIds } } } }
+      : {}),
   };
   // AND so an explicit salesRepId filter can't widen past the scope.
   return scope ? { AND: [base, scope] } : base;
 }
 
+// Shape of one row in the SO list. Carries enough to render the
+// customizable column set without N+1: the SO + lines (for display total
+// + discount math), customer (for name + sales-rep lookup), the optional
+// invoice (for paid / credited / total / COGS — null pre-close), and
+// tags (with the OrderTag inside). cogsAtClose is null when the caller
+// didn't pass includeCogs=true (belt-and-suspenders cost gating, in
+// addition to filtering the column from the customizer UI-side).
+export type SalesOrderListRow = SalesOrder & {
+  lines: SalesOrderLine[];
+  customer: { id: string; code: string; name: string; salesRepId: string };
+  invoice: {
+    id: string;
+    total: Prisma.Decimal;
+    amountPaid: Prisma.Decimal;
+    amountCredited: Prisma.Decimal;
+    cogsAtClose: Prisma.Decimal | null;
+    cogsPosted: boolean;
+  } | null;
+  tags: Array<{ tag: { id: string; name: string } }>;
+};
+
 // Paginated list with customer (id, code, name, salesRepId) eager-
 // loaded so the table can render the customer name and sales-rep
 // lookup in a single round-trip. Lines are also included so the page
 // can call computeSalesOrderTotal per row (pilot scale; same N+1
-// pattern as the customers list AR balance).
+// pattern as the customers list AR balance). The invoice (when one
+// exists) feeds the new Amount Paid / Balance Due / Credits / COGS
+// columns; tags feeds the Tags column + filter.
 export async function listSalesOrdersPaged(
   db: PrismaClient,
   filters: SalesOrderListFilters = {},
-): Promise<{
-  rows: Array<
-    SalesOrderWithLines & {
-      customer: { id: string; code: string; name: string; salesRepId: string };
-    }
-  >;
-  total: number;
-}> {
-  const { skip = 0, take = 100, ...rest } = filters;
+): Promise<{ rows: SalesOrderListRow[]; total: number }> {
+  const { skip = 0, take = 100, includeCogs = false, ...rest } = filters;
   const where = salesOrderWhere(rest);
-  const [rows, total] = await Promise.all([
+  const [rawRows, total] = await Promise.all([
     db.salesOrder.findMany({
       where,
       include: {
         lines: { where: { deletedAt: null } },
         customer: {
           select: { id: true, code: true, name: true, salesRepId: true },
+        },
+        // Singular relation (Invoice.salesOrderId @unique). Prisma can't
+        // `where` a to-one include, so we select deletedAt and drop the
+        // invoice in the row-map below when it's soft-deleted/voided.
+        invoice: {
+          select: {
+            id: true,
+            total: true,
+            amountPaid: true,
+            amountCredited: true,
+            cogsAtClose: true,
+            cogsPosted: true,
+            deletedAt: true,
+          },
+        },
+        tags: {
+          include: { tag: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
         },
       },
       orderBy: [{ orderDate: 'desc' }, { createdAt: 'desc' }],
@@ -1899,6 +1945,25 @@ export async function listSalesOrdersPaged(
     }),
     db.salesOrder.count({ where }),
   ]);
+  const rows: SalesOrderListRow[] = rawRows.map((r) => {
+    const inv =
+      r.invoice && !r.invoice.deletedAt
+        ? {
+            id: r.invoice.id,
+            total: r.invoice.total,
+            amountPaid: r.invoice.amountPaid,
+            amountCredited: r.invoice.amountCredited,
+            // Drop the cost value here when not permitted — never
+            // depends solely on the customizer filtering the column.
+            cogsAtClose: includeCogs ? r.invoice.cogsAtClose : null,
+            cogsPosted: r.invoice.cogsPosted,
+          }
+        : null;
+    return {
+      ...r,
+      invoice: inv,
+    };
+  });
   return { rows, total };
 }
 

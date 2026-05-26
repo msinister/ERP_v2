@@ -1074,11 +1074,12 @@ model SalesOrder {
   createdAt            DateTime         @default(now())
   updatedAt            DateTime         @updatedAt
 
-  customer  Customer         @relation(fields: [customerId], references: [id])
-  warehouse Warehouse        @relation(fields: [warehouseId], references: [id])
-  salesRep  SalesRep?        @relation(fields: [salesRepId], references: [id])
+  customer  Customer                  @relation(fields: [customerId], references: [id])
+  warehouse Warehouse                 @relation(fields: [warehouseId], references: [id])
+  salesRep  SalesRep?                 @relation(fields: [salesRepId], references: [id])
   lines     SalesOrderLine[]
   invoice   Invoice?
+  tags      SalesOrderTagAssignment[]
 
   @@index([customerId, status])
   @@index([status, orderDate])
@@ -1538,6 +1539,35 @@ model ProductTag {
   tag     Tag     @relation(fields: [tagId], references: [id])
 
   @@unique([productId, tagId])
+  @@index([tagId])
+}
+
+// Shared "operational workflow" tag dictionary — created lazily on first
+// use via the autocomplete editor. Designed to be reused across the
+// operational entities (SalesOrder, PurchaseOrder, Bill, CreditMemo, Rma,
+// WorkOrder, VendorCredit) so a tag like "URGENT" or "Q3" applies to any
+// record and the autocomplete pool stays consistent. Each entity adds its
+// own assignment table that FKs into this dictionary (only the SO join
+// exists today — PO/Bill/etc. are layered in when those modules get tag
+// UIs). Distinct from Product `Tag` (product attributes) and `CustomerTag`
+// (customer categorization), which keep their own dictionaries.
+model OrderTag {
+  id        String   @id @default(cuid())
+  name      String   @unique @db.Citext
+  createdAt DateTime @default(now())
+
+  salesOrderAssignments SalesOrderTagAssignment[]
+}
+
+model SalesOrderTagAssignment {
+  salesOrderId String
+  tagId        String
+  createdAt    DateTime @default(now())
+
+  salesOrder SalesOrder @relation(fields: [salesOrderId], references: [id])
+  tag        OrderTag   @relation(fields: [tagId], references: [id])
+
+  @@id([salesOrderId, tagId])
   @@index([tagId])
 }
 
