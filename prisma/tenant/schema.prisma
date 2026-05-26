@@ -350,6 +350,14 @@ model Product {
   hsCode           String?
   hazmat           Boolean     @default(false)
   shopifyProductId String?
+  // Variant id from Shopify. In the flat-variant sync model each Shopify
+  // variant maps to its own ERP Product, so the variant id is stored
+  // here on Product (not on ProductVariant). Siblings from the same
+  // Shopify product are linked via ProductVariant.variantGroup.
+  shopifyVariantId String?     @unique
+  // Stamped on every successful upsertProductFromShopify run so the
+  // detail page can show "Synced from Shopify · {when}".
+  shopifySyncedAt  DateTime?
   active           Boolean     @default(true)
   // Flat-dollar labor cost rolled into the cost of every finished
   // unit produced from this product's BOM. Optional — null = no
@@ -395,6 +403,11 @@ model ProductImage {
   isPrimary Boolean   @default(false)
   sortOrder Int       @default(0)
   altText   String?
+  // Shopify-side image id when this row was synced from Shopify. Lets
+  // re-syncs upsert in place instead of duplicating rows, and lets
+  // image-removal sweeps target only Shopify-sourced images (operator-
+  // added images stay regardless of what's in Shopify).
+  shopifyImageId String?
   deletedAt DateTime?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -404,6 +417,7 @@ model ProductImage {
   @@index([productId, sortOrder])
   @@index([productId, isPrimary])
   @@index([deletedAt])
+  @@index([shopifyImageId])
 }
 
 model ProductVariant {

@@ -1,9 +1,10 @@
 import Link from 'next/link';
-import { Pencil, Wrench } from 'lucide-react';
+import { Pencil, ShoppingBag, Wrench } from 'lucide-react';
 import type { Product } from '@/generated/tenant';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ArchiveProductAction } from './archive-action';
+import { ShopifySyncButton } from './shopify-sync-button';
 
 export function ProductHeader({
   product,
@@ -32,6 +33,25 @@ export function ProductHeader({
               {product.name}
             </h1>
             <StatusBadge status={status} />
+            {product.shopifyProductId ? (
+              <Badge
+                variant="outline"
+                title={
+                  product.shopifySyncedAt
+                    ? `Last synced ${product.shopifySyncedAt.toLocaleString()}`
+                    : 'Synced from Shopify'
+                }
+                className="gap-1 text-[10px] font-normal text-muted-foreground"
+              >
+                <ShoppingBag className="size-3" />
+                Synced from Shopify
+                {product.shopifySyncedAt ? (
+                  <span className="ml-1 text-muted-foreground/70">
+                    · {formatRelative(product.shopifySyncedAt)}
+                  </span>
+                ) : null}
+              </Badge>
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span className="font-mono">{product.sku}</span>
@@ -62,6 +82,9 @@ export function ProductHeader({
               <Wrench />
               Build
             </Button>
+          ) : null}
+          {!archived && product.shopifyProductId ? (
+            <ShopifySyncButton productId={product.id} />
           ) : null}
           {!archived ? (
             <Button
@@ -122,4 +145,19 @@ function formatType(t: string): string {
     default:
       return t;
   }
+}
+
+// "5m ago" / "2h ago" / "Mar 12" — coarse and read-at-a-glance. The full
+// timestamp is in the badge's title attribute for the operator who needs
+// it.
+function formatRelative(d: Date): string {
+  const diffMs = Date.now() - d.getTime();
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }

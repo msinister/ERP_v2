@@ -9,6 +9,7 @@ import {
   ScrollText,
   ShieldCheck,
   BadgeDollarSign,
+  ShoppingBag,
   type LucideIcon,
 } from 'lucide-react';
 import { getCurrentUser } from '@/lib/auth/getCurrentUser';
@@ -83,6 +84,13 @@ const TILES: AdminTile[] = [
     title: 'Fiscal periods',
     description: 'Soft-close / hard-close / reopen monthly GL periods.',
     icon: CalendarCheck2,
+  },
+  {
+    href: '/admin/shopify',
+    title: 'Shopify sync',
+    description:
+      'Store URL, access token, webhook secret. Manual full sync + register webhooks.',
+    icon: ShoppingBag,
   },
 ];
 
