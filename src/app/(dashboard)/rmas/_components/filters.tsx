@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { X, Tag as TagIcon, ChevronDown } from 'lucide-react';
+import { Search, X, Tag as TagIcon, ChevronDown } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -48,6 +48,7 @@ export function RmasFilters({
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
 
+  const currentQ = params.get('q') ?? '';
   const currentStatus = params.get('status') ?? ALL_VALUE;
   const currentCustomer = params.get('customerId') ?? ALL_VALUE;
   const currentFrom = params.get('from') ?? '';
@@ -56,9 +57,23 @@ export function RmasFilters({
     .split(',')
     .filter(Boolean);
 
+  const [qInput, setQInput] = useState(currentQ);
   const [fromInput, setFromInput] = useState(currentFrom);
   const [toInput, setToInput] = useState(currentTo);
 
+  // Debounced sync from local q text → URL.
+  useEffect(() => {
+    if (qInput === currentQ) return;
+    const handle = window.setTimeout(() => {
+      apply({ q: qInput || null, skip: '0' });
+    }, 250);
+    return () => window.clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qInput]);
+
+  useEffect(() => {
+    setQInput(currentQ);
+  }, [currentQ]);
   useEffect(() => {
     setFromInput(currentFrom);
   }, [currentFrom]);
@@ -89,6 +104,7 @@ export function RmasFilters({
   }
 
   function clearAll() {
+    setQInput('');
     setFromInput('');
     setToInput('');
     startTransition(() => {
@@ -97,6 +113,7 @@ export function RmasFilters({
   }
 
   const hasFilters =
+    currentQ !== '' ||
     currentStatus !== ALL_VALUE ||
     currentCustomer !== ALL_VALUE ||
     currentFrom !== '' ||
@@ -105,6 +122,20 @@ export function RmasFilters({
 
   return (
     <div className="flex flex-wrap items-end gap-3">
+      <div className="min-w-[200px] flex-1 space-y-1.5">
+        <Label htmlFor="rma-search">Search</Label>
+        <div className="relative">
+          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            id="rma-search"
+            placeholder="RMA number or customer…"
+            value={qInput}
+            onChange={(e) => setQInput(e.target.value)}
+            className="pl-8"
+          />
+        </div>
+      </div>
+
       <div className="space-y-1.5">
         <Label htmlFor="rma-status">Status</Label>
         <Select

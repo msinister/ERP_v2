@@ -38,6 +38,7 @@ export default async function RmasPage({
   searchParams: SearchParams;
 }) {
   const sp = await searchParams;
+  const q = pickString(sp.q);
   const statusRaw = pickString(sp.status);
   const status = isRmaStatus(statusRaw) ? statusRaw : undefined;
   const customerId = pickString(sp.customerId);
@@ -56,6 +57,7 @@ export default async function RmasPage({
     listCustomers(db, { active: true, take: 1000 }),
     listAllOrderTags(db),
     listRmasPaged(db, {
+      q,
       status,
       customerId,
       createdAtFrom: fromParam ? new Date(fromParam) : undefined,

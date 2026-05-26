@@ -597,7 +597,15 @@ function purchaseOrderWhere(
     ...(status ? { status } : {}),
     ...(vendorId ? { vendorId } : {}),
     ...(dateClause ? { createdAt: dateClause } : {}),
-    ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
+    // Substring match on PO number OR vendor name (case-insensitive).
+    ...(q
+      ? {
+          OR: [
+            { number: { contains: q, mode: 'insensitive' as const } },
+            { vendor: { name: { contains: q, mode: 'insensitive' as const } } },
+          ],
+        }
+      : {}),
     ...(tagIds && tagIds.length > 0
       ? { tags: { some: { tagId: { in: tagIds } } } }
       : {}),

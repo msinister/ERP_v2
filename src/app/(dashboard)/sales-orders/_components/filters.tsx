@@ -116,7 +116,7 @@ export function SalesOrdersFilters({
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             id="so-search"
-            placeholder="SO number…"
+            placeholder="SO number or customer…"
             value={qInput}
             onChange={(e) => setQInput(e.target.value)}
             className="pl-8"

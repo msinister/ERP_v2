@@ -705,7 +705,15 @@ function creditMemoWhere(
       : {}),
     ...(categoryId ? { categoryId } : {}),
     ...(createdAtFrom || createdAtTo ? { createdAt: dateFilter } : {}),
-    ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
+    // Substring match on CM number OR customer name (case-insensitive).
+    ...(q
+      ? {
+          OR: [
+            { number: { contains: q, mode: 'insensitive' as const } },
+            { customer: { name: { contains: q, mode: 'insensitive' as const } } },
+          ],
+        }
+      : {}),
     ...(tagIds && tagIds.length > 0
       ? { tags: { some: { tagId: { in: tagIds } } } }
       : {}),

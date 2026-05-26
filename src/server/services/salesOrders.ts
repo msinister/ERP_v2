@@ -1853,28 +1853,41 @@ function salesOrderWhere(
           ...(dateTo ? { lte: dateTo } : {}),
         }
       : undefined;
+  // Each independent OR group goes into the AND array so they compose
+  // (effective-rep OR + free-text q OR can both apply at the same time).
+  // A top-level `OR:` would clobber if we tried to use it twice via spread.
+  const andGroups: Prisma.SalesOrderWhereInput[] = [];
+  if (salesRepId) {
+    // EFFECTIVE rep: orders explicitly overridden to this rep, OR orders
+    // with no override whose customer's rep is this rep.
+    andGroups.push({
+      OR: [
+        { salesRepId },
+        { salesRepId: null, customer: { salesRepId } },
+      ],
+    });
+  }
+  if (q) {
+    // Substring match on SO number OR customer name (case-insensitive).
+    andGroups.push({
+      OR: [
+        { number: { contains: q, mode: 'insensitive' as const } },
+        { customer: { name: { contains: q, mode: 'insensitive' as const } } },
+      ],
+    });
+  }
   const base: Prisma.SalesOrderWhereInput = {
     deletedAt: null,
     ...(status ? { status } : {}),
     ...(customerId ? { customerId } : {}),
-    // Filter by EFFECTIVE rep: orders explicitly overridden to this rep,
-    // OR orders with no override whose customer's rep is this rep.
-    ...(salesRepId
-      ? {
-          OR: [
-            { salesRepId },
-            { salesRepId: null, customer: { salesRepId } },
-          ],
-        }
-      : {}),
     ...(dateClause ? { orderDate: dateClause } : {}),
-    ...(q ? { number: { contains: q, mode: 'insensitive' as const } } : {}),
     // Match `some` (not `every`) — SOs carrying ANY of the selected tags.
     ...(tagIds && tagIds.length > 0
       ? { tags: { some: { tagId: { in: tagIds } } } }
       : {}),
+    ...(andGroups.length > 0 ? { AND: andGroups } : {}),
   };
-  // AND so an explicit salesRepId filter can't widen past the scope.
+  // AND with scope so an explicit filter can't widen past the data scope.
   return scope ? { AND: [base, scope] } : base;
 }
 

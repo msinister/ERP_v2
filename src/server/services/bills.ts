@@ -810,11 +810,15 @@ function billWhere(
       : {}),
     ...(source ? { source } : {}),
     ...(billDateFrom || billDateTo ? { billDate: dateFilter } : {}),
+    // Substring match on Bill number, vendor reference, OR vendor name
+    // (case-insensitive). Vendor reference stays in the mix because AP
+    // staff often look up bills by the printed vendor invoice number.
     ...(q
       ? {
           OR: [
             { number: { contains: q, mode: 'insensitive' as const } },
             { vendorReference: { contains: q, mode: 'insensitive' as const } },
+            { vendor: { name: { contains: q, mode: 'insensitive' as const } } },
           ],
         }
       : {}),

@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/table';
 import { formatStatusLabel } from '@/lib/format';
 import { WorkOrderTagFilter } from './_components/tag-filter';
+import { WorkOrderSearchInput } from './_components/search-input';
 
 export const revalidate = 0;
 
@@ -39,6 +40,7 @@ export default async function WorkOrdersPage({
   searchParams: SearchParams;
 }) {
   const sp = await searchParams;
+  const q = pickString(sp.q);
   const statusRaw = pickString(sp.status);
   const status = isWorkOrderStatus(statusRaw) ? statusRaw : undefined;
   const tagsParam = pickString(sp.tags);
@@ -47,6 +49,7 @@ export default async function WorkOrdersPage({
   const [allOrderTags, page] = await Promise.all([
     listAllOrderTags(db),
     listWorkOrdersPaged(db, {
+      q,
       status,
       tagIds,
       take: DEFAULT_PAGE_SIZE,
@@ -68,10 +71,12 @@ export default async function WorkOrdersPage({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <StatusTabs current={status} />
+      <div className="flex flex-wrap items-end gap-3">
+        <WorkOrderSearchInput />
         <WorkOrderTagFilter tags={tagOptions} />
       </div>
+
+      <StatusTabs current={status} />
 
       {page.rows.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">

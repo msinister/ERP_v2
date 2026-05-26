@@ -469,6 +469,8 @@ export type RmaListFilters = {
   status?: RmaStatus | RmaStatus[];
   createdAtFrom?: Date;
   createdAtTo?: Date;
+  // Substring match on RMA number OR customer name (case-insensitive).
+  q?: string;
   // Filter to RMAs carrying ANY of these OrderTag ids.
   tagIds?: string[];
   // Data-scope fragment from lib/permissions/scope.rmaScopeWhere.
@@ -486,6 +488,7 @@ function rmaWhere(
     status,
     createdAtFrom,
     createdAtTo,
+    q,
     tagIds,
     scope,
   } = filters;
@@ -500,6 +503,15 @@ function rmaWhere(
       ? { status: Array.isArray(status) ? { in: status } : status }
       : {}),
     ...(createdAtFrom || createdAtTo ? { createdAt: dateFilter } : {}),
+    // Substring match on RMA number OR customer name (case-insensitive).
+    ...(q
+      ? {
+          OR: [
+            { number: { contains: q, mode: 'insensitive' as const } },
+            { customer: { name: { contains: q, mode: 'insensitive' as const } } },
+          ],
+        }
+      : {}),
     ...(tagIds && tagIds.length > 0
       ? { tags: { some: { tagId: { in: tagIds } } } }
       : {}),

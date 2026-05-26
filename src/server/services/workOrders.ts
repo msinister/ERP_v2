@@ -359,6 +359,8 @@ export async function listWorkOrdersPaged(
     status?: WorkOrderStatus;
     productId?: string;
     warehouseId?: string;
+    // Substring match on WO number OR product name (case-insensitive).
+    q?: string;
     // Filter to WOs carrying ANY of these OrderTag ids.
     tagIds?: string[];
     skip?: number;
@@ -379,6 +381,16 @@ export async function listWorkOrdersPaged(
   if (opts.warehouseId) where.warehouseId = opts.warehouseId;
   if (opts.tagIds && opts.tagIds.length > 0) {
     where.tags = { some: { tagId: { in: opts.tagIds } } };
+  }
+  if (opts.q) {
+    where.OR = [
+      { number: { contains: opts.q, mode: 'insensitive' as const } },
+      {
+        product: {
+          name: { contains: opts.q, mode: 'insensitive' as const },
+        },
+      },
+    ];
   }
 
   const [rows, total] = await Promise.all([

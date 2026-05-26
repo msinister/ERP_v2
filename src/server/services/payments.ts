@@ -776,11 +776,15 @@ export async function listPayments(
         ? { status: Array.isArray(status) ? { in: status } : status }
         : {}),
       ...(receivedAtFrom || receivedAtTo ? { receivedAt: dateFilter } : {}),
+      // Substring match on payment number, reference, OR customer name
+      // (case-insensitive). Reference stays in the mix — operators often
+      // pull checks by the customer-supplied check/ACH reference.
       ...(q
         ? {
             OR: [
               { number: { contains: q, mode: 'insensitive' as const } },
               { reference: { contains: q, mode: 'insensitive' as const } },
+              { customer: { name: { contains: q, mode: 'insensitive' as const } } },
             ],
           }
         : {}),
@@ -855,11 +859,15 @@ export async function listPaymentsPaged(
     ...(status ? { status } : {}),
     ...(method ? { method } : {}),
     ...(receivedAtFrom || receivedAtTo ? { receivedAt: dateFilter } : {}),
+    // Substring match on payment number, reference, OR customer name
+    // (case-insensitive). Reference stays in the mix — operators often
+    // pull checks by the customer-supplied check/ACH reference.
     ...(q
       ? {
           OR: [
             { number: { contains: q, mode: 'insensitive' as const } },
             { reference: { contains: q, mode: 'insensitive' as const } },
+            { customer: { name: { contains: q, mode: 'insensitive' as const } } },
           ],
         }
       : {}),
