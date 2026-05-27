@@ -1,27 +1,31 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plug, Webhook, RefreshCcw } from 'lucide-react';
+import { Plug, Webhook, RefreshCcw, Upload } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 
-// Three buttons: test the connection, register webhooks, run a full sync.
-// All three hit the new per-store admin routes. Slice A operates on the
-// default store; Slice B will pass storeId explicitly per row.
+// Per-store sync controls: test connection, register webhooks, run full
+// product sync, push all inventory. All call the per-store admin routes.
+// Push All is gated on inventoryPushEnabled + shopifyLocationId (the parent
+// page only sets `pushEnabled` true when both are present).
 
-export function ShopifySyncActions({
+export function StoreSyncActions({
   storeId,
   configured,
+  pushEnabled,
 }: {
   storeId: string;
   configured: boolean;
+  pushEnabled: boolean;
 }) {
   const router = useRouter();
   const [testing, startTesting] = useTransition();
   const [registering, startRegistering] = useTransition();
   const [syncing, startSyncing] = useTransition();
-  const [, setLastRunMarker] = useState(0);
+  const [pushing, startPushing] = useTransition();
+  const busy = testing || registering || syncing || pushing;
 
   function onTest() {
     startTesting(async () => {
@@ -43,9 +47,7 @@ export function ShopifySyncActions({
           );
           return;
         }
-        toast.success(
-          `Connected — ${body.productCount ?? '?'} products in Shopify`,
-        );
+        toast.success(`Connected — ${body.productCount ?? '?'} products in Shopify`);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
       }
@@ -104,7 +106,38 @@ export function ShopifySyncActions({
         const msg = `Sync complete — ${body.created ?? 0} created, ${body.updated ?? 0} updated, ${body.skipped ?? 0} skipped${errCount > 0 ? `, ${errCount} errors` : ''}`;
         if (errCount > 0) toast.warning(msg);
         else toast.success(msg);
-        setLastRunMarker(Date.now());
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Network error');
+      }
+    });
+  }
+
+  function onPushAll() {
+    startPushing(async () => {
+      try {
+        const res = await fetch(
+          `/api/admin/shopify/stores/${storeId}/push-inventory`,
+          { method: 'POST' },
+        );
+        const body = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          run?: {
+            pushed: number;
+            skipped: number;
+            errors: Array<{ productId: string; storeId: string; message: string }>;
+          };
+          error?: string;
+        };
+        if (!res.ok || body.ok === false) {
+          toast.error(body.error ?? `Push failed (${res.status})`);
+          return;
+        }
+        const r = body.run;
+        const errCount = r?.errors.length ?? 0;
+        const msg = `Inventory push complete — ${r?.pushed ?? 0} pushed, ${r?.skipped ?? 0} skipped${errCount > 0 ? `, ${errCount} errors` : ''}`;
+        if (errCount > 0) toast.warning(msg);
+        else toast.success(msg);
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Network error');
@@ -118,7 +151,7 @@ export function ShopifySyncActions({
         type="button"
         variant="outline"
         onClick={onTest}
-        disabled={!configured || testing || registering || syncing}
+        disabled={!configured || busy}
       >
         <Plug />
         {testing ? 'Testing…' : 'Test connection'}
@@ -127,7 +160,7 @@ export function ShopifySyncActions({
         type="button"
         variant="outline"
         onClick={onRegister}
-        disabled={!configured || testing || registering || syncing}
+        disabled={!configured || busy}
       >
         <Webhook />
         {registering ? 'Registering…' : 'Register webhooks'}
@@ -135,10 +168,24 @@ export function ShopifySyncActions({
       <Button
         type="button"
         onClick={onFullSync}
-        disabled={!configured || testing || registering || syncing}
+        disabled={!configured || busy}
       >
         <RefreshCcw />
         {syncing ? 'Syncing — keep this tab open…' : 'Run full sync'}
+      </Button>
+      <Button
+        type="button"
+        variant="secondary"
+        onClick={onPushAll}
+        disabled={!pushEnabled || busy}
+        title={
+          !pushEnabled
+            ? 'Enable inventory push + set a location id to use this'
+            : undefined
+        }
+      >
+        <Upload />
+        {pushing ? 'Pushing — keep this tab open…' : 'Push all inventory'}
       </Button>
     </div>
   );

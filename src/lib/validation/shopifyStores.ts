@@ -28,7 +28,9 @@ export const shopifyStoreCreateSchema = z.object({
   syncEnabled: z.boolean().default(false),
   inventoryPushEnabled: z.boolean().default(false),
   shopifyLocationId: z.string().trim().min(1).max(64).optional(),
-  sortOrder: z.number().int().min(0).default(0),
+  // Omitted on create → service computes max(sortOrder) + 10 so new stores
+  // append to the end of the list without disturbing existing order.
+  sortOrder: z.number().int().min(0).optional(),
   active: z.boolean().default(true),
 });
 

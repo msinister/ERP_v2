@@ -132,6 +132,14 @@ export async function createStore(
 ): Promise<ShopifyStorePublic> {
   const data = shopifyStoreCreateSchema.parse(input);
   return db.$transaction(async (tx) => {
+    // Auto-append to the end of the list when sortOrder is omitted.
+    // max(sortOrder) + 10 leaves room for manual reordering later without
+    // requiring a full renumber.
+    let sortOrder = data.sortOrder;
+    if (sortOrder == null) {
+      const max = await tx.shopifyStore.aggregate({ _max: { sortOrder: true } });
+      sortOrder = (max._max.sortOrder ?? -10) + 10;
+    }
     const store = await tx.shopifyStore.create({
       data: {
         name: data.name,
@@ -145,7 +153,7 @@ export async function createStore(
         syncEnabled: data.syncEnabled,
         inventoryPushEnabled: data.inventoryPushEnabled,
         shopifyLocationId: data.shopifyLocationId ?? null,
-        sortOrder: data.sortOrder,
+        sortOrder,
         active: data.active,
         createdBy: ctx?.userId ?? null,
         updatedBy: ctx?.userId ?? null,
