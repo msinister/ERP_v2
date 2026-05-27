@@ -2,14 +2,21 @@
 
 import { useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plug, Webhook, RefreshCcw, Upload } from 'lucide-react';
+import {
+  ArrowUpFromLine,
+  Plug,
+  RefreshCcw,
+  Upload,
+  Webhook,
+} from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 
-// Per-store sync controls: test connection, register webhooks, run full
-// product sync, push all inventory. All call the per-store admin routes.
-// Push All is gated on inventoryPushEnabled + shopifyLocationId (the parent
-// page only sets `pushEnabled` true when both are present).
+// Per-store sync controls: test connection, register webhooks, full
+// catalog pull, push products to Shopify (ERP → Shopify catalog create),
+// push all inventory. All call the per-store admin routes.
+// Push All Inventory is gated on inventoryPushEnabled + shopifyLocationId
+// (the parent page only sets `pushEnabled` true when both are present).
 
 export function StoreSyncActions({
   storeId,
@@ -24,8 +31,9 @@ export function StoreSyncActions({
   const [testing, startTesting] = useTransition();
   const [registering, startRegistering] = useTransition();
   const [syncing, startSyncing] = useTransition();
+  const [pushingProducts, startPushingProducts] = useTransition();
   const [pushing, startPushing] = useTransition();
-  const busy = testing || registering || syncing || pushing;
+  const busy = testing || registering || syncing || pushingProducts || pushing;
 
   function onTest() {
     startTesting(async () => {
@@ -113,6 +121,39 @@ export function StoreSyncActions({
     });
   }
 
+  function onPushProducts() {
+    startPushingProducts(async () => {
+      try {
+        const res = await fetch(
+          `/api/admin/shopify/stores/${storeId}/push-products`,
+          { method: 'POST' },
+        );
+        // The route returns the StoredSyncRun directly (created / updated /
+        // skipped / errors) — same shape as full-sync; we reuse the same
+        // toast summary format for consistency. For push-products, `updated`
+        // is always 0 (the service skips existing listings rather than
+        // re-creating them), so we omit it from the message.
+        const body = (await res.json().catch(() => ({}))) as {
+          created?: number;
+          skipped?: number;
+          errors?: Array<{ shopifyId: string; message: string }>;
+          error?: string;
+        };
+        if (!res.ok) {
+          toast.error(body.error ?? `Push failed (${res.status})`);
+          return;
+        }
+        const errCount = body.errors?.length ?? 0;
+        const msg = `Product push complete — ${body.created ?? 0} created, ${body.skipped ?? 0} skipped${errCount > 0 ? `, ${errCount} errors` : ''}`;
+        if (errCount > 0) toast.warning(msg);
+        else toast.success(msg);
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Network error');
+      }
+    });
+  }
+
   function onPushAll() {
     startPushing(async () => {
       try {
@@ -172,6 +213,22 @@ export function StoreSyncActions({
       >
         <RefreshCcw />
         {syncing ? 'Syncing — keep this tab open…' : 'Run full sync'}
+      </Button>
+      <Button
+        type="button"
+        variant="secondary"
+        onClick={onPushProducts}
+        disabled={!configured || busy}
+        title={
+          !configured
+            ? 'Configure store URL + secrets first'
+            : 'Walks routing-rule matches and creates a Shopify listing for any product without one in this store'
+        }
+      >
+        <ArrowUpFromLine />
+        {pushingProducts
+          ? 'Pushing products — keep this tab open (15+ min for large sets)…'
+          : 'Push products'}
       </Button>
       <Button
         type="button"
