@@ -82,6 +82,16 @@ export type ShopifyCreateVariantInput = {
   weight_unit?: 'lb' | 'kg' | 'oz' | 'g';
 };
 
+// One image in the create-product payload. `src` is the URL Shopify will
+// fetch + rehost on its CDN; `alt` is optional alt text. Position is
+// implicit — Shopify assigns positions in the order images appear, which
+// is how pushProductToShopify maps variant images back to image ids after
+// the create round-trip.
+export type ShopifyCreateImageInput = {
+  src: string;
+  alt?: string;
+};
+
 export type ShopifyCreateProductInput = {
   title: string;
   body_html?: string;
@@ -90,16 +100,22 @@ export type ShopifyCreateProductInput = {
   tags?: string; // comma-separated, matches Shopify's wire format
   status: 'active' | 'draft';
   variants: ShopifyCreateVariantInput[];
+  images?: ShopifyCreateImageInput[];
 };
 
-// Shape returned by createProduct — just the fields we need to populate
-// ProductShopifyVariant junction rows. (Shopify returns the full product
-// resource; we narrow to what callers actually use.)
+// Shape returned by createProduct — fields the caller needs to populate
+// junction rows + map variant images back. Shopify returns the full
+// product resource; we narrow to what's used.
 export type ShopifyCreatedProduct = {
   id: string;
   variants: Array<{
     id: string;
     inventory_item_id: string;
     sku: string | null;
+  }>;
+  images: Array<{
+    id: string;
+    position: number;
+    src: string;
   }>;
 };

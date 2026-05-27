@@ -158,6 +158,11 @@ export class ShopifyClient {
           inventory_item_id: string | number;
           sku: string | null;
         }>;
+        images?: Array<{
+          id: string | number;
+          position: number;
+          src: string;
+        }>;
       };
     };
     const res = await this.request<Raw>('POST', '/products.json', {
@@ -171,7 +176,26 @@ export class ShopifyClient {
         inventory_item_id: String(v.inventory_item_id),
         sku: v.sku,
       })),
+      images: (p.images ?? []).map((i) => ({
+        id: String(i.id),
+        position: i.position,
+        src: i.src,
+      })),
     };
+  }
+
+  /**
+   * Assign a previously-created Shopify image to a Shopify variant via
+   * PUT /variants/{id}.json. Used by pushProductToShopify after the
+   * product create — variant.image_id can't be set on POST /products.json
+   * because the image ids don't exist yet, so we do a follow-up call per
+   * variant that has an ERP-side variant image. Per-call failures are
+   * isolated by the caller (best-effort assignment).
+   */
+  async updateVariantImage(variantId: string, imageId: string): Promise<void> {
+    await this.request<unknown>('PUT', `/variants/${variantId}.json`, {
+      variant: { id: Number(variantId), image_id: Number(imageId) },
+    });
   }
 
   /**
@@ -198,7 +222,7 @@ export class ShopifyClient {
   // ---------------------------------------------------------------------------
 
   private async request<T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PUT',
     path: string,
     body?: unknown,
   ): Promise<{ body: T; linkHeader: string | null }> {

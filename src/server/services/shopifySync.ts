@@ -9,6 +9,7 @@ import {
 import { audit, type AuditContext } from '@/lib/audit/audit';
 import { ShopifyClient } from '@/lib/integrations/shopify/client';
 import type {
+  ShopifyCreateImageInput,
   ShopifyCreateProductInput,
   ShopifyCreateVariantInput,
   ShopifyProduct,
@@ -764,9 +765,20 @@ export type BuildShopifyCreateInputProduct = {
   weightUnit: string | null;
   variants: Array<{
     sku: string;
+    imageUrl: string | null;
     vendorProducts: Array<{ vendor: { name: string } | null }>;
   }>;
   tags: Array<{ tag: { name: string } }>;
+  // Gallery — operator-uploaded + Shopify-synced images. Filtered to
+  // deletedAt=null at load time. Sort order: isPrimary desc, sortOrder
+  // asc, createdAt asc (mirrors the product detail thumbnail picker).
+  images: Array<{
+    url: string;
+    altText: string | null;
+    isPrimary: boolean;
+    sortOrder: number;
+    createdAt: Date;
+  }>;
 };
 
 async function loadProductForPush(db: PrismaClient, productId: string) {
@@ -786,8 +798,59 @@ async function loadProductForPush(db: PrismaClient, productId: string) {
       tags: {
         include: { tag: { select: { name: true } } },
       },
+      images: {
+        where: { deletedAt: null },
+        orderBy: [
+          { isPrimary: 'desc' },
+          { sortOrder: 'asc' },
+          { createdAt: 'asc' },
+        ],
+      },
     },
   });
+}
+
+// Plan output: the images array to send to Shopify (in send-order, which
+// also dictates response position 1..N) plus a SKU → 1-based position
+// map so the caller can look up image_id for each variant after the
+// create round-trip. Variant images that aren't already in the product
+// gallery are appended (dedup by url).
+export type ShopifyImagePlan = {
+  images: ShopifyCreateImageInput[];
+  variantImagePositionBySku: Map<string, number>;
+};
+
+export function buildShopifyImagePlan(
+  product: BuildShopifyCreateInputProduct,
+): ShopifyImagePlan {
+  // Gallery in send-order. ProductImages first (already sorted by the
+  // loader: primary, then sortOrder, then createdAt), then variant-only
+  // images that aren't already represented.
+  const images: ShopifyCreateImageInput[] = [];
+  const urlToPosition = new Map<string, number>();
+
+  for (const img of product.images) {
+    if (urlToPosition.has(img.url)) continue;
+    images.push({
+      src: img.url,
+      alt: img.altText ?? undefined,
+    });
+    urlToPosition.set(img.url, images.length); // 1-based
+  }
+
+  const variantImagePositionBySku = new Map<string, number>();
+  for (const v of product.variants) {
+    if (!v.imageUrl) continue;
+    let position = urlToPosition.get(v.imageUrl);
+    if (position == null) {
+      images.push({ src: v.imageUrl });
+      position = images.length;
+      urlToPosition.set(v.imageUrl, position);
+    }
+    variantImagePositionBySku.set(v.sku, position);
+  }
+
+  return { images, variantImagePositionBySku };
 }
 
 // Build the Shopify create-product payload from a loaded ERP product.
@@ -853,6 +916,15 @@ export function buildShopifyCreateInput(
     status: 'active',
     variants,
   };
+
+  // Attach the same image plan used for variant→image_id mapping. We
+  // re-derive it here rather than threading it through callers because
+  // it's cheap and keeps buildShopifyCreateInput's contract a single
+  // return value. pushProductToShopify calls buildShopifyImagePlan
+  // independently to get the position map.
+  const { images } = buildShopifyImagePlan(product);
+  if (images.length > 0) payload.images = images;
+
   if (product.longDescription) payload.body_html = product.longDescription;
   if (vendorName) payload.vendor = vendorName;
   if (product.category) payload.product_type = product.category;
@@ -987,6 +1059,37 @@ export async function pushProductToShopify(
         syncedAt: now,
       },
     });
+  }
+
+  // Best-effort per-variant image assignment. Shopify can't accept
+  // variant.image_id on POST /products.json because the image ids don't
+  // exist until the create returns; we re-derive the SKU→position map and
+  // PUT each variant's image_id from response.images[position-1]. A
+  // single failed PUT logs + continues; we don't roll back the create.
+  const { variantImagePositionBySku } = buildShopifyImagePlan(product);
+  if (variantImagePositionBySku.size > 0 && created.images.length > 0) {
+    // Index response images by position (Shopify echoes the order we
+    // sent + assigns positions 1..N; we don't trust array order alone).
+    const imageByPosition = new Map(
+      created.images.map((img) => [img.position, img]),
+    );
+    for (const sv of created.variants) {
+      if (!sv.sku) continue;
+      const position = variantImagePositionBySku.get(sv.sku);
+      if (position == null) continue;
+      const image = imageByPosition.get(position);
+      if (!image) continue;
+      try {
+        await client.updateVariantImage(sv.id, image.id);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(
+          '[pushProductToShopify] variant image assignment failed',
+          { variantId: sv.id, sku: sv.sku, imageId: image.id },
+          e,
+        );
+      }
+    }
   }
 
   await db.product.update({
