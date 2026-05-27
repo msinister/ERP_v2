@@ -1,6 +1,7 @@
 import {
   AuditAction,
   Prisma,
+  ProductType,
   VendorType,
   type PrismaClient,
   type Product,
@@ -8,6 +9,8 @@ import {
 import { audit, type AuditContext } from '@/lib/audit/audit';
 import { ShopifyClient } from '@/lib/integrations/shopify/client';
 import type {
+  ShopifyCreateProductInput,
+  ShopifyCreateVariantInput,
   ShopifyProduct,
   ShopifyVariant,
 } from '@/lib/integrations/shopify/types';
@@ -16,6 +19,11 @@ import {
   recordSyncRun,
   type StoredSyncRun,
 } from './shopifyStores';
+import {
+  matchingProductIds,
+  productMatchesStore,
+} from './shopifyStoreRules';
+import { pushInventoryForProduct } from './shopifyInventoryPush';
 
 // =============================================================================
 // Shopify → ERP product sync. Multi-store aware: every entry point takes a
@@ -696,4 +704,409 @@ function slugify(s: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+// =============================================================================
+// ERP → Shopify product push (inverse of upsertProductFromShopify).
+//
+// Creates a brand-new Shopify product from ERP catalog data and registers
+// every returned Shopify variant as a primary ProductShopifyVariant junction
+// row (isPrimary=true — this store has no other listing for this product
+// yet). Skips when junction rows already exist for (storeId, productId): a
+// product is "already listed" on this store and re-pushing would create a
+// duplicate.
+//
+// Routing-rule + sync-flag gates:
+//   - store.syncEnabled = false → skipped, reason 'sync disabled'.
+//   - product fails productMatchesStore → skipped, reason 'does not match
+//     routing rules'. (Operator can adjust rules and retry.)
+//
+// Variant pricing: ERP keeps a single Product.basePrice that applies to all
+// of a product's variants (per-variant pricing is not in the schema).
+// Every Shopify variant in the create payload carries the same basePrice;
+// per-customer / tier pricing is an ERP-side concern that doesn't transit
+// to Shopify.
+//
+// Inventory: after the product is created we call pushInventoryForProduct
+// once to seed Shopify's stock counters — best-effort; an inventory-push
+// failure does NOT roll back the product create (the listing is already
+// up and a subsequent inventory push will heal).
+// =============================================================================
+
+export type PushProductOutcome = 'created' | 'skipped' | 'error';
+
+export type PushProductResult = {
+  outcome: PushProductOutcome;
+  productId: string;
+  shopifyProductId?: string;
+  reason?: string;
+};
+
+// Bulk-run summary written via recordSyncRun. Reuses the existing
+// StoredSyncRun shape (created / updated / skipped / errors) so the admin
+// UI's "Last sync" panel can render it; `updated` is always 0 for the
+// push direction since creating a Shopify listing for a product that
+// already has one is a skip, not an update.
+
+// Narrow input shape for buildShopifyCreateInput — declared independently
+// of Prisma's deep payload type so fixtures (and the production caller)
+// can both satisfy it without the test having to mock every scalar on the
+// VendorProduct / ProductVariant relations. The Prisma payload returned
+// by loadProductForPush is a structural subtype.
+export type BuildShopifyCreateInputProduct = {
+  name: string;
+  longDescription: string | null;
+  brand: string | null;
+  category: string | null;
+  type: ProductType;
+  basePrice: Prisma.Decimal | null;
+  weight: Prisma.Decimal | null;
+  weightUnit: string | null;
+  variants: Array<{
+    sku: string;
+    vendorProducts: Array<{ vendor: { name: string } | null }>;
+  }>;
+  tags: Array<{ tag: { name: string } }>;
+};
+
+async function loadProductForPush(db: PrismaClient, productId: string) {
+  return db.product.findUnique({
+    where: { id: productId },
+    include: {
+      variants: {
+        where: { deletedAt: null, active: true },
+        orderBy: { createdAt: 'asc' },
+        include: {
+          vendorProducts: {
+            where: { isPrimary: true, deletedAt: null },
+            include: { vendor: { select: { name: true, type: true } } },
+          },
+        },
+      },
+      tags: {
+        include: { tag: { select: { name: true } } },
+      },
+    },
+  });
+}
+
+// Build the Shopify create-product payload from a loaded ERP product.
+// Pure function — no db / no client access — so the unit test can verify
+// payload shape without mocking either.
+export function buildShopifyCreateInput(
+  product: BuildShopifyCreateInputProduct,
+): ShopifyCreateProductInput {
+  // Pick the first primary VendorProduct across any variant — matches the
+  // "primary vendor on any variant" semantics already used by routing
+  // rules.productMatchesStore. Falls back to Product.brand (Shopify-side
+  // vendor field is free-text; an operator-set brand is fine).
+  let vendorName: string | null = null;
+  for (const v of product.variants) {
+    const vp = v.vendorProducts[0];
+    if (vp?.vendor?.name) {
+      vendorName = vp.vendor.name;
+      break;
+    }
+  }
+  if (!vendorName && product.brand) vendorName = product.brand;
+
+  const tags = product.tags
+    .map((t) => t.tag.name.trim())
+    .filter((n) => n.length > 0)
+    .join(', ');
+
+  // SERVICE products never ship; everything else does. Mirrors how the
+  // pull side treats SERVICE for tax/shipping decisions.
+  const requiresShipping = product.type !== ProductType.SERVICE;
+
+  // basePrice is the only price field on Product; share across variants.
+  // Round to 2 decimals at the boundary — Shopify expects "12.99" not
+  // "12.99000". Use Prisma.Decimal.toFixed(2) so we don't round-trip
+  // through float.
+  const priceStr =
+    product.basePrice != null ? product.basePrice.toFixed(2) : '0.00';
+
+  // Weight unit comes from Product.weightUnit (free-text "lb"|"kg"|"oz"|"g"
+  // in our schema, defaults to "lb"). Anything we don't recognize falls
+  // back to "lb" — Shopify rejects unknown units.
+  const weightUnit = normalizeWeightUnit(product.weightUnit);
+  const weight =
+    product.weight != null ? Number(product.weight.toString()) : null;
+
+  const variants: ShopifyCreateVariantInput[] = product.variants.map((v) => {
+    const base: ShopifyCreateVariantInput = {
+      sku: v.sku,
+      price: priceStr,
+      inventory_management: 'shopify',
+      fulfillment_service: 'manual',
+      requires_shipping: requiresShipping,
+    };
+    if (weight != null && Number.isFinite(weight)) {
+      base.weight = weight;
+      base.weight_unit = weightUnit;
+    }
+    return base;
+  });
+
+  const payload: ShopifyCreateProductInput = {
+    title: product.name,
+    status: 'active',
+    variants,
+  };
+  if (product.longDescription) payload.body_html = product.longDescription;
+  if (vendorName) payload.vendor = vendorName;
+  if (product.category) payload.product_type = product.category;
+  if (tags) payload.tags = tags;
+  return payload;
+}
+
+function normalizeWeightUnit(
+  u: string | null,
+): 'lb' | 'kg' | 'oz' | 'g' {
+  if (u === 'kg' || u === 'oz' || u === 'g') return u;
+  return 'lb';
+}
+
+/**
+ * Create one ERP product on Shopify. Idempotent: if junction rows already
+ * exist for (storeId, productId), returns outcome='skipped' without
+ * touching Shopify. Per-store sync-flag + routing-rule gates short-circuit
+ * before the network call.
+ *
+ * On success creates one ProductShopifyVariant per Shopify variant returned
+ * (matched by SKU). Triggers an inventory push for this product so the new
+ * listings get current stock counts.
+ */
+export async function pushProductToShopify(
+  db: PrismaClient,
+  storeId: string,
+  productId: string,
+): Promise<PushProductResult> {
+  // Gate 1: store must have sync enabled.
+  const secrets = await getSecretsForStore(db, storeId);
+  if (!secrets.syncEnabled) {
+    return {
+      outcome: 'skipped',
+      productId,
+      reason: 'sync disabled for this store',
+    };
+  }
+
+  // Gate 2: product must already match this store's routing rules. Don't
+  // bypass — operators set rules deliberately, and pushing a non-matching
+  // product would create a listing the rules say shouldn't exist.
+  const matches = await productMatchesStore(db, productId, storeId);
+  if (!matches) {
+    return {
+      outcome: 'skipped',
+      productId,
+      reason: 'product does not match this store\'s routing rules',
+    };
+  }
+
+  // Gate 3: already listed → skip. A repeat call should be a no-op so
+  // operators can safely re-run pushAllMatchingProducts without producing
+  // duplicate Shopify products.
+  const existing = await db.productShopifyVariant.findFirst({
+    where: { productId, shopifyStoreId: storeId },
+    select: { id: true },
+  });
+  if (existing) {
+    return {
+      outcome: 'skipped',
+      productId,
+      reason: 'product already has a Shopify listing in this store',
+    };
+  }
+
+  const product = await loadProductForPush(db, productId);
+  if (!product) {
+    return {
+      outcome: 'skipped',
+      productId,
+      reason: 'product not found',
+    };
+  }
+  if (product.deletedAt != null) {
+    return {
+      outcome: 'skipped',
+      productId,
+      reason: 'product is archived',
+    };
+  }
+  if (!product.active) {
+    return {
+      outcome: 'skipped',
+      productId,
+      reason: 'product is inactive',
+    };
+  }
+  if (product.variants.length === 0) {
+    return {
+      outcome: 'skipped',
+      productId,
+      reason: 'product has no active variants',
+    };
+  }
+
+  const payload = buildShopifyCreateInput(product);
+  const client = new ShopifyClient({
+    storeUrl: secrets.storeUrl,
+    accessToken: secrets.accessToken,
+  });
+
+  let created;
+  try {
+    created = await client.createProduct(payload);
+  } catch (e) {
+    return {
+      outcome: 'error',
+      productId,
+      reason: e instanceof Error ? e.message : 'unknown shopify error',
+    };
+  }
+
+  // Match returned Shopify variants to ERP variants by SKU and persist
+  // junction rows. Shopify is case-sensitive on SKU; we mirror that here
+  // (no normalization) so a casing mismatch surfaces as a missing row
+  // rather than a silent miss.
+  const variantBySku = new Map(product.variants.map((v) => [v.sku, v]));
+  const now = new Date();
+  for (const sv of created.variants) {
+    if (!sv.sku) continue; // Shopify returned a variant with no SKU — skip.
+    const erpVariant = variantBySku.get(sv.sku);
+    if (!erpVariant) continue; // SKU not in our payload (shouldn't happen).
+    await db.productShopifyVariant.create({
+      data: {
+        productId: product.id,
+        shopifyStoreId: storeId,
+        shopifyProductId: created.id,
+        shopifyVariantId: sv.id,
+        inventoryItemId: sv.inventory_item_id,
+        isPrimary: true,
+        syncedAt: now,
+      },
+    });
+  }
+
+  await db.product.update({
+    where: { id: product.id },
+    data: { shopifySyncedAt: now },
+  });
+
+  // Best-effort: push current inventory so the new listings don't show as
+  // zero-stock immediately. A failure here is logged but does NOT flip the
+  // outcome — the Shopify product is already created, and the next
+  // movement-driven push (or manual push) will heal.
+  try {
+    await pushInventoryForProduct(db, product.id);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(
+      '[pushProductToShopify] post-create inventory push failed for product',
+      product.id,
+      e,
+    );
+  }
+
+  return {
+    outcome: 'created',
+    productId: product.id,
+    shopifyProductId: created.id,
+  };
+}
+
+/**
+ * Iterate every product matching this store's routing rules and create a
+ * Shopify listing for each (when not already listed). Per-product failure
+ * isolation: one Shopify error doesn't abort the run. Writes a
+ * StoredSyncRun summary to ShopifyStore.lastSyncResult so the admin UI's
+ * Last sync panel reflects the most recent push activity.
+ *
+ * NOTE: shares the lastSyncResult slot with runFullSync (catalog pull). A
+ * future schema split (lastProductPushResult) would let the UI render
+ * push vs. pull separately — out of scope here.
+ */
+export async function pushAllMatchingProducts(
+  db: PrismaClient,
+  storeId: string,
+  ctx?: AuditContext,
+): Promise<StoredSyncRun> {
+  const startedAt = new Date();
+  let created = 0;
+  let skipped = 0;
+  const errors: StoredSyncRun['errors'] = [];
+
+  // Gate the bulk action on syncEnabled up front — saves a no-op walk over
+  // matchingProductIds when the store is paused. The per-product function
+  // also gates, but doing it here lets the audit row reflect intent
+  // accurately.
+  const storeSecrets = await getSecretsForStore(db, storeId);
+  if (!storeSecrets.syncEnabled) {
+    const run: StoredSyncRun = {
+      startedAt: startedAt.toISOString(),
+      finishedAt: new Date().toISOString(),
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      errors: [
+        {
+          shopifyId: '',
+          message: 'sync disabled for this store — enable it first',
+        },
+      ],
+    };
+    await recordSyncRun(db, storeId, run);
+    return run;
+  }
+
+  const productIds = await matchingProductIds(db, storeId);
+
+  for (const productId of productIds) {
+    try {
+      const result = await pushProductToShopify(db, storeId, productId);
+      if (result.outcome === 'created') created++;
+      else if (result.outcome === 'skipped') skipped++;
+      else
+        errors.push({
+          shopifyId: result.shopifyProductId ?? '',
+          message: `${productId}: ${result.reason ?? 'unknown'}`,
+        });
+    } catch (e) {
+      errors.push({
+        shopifyId: '',
+        message: `${productId}: ${e instanceof Error ? e.message : 'unknown'}`,
+      });
+    }
+  }
+
+  const run: StoredSyncRun = {
+    startedAt: startedAt.toISOString(),
+    finishedAt: new Date().toISOString(),
+    created,
+    updated: 0,
+    skipped,
+    errors,
+  };
+  await recordSyncRun(db, storeId, run);
+
+  // Audit the bulk run. Per-product creates are not separately audited;
+  // the StoredSyncRun summary captures the counts + errors for review.
+  await audit(db, {
+    action: AuditAction.CREATE,
+    entityType: 'ShopifyProductPushRun',
+    entityId: storeId,
+    after: {
+      storeId,
+      created,
+      skipped,
+      errors: errors.length,
+      durationMs:
+        new Date(run.finishedAt).getTime() -
+        new Date(run.startedAt).getTime(),
+    },
+    ctx,
+  });
+
+  return run;
 }

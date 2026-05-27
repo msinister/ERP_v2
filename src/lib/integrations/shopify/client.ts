@@ -1,4 +1,6 @@
 import type {
+  ShopifyCreateProductInput,
+  ShopifyCreatedProduct,
   ShopifyProduct,
   ShopifyVariantLookup,
   ShopifyWebhookSubscription,
@@ -136,6 +138,39 @@ export class ShopifyClient {
       product_id: String(v.product_id),
       sku: v.sku,
       inventory_item_id: String(v.inventory_item_id),
+    };
+  }
+
+  /**
+   * Create a new product on Shopify (ERP → Shopify direction). Returns the
+   * created product with its variant ids + inventory_item_ids so the caller
+   * can populate ProductShopifyVariant junction rows immediately. Used by
+   * pushProductToShopify; never called from the Shopify → ERP path.
+   */
+  async createProduct(
+    input: ShopifyCreateProductInput,
+  ): Promise<ShopifyCreatedProduct> {
+    type Raw = {
+      product: {
+        id: string | number;
+        variants: Array<{
+          id: string | number;
+          inventory_item_id: string | number;
+          sku: string | null;
+        }>;
+      };
+    };
+    const res = await this.request<Raw>('POST', '/products.json', {
+      product: input,
+    });
+    const p = res.body.product;
+    return {
+      id: String(p.id),
+      variants: p.variants.map((v) => ({
+        id: String(v.id),
+        inventory_item_id: String(v.inventory_item_id),
+        sku: v.sku,
+      })),
     };
   }
 

@@ -66,3 +66,40 @@ export type ShopifyVariantLookup = {
   sku: string | null;
   inventory_item_id: string;
 };
+
+// Payload for createProduct (ERP → Shopify). Mirrors the subset of
+// Shopify's products.json POST body we actually populate from ERP data.
+// Only required fields are required here; optional fields (vendor,
+// product_type, tags, body_html, weight) are omitted from the request
+// when null/undefined upstream.
+export type ShopifyCreateVariantInput = {
+  sku: string;
+  price: string; // decimal string, e.g. "12.99"
+  inventory_management: 'shopify';
+  fulfillment_service: 'manual';
+  requires_shipping: boolean;
+  weight?: number;
+  weight_unit?: 'lb' | 'kg' | 'oz' | 'g';
+};
+
+export type ShopifyCreateProductInput = {
+  title: string;
+  body_html?: string;
+  vendor?: string;
+  product_type?: string;
+  tags?: string; // comma-separated, matches Shopify's wire format
+  status: 'active' | 'draft';
+  variants: ShopifyCreateVariantInput[];
+};
+
+// Shape returned by createProduct — just the fields we need to populate
+// ProductShopifyVariant junction rows. (Shopify returns the full product
+// resource; we narrow to what callers actually use.)
+export type ShopifyCreatedProduct = {
+  id: string;
+  variants: Array<{
+    id: string;
+    inventory_item_id: string;
+    sku: string | null;
+  }>;
+};
