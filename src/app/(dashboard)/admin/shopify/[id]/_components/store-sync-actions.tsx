@@ -129,12 +129,13 @@ export function StoreSyncActions({
           { method: 'POST' },
         );
         // The route returns the StoredSyncRun directly (created / updated /
-        // skipped / errors) — same shape as full-sync; we reuse the same
-        // toast summary format for consistency. For push-products, `updated`
-        // is always 0 (the service skips existing listings rather than
-        // re-creating them), so we omit it from the message.
+        // skipped / errors) — same shape as full-sync. Push-products is
+        // bi-directional now: products without a primary junction are
+        // CREATEd, products with one are UPDATEd in place, so both counters
+        // are meaningful in the summary.
         const body = (await res.json().catch(() => ({}))) as {
           created?: number;
+          updated?: number;
           skipped?: number;
           errors?: Array<{ shopifyId: string; message: string }>;
           error?: string;
@@ -144,7 +145,7 @@ export function StoreSyncActions({
           return;
         }
         const errCount = body.errors?.length ?? 0;
-        const msg = `Product push complete — ${body.created ?? 0} created, ${body.skipped ?? 0} skipped${errCount > 0 ? `, ${errCount} errors` : ''}`;
+        const msg = `Product push complete — ${body.created ?? 0} created, ${body.updated ?? 0} updated, ${body.skipped ?? 0} skipped${errCount > 0 ? `, ${errCount} errors` : ''}`;
         if (errCount > 0) toast.warning(msg);
         else toast.success(msg);
         router.refresh();

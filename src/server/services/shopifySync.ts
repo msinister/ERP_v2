@@ -734,7 +734,7 @@ function slugify(s: string): string {
 // up and a subsequent inventory push will heal).
 // =============================================================================
 
-export type PushProductOutcome = 'created' | 'skipped' | 'error';
+export type PushProductOutcome = 'created' | 'updated' | 'skipped' | 'error';
 
 export type PushProductResult = {
   outcome: PushProductOutcome;
@@ -744,10 +744,9 @@ export type PushProductResult = {
 };
 
 // Bulk-run summary written via recordSyncRun. Reuses the existing
-// StoredSyncRun shape (created / updated / skipped / errors) so the admin
-// UI's "Last sync" panel can render it; `updated` is always 0 for the
-// push direction since creating a Shopify listing for a product that
-// already has one is a skip, not an update.
+// StoredSyncRun shape (created / updated / skipped / errors); `updated`
+// counts products with an existing primary junction that we PUT to
+// Shopify, `created` counts products without one that we POSTed.
 
 // Narrow input shape for buildShopifyCreateInput — declared independently
 // of Prisma's deep payload type so fixtures (and the production caller)
@@ -940,14 +939,26 @@ function normalizeWeightUnit(
 }
 
 /**
- * Create one ERP product on Shopify. Idempotent: if junction rows already
- * exist for (storeId, productId), returns outcome='skipped' without
- * touching Shopify. Per-store sync-flag + routing-rule gates short-circuit
- * before the network call.
+ * Push one ERP product to Shopify. Idempotent + bi-directional:
  *
- * On success creates one ProductShopifyVariant per Shopify variant returned
- * (matched by SKU). Triggers an inventory push for this product so the new
- * listings get current stock counts.
+ *   - No primary ProductShopifyVariant junction in this store → POST
+ *     /products.json (CREATE) and write fresh junction rows.
+ *   - Primary junction exists → PUT /products/{id}.json (UPDATE) — refreshes
+ *     title / description / vendor / category / tags / images / variant
+ *     pricing on the existing Shopify listing. Variants that exist on
+ *     Shopify are matched by SKU and re-sent with their existing
+ *     shopifyVariantId so Shopify updates in place; new ERP variants are
+ *     sent without `id` and Shopify creates fresh Shopify variants.
+ *
+ * Both paths trigger the same post-write side effects: best-effort per-
+ * variant image_id assignment (image ids change on PUT because the image
+ * set is replaced wholesale), Product.shopifySyncedAt stamp, and an
+ * inventory push so stock counters land on the new listings.
+ *
+ * Gates short-circuit before any network call: sync disabled, routing
+ * rules don't match, product missing / archived / inactive / no active
+ * variants. A Shopify API error returns outcome='error' with the message;
+ * no rollback (the create/update is the atomic Shopify operation).
  */
 export async function pushProductToShopify(
   db: PrismaClient,
@@ -964,9 +975,9 @@ export async function pushProductToShopify(
     };
   }
 
-  // Gate 2: product must already match this store's routing rules. Don't
-  // bypass — operators set rules deliberately, and pushing a non-matching
-  // product would create a listing the rules say shouldn't exist.
+  // Gate 2: product must match this store's routing rules. Don't bypass —
+  // operators set rules deliberately, and pushing a non-matching product
+  // would create / update a listing the rules say shouldn't exist.
   const matches = await productMatchesStore(db, productId, storeId);
   if (!matches) {
     return {
@@ -976,42 +987,35 @@ export async function pushProductToShopify(
     };
   }
 
-  // Gate 3: already listed → skip. A repeat call should be a no-op so
-  // operators can safely re-run pushAllMatchingProducts without producing
-  // duplicate Shopify products.
-  const existing = await db.productShopifyVariant.findFirst({
-    where: { productId, shopifyStoreId: storeId },
-    select: { id: true },
+  // Find the existing PRIMARY junction(s) for this (storeId, productId).
+  // If any exist they share the same shopifyProductId (it's a single
+  // Shopify product with N variants). We don't touch SECONDARY junctions
+  // here — those are deal/bundle listings with their own catalog data and
+  // a different Shopify product id.
+  const existingPrimary = await db.productShopifyVariant.findMany({
+    where: { productId, shopifyStoreId: storeId, isPrimary: true },
+    select: {
+      id: true,
+      shopifyProductId: true,
+      shopifyVariantId: true,
+      inventoryItemId: true,
+    },
   });
-  if (existing) {
-    return {
-      outcome: 'skipped',
-      productId,
-      reason: 'product already has a Shopify listing in this store',
-    };
-  }
+  const isUpdate = existingPrimary.length > 0;
+  const existingShopifyProductId = isUpdate
+    ? existingPrimary[0].shopifyProductId
+    : null;
 
+  // Load + validate the ERP product (same checks for create + update).
   const product = await loadProductForPush(db, productId);
   if (!product) {
-    return {
-      outcome: 'skipped',
-      productId,
-      reason: 'product not found',
-    };
+    return { outcome: 'skipped', productId, reason: 'product not found' };
   }
   if (product.deletedAt != null) {
-    return {
-      outcome: 'skipped',
-      productId,
-      reason: 'product is archived',
-    };
+    return { outcome: 'skipped', productId, reason: 'product is archived' };
   }
   if (!product.active) {
-    return {
-      outcome: 'skipped',
-      productId,
-      reason: 'product is inactive',
-    };
+    return { outcome: 'skipped', productId, reason: 'product is inactive' };
   }
   if (product.variants.length === 0) {
     return {
@@ -1027,9 +1031,40 @@ export async function pushProductToShopify(
     accessToken: secrets.accessToken,
   });
 
-  let created;
+  // For UPDATE: include existing Shopify variant IDs on each variant in
+  // the payload so Shopify updates in place rather than recreating. We
+  // round-trip via getProduct to learn the current SKU → shopifyVariantId
+  // mapping, since the junction rows don't carry SKU. New ERP variants
+  // (no Shopify counterpart by SKU) are sent without `id` and Shopify
+  // creates them on the same product. Failure to fetch the current
+  // product falls back to no-id variants — the resulting churn is loud
+  // but not catastrophic.
+  if (isUpdate && existingShopifyProductId) {
+    try {
+      const current = await client.getProduct(existingShopifyProductId);
+      const shopifyVariantIdBySku = new Map<string, string>();
+      for (const v of current.variants) {
+        if (v.sku) shopifyVariantIdBySku.set(v.sku, v.id);
+      }
+      for (const v of payload.variants) {
+        const id = shopifyVariantIdBySku.get(v.sku);
+        if (id) v.id = id;
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error(
+        '[pushProductToShopify] failed to fetch current product on update — variant ids may be recreated',
+        existingShopifyProductId,
+        e,
+      );
+    }
+  }
+
+  let shopify;
   try {
-    created = await client.createProduct(payload);
+    shopify = isUpdate && existingShopifyProductId
+      ? await client.updateProduct(existingShopifyProductId, payload)
+      : await client.createProduct(payload);
   } catch (e) {
     return {
       outcome: 'error',
@@ -1038,42 +1073,51 @@ export async function pushProductToShopify(
     };
   }
 
-  // Match returned Shopify variants to ERP variants by SKU and persist
-  // junction rows. Shopify is case-sensitive on SKU; we mirror that here
-  // (no normalization) so a casing mismatch surfaces as a missing row
-  // rather than a silent miss.
-  const variantBySku = new Map(product.variants.map((v) => [v.sku, v]));
+  // Upsert junction rows. On CREATE every response variant is new; on
+  // UPDATE most response variants already have junction rows that we just
+  // refresh (inventoryItemId and syncedAt), and any new Shopify variants
+  // (e.g. an ERP variant added since last push) get fresh junction rows.
+  const existingJunctionByShopifyVariantId = new Map(
+    existingPrimary.map((row) => [row.shopifyVariantId, row]),
+  );
   const now = new Date();
-  for (const sv of created.variants) {
-    if (!sv.sku) continue; // Shopify returned a variant with no SKU — skip.
-    const erpVariant = variantBySku.get(sv.sku);
-    if (!erpVariant) continue; // SKU not in our payload (shouldn't happen).
-    await db.productShopifyVariant.create({
-      data: {
-        productId: product.id,
-        shopifyStoreId: storeId,
-        shopifyProductId: created.id,
-        shopifyVariantId: sv.id,
-        inventoryItemId: sv.inventory_item_id,
-        isPrimary: true,
-        syncedAt: now,
-      },
-    });
+  for (const sv of shopify.variants) {
+    if (!sv.sku) continue;
+    const existing = existingJunctionByShopifyVariantId.get(sv.id);
+    if (existing) {
+      // Same variant — refresh denorms in case anything shifted.
+      await db.productShopifyVariant.update({
+        where: { id: existing.id },
+        data: {
+          inventoryItemId: sv.inventory_item_id,
+          syncedAt: now,
+        },
+      });
+    } else {
+      await db.productShopifyVariant.create({
+        data: {
+          productId: product.id,
+          shopifyStoreId: storeId,
+          shopifyProductId: shopify.id,
+          shopifyVariantId: sv.id,
+          inventoryItemId: sv.inventory_item_id,
+          isPrimary: true,
+          syncedAt: now,
+        },
+      });
+    }
   }
 
-  // Best-effort per-variant image assignment. Shopify can't accept
-  // variant.image_id on POST /products.json because the image ids don't
-  // exist until the create returns; we re-derive the SKU→position map and
-  // PUT each variant's image_id from response.images[position-1]. A
-  // single failed PUT logs + continues; we don't roll back the create.
+  // Best-effort per-variant image assignment. Image ids change on both
+  // CREATE (didn't exist before) and UPDATE (PUT /products.json replaces
+  // the image set), so the same PUT-per-variant dance applies. A single
+  // failed PUT logs + continues.
   const { variantImagePositionBySku } = buildShopifyImagePlan(product);
-  if (variantImagePositionBySku.size > 0 && created.images.length > 0) {
-    // Index response images by position (Shopify echoes the order we
-    // sent + assigns positions 1..N; we don't trust array order alone).
+  if (variantImagePositionBySku.size > 0 && shopify.images.length > 0) {
     const imageByPosition = new Map(
-      created.images.map((img) => [img.position, img]),
+      shopify.images.map((img) => [img.position, img]),
     );
-    for (const sv of created.variants) {
+    for (const sv of shopify.variants) {
       if (!sv.sku) continue;
       const position = variantImagePositionBySku.get(sv.sku);
       if (position == null) continue;
@@ -1097,25 +1141,25 @@ export async function pushProductToShopify(
     data: { shopifySyncedAt: now },
   });
 
-  // Best-effort: push current inventory so the new listings don't show as
-  // zero-stock immediately. A failure here is logged but does NOT flip the
-  // outcome — the Shopify product is already created, and the next
-  // movement-driven push (or manual push) will heal.
+  // Best-effort: push current inventory so the new/updated listings get
+  // fresh stock counts. A failure here is logged but does NOT flip the
+  // outcome — the Shopify product is already in the right shape, and the
+  // next movement-driven push (or manual push) will heal.
   try {
     await pushInventoryForProduct(db, product.id);
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error(
-      '[pushProductToShopify] post-create inventory push failed for product',
+      '[pushProductToShopify] post-write inventory push failed for product',
       product.id,
       e,
     );
   }
 
   return {
-    outcome: 'created',
+    outcome: isUpdate ? 'updated' : 'created',
     productId: product.id,
-    shopifyProductId: created.id,
+    shopifyProductId: shopify.id,
   };
 }
 
@@ -1137,6 +1181,7 @@ export async function pushAllMatchingProducts(
 ): Promise<StoredSyncRun> {
   const startedAt = new Date();
   let created = 0;
+  let updated = 0;
   let skipped = 0;
   const errors: StoredSyncRun['errors'] = [];
 
@@ -1169,6 +1214,7 @@ export async function pushAllMatchingProducts(
     try {
       const result = await pushProductToShopify(db, storeId, productId);
       if (result.outcome === 'created') created++;
+      else if (result.outcome === 'updated') updated++;
       else if (result.outcome === 'skipped') skipped++;
       else
         errors.push({
@@ -1187,14 +1233,15 @@ export async function pushAllMatchingProducts(
     startedAt: startedAt.toISOString(),
     finishedAt: new Date().toISOString(),
     created,
-    updated: 0,
+    updated,
     skipped,
     errors,
   };
   await recordSyncRun(db, storeId, run);
 
-  // Audit the bulk run. Per-product creates are not separately audited;
-  // the StoredSyncRun summary captures the counts + errors for review.
+  // Audit the bulk run. Per-product creates/updates are not separately
+  // audited; the StoredSyncRun summary captures the counts + errors for
+  // review.
   await audit(db, {
     action: AuditAction.CREATE,
     entityType: 'ShopifyProductPushRun',
@@ -1202,6 +1249,7 @@ export async function pushAllMatchingProducts(
     after: {
       storeId,
       created,
+      updated,
       skipped,
       errors: errors.length,
       durationMs:

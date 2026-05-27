@@ -7,6 +7,8 @@ import { Prisma, ProductType } from '@/generated/tenant';
 // ---------------------------------------------------------------------------
 
 const createProductMock = vi.fn();
+const updateProductMock = vi.fn();
+const getProductMock = vi.fn();
 const updateVariantImageMock = vi.fn();
 
 vi.mock('@/lib/integrations/shopify/client', () => {
@@ -23,9 +25,13 @@ vi.mock('@/lib/integrations/shopify/client', () => {
   // is not constructable and would throw "is not a constructor".
   class ShopifyClient {
     createProduct: typeof createProductMock;
+    updateProduct: typeof updateProductMock;
+    getProduct: typeof getProductMock;
     updateVariantImage: typeof updateVariantImageMock;
     constructor() {
       this.createProduct = createProductMock;
+      this.updateProduct = updateProductMock;
+      this.getProduct = getProductMock;
       this.updateVariantImage = updateVariantImageMock;
     }
   }
@@ -119,28 +125,59 @@ type CreatedRow = {
   isPrimary: boolean;
 };
 
+type PrimaryJunctionFixture = {
+  id: string;
+  shopifyProductId: string;
+  shopifyVariantId: string;
+  inventoryItemId: string | null;
+};
+
+type JunctionUpdate = {
+  whereId: string;
+  data: { inventoryItemId?: string | null; syncedAt?: Date };
+};
+
 // Fake Prisma client: only the methods pushProductToShopify touches need
 // to exist. Each one is a vi.fn so we can both stub return values and
 // inspect call args. Cast to PrismaClient at the boundary — tests are
 // the one place this cast is appropriate.
 function makeFakeDb(opts: {
-  existingJunction?: { id: string } | null;
+  primaryJunctions?: PrimaryJunctionFixture[];
   product?: ReturnType<typeof makeProductFixture> | null;
 }) {
   const createdRows: CreatedRow[] = [];
+  const junctionUpdates: JunctionUpdate[] = [];
+  const primaryJunctions = opts.primaryJunctions ?? [];
   return {
     rows: createdRows,
+    junctionUpdates,
     db: {
       product: {
         findUnique: vi.fn().mockResolvedValue(opts.product ?? null),
         update: vi.fn().mockResolvedValue(undefined),
       },
       productShopifyVariant: {
-        findFirst: vi.fn().mockResolvedValue(opts.existingJunction ?? null),
-        create: vi.fn().mockImplementation(async ({ data }: { data: CreatedRow }) => {
-          createdRows.push(data);
-          return { id: `j-${createdRows.length}`, ...data };
-        }),
+        findMany: vi.fn().mockResolvedValue(primaryJunctions),
+        create: vi
+          .fn()
+          .mockImplementation(async ({ data }: { data: CreatedRow }) => {
+            createdRows.push(data);
+            return { id: `j-${createdRows.length}`, ...data };
+          }),
+        update: vi
+          .fn()
+          .mockImplementation(
+            async (args: {
+              where: { id: string };
+              data: { inventoryItemId?: string | null; syncedAt?: Date };
+            }) => {
+              junctionUpdates.push({
+                whereId: args.where.id,
+                data: args.data,
+              });
+              return { id: args.where.id, ...args.data };
+            },
+          ),
       },
       auditLog: { create: vi.fn().mockResolvedValue(undefined) },
     } as unknown as PrismaClient,
@@ -149,6 +186,8 @@ function makeFakeDb(opts: {
 
 beforeEach(() => {
   createProductMock.mockReset();
+  updateProductMock.mockReset();
+  getProductMock.mockReset();
   updateVariantImageMock.mockReset();
   updateVariantImageMock.mockResolvedValue(undefined);
 });
@@ -217,7 +256,7 @@ describe('buildShopifyCreateInput', () => {
 describe('pushProductToShopify', () => {
   it('creates junction rows for every returned Shopify variant on success', async () => {
     const product = makeProductFixture();
-    const fake = makeFakeDb({ product, existingJunction: null });
+    const fake = makeFakeDb({ product, primaryJunctions: [] });
 
     createProductMock.mockResolvedValue({
       id: 'shopify-prod-1',
@@ -247,24 +286,143 @@ describe('pushProductToShopify', () => {
     });
   });
 
-  it('skips when the product already has a Shopify listing on this store', async () => {
+  it('updates the existing Shopify listing when a primary junction already exists', async () => {
     const product = makeProductFixture();
     const fake = makeFakeDb({
       product,
-      existingJunction: { id: 'existing-junction' },
+      primaryJunctions: [
+        {
+          id: 'j-A',
+          shopifyProductId: 'shopify-prod-1',
+          shopifyVariantId: 'sv-1',
+          inventoryItemId: 'ii-1-old',
+        },
+        {
+          id: 'j-B',
+          shopifyProductId: 'shopify-prod-1',
+          shopifyVariantId: 'sv-2',
+          inventoryItemId: 'ii-2-old',
+        },
+      ],
+    });
+
+    // The update path rounds-trips getProduct to learn the current SKU →
+    // shopifyVariantId mapping before building the payload.
+    getProductMock.mockResolvedValue({
+      id: 'shopify-prod-1',
+      title: 'Test Product',
+      status: 'active',
+      variants: [
+        { id: 'sv-1', sku: 'SKU-A' },
+        { id: 'sv-2', sku: 'SKU-B' },
+      ],
+    });
+    updateProductMock.mockResolvedValue({
+      id: 'shopify-prod-1',
+      variants: [
+        { id: 'sv-1', inventory_item_id: 'ii-1-new', sku: 'SKU-A' },
+        { id: 'sv-2', inventory_item_id: 'ii-2-new', sku: 'SKU-B' },
+      ],
+      images: [],
     });
 
     const result = await pushProductToShopify(fake.db, 'store-1', 'prod-1');
 
-    expect(result.outcome).toBe('skipped');
-    expect(result.reason).toMatch(/already has a Shopify listing/);
+    expect(result.outcome).toBe('updated');
+    expect(result.shopifyProductId).toBe('shopify-prod-1');
     expect(createProductMock).not.toHaveBeenCalled();
+    expect(updateProductMock).toHaveBeenCalledTimes(1);
+
+    // The PUT payload must carry existing shopifyVariantId on each variant
+    // — without it, Shopify would recreate the variants from scratch.
+    const [putShopifyId, putPayload] = updateProductMock.mock.calls[0];
+    expect(putShopifyId).toBe('shopify-prod-1');
+    expect(putPayload.variants[0]).toMatchObject({ id: 'sv-1', sku: 'SKU-A' });
+    expect(putPayload.variants[1]).toMatchObject({ id: 'sv-2', sku: 'SKU-B' });
+
+    // Existing junctions get refreshed, not duplicated.
     expect(fake.rows).toHaveLength(0);
+    expect(fake.junctionUpdates).toHaveLength(2);
+    expect(fake.junctionUpdates.map((u) => u.whereId).sort()).toEqual([
+      'j-A',
+      'j-B',
+    ]);
+    expect(fake.junctionUpdates[0].data.inventoryItemId).toBe('ii-1-new');
+  });
+
+  it('on update, creates a fresh junction for a Shopify variant not in the prior junction set', async () => {
+    // ERP added a third variant (SKU-C) after the previous push. The
+    // existing primary junctions only know about SKU-A + SKU-B. On the
+    // update round-trip, getProduct returns just the two existing
+    // Shopify variants (so the payload's SKU-C lacks an id), and the
+    // update response includes the freshly-created sv-3 — we should
+    // CREATE a junction row for it.
+    const product = makeProductFixture();
+    product.variants.push({
+      sku: 'SKU-C',
+      imageUrl: null,
+      vendorProducts: [],
+    });
+    const fake = makeFakeDb({
+      product,
+      primaryJunctions: [
+        {
+          id: 'j-A',
+          shopifyProductId: 'shopify-prod-1',
+          shopifyVariantId: 'sv-1',
+          inventoryItemId: 'ii-1',
+        },
+        {
+          id: 'j-B',
+          shopifyProductId: 'shopify-prod-1',
+          shopifyVariantId: 'sv-2',
+          inventoryItemId: 'ii-2',
+        },
+      ],
+    });
+    getProductMock.mockResolvedValue({
+      id: 'shopify-prod-1',
+      title: 'Test Product',
+      status: 'active',
+      variants: [
+        { id: 'sv-1', sku: 'SKU-A' },
+        { id: 'sv-2', sku: 'SKU-B' },
+      ],
+    });
+    updateProductMock.mockResolvedValue({
+      id: 'shopify-prod-1',
+      variants: [
+        { id: 'sv-1', inventory_item_id: 'ii-1', sku: 'SKU-A' },
+        { id: 'sv-2', inventory_item_id: 'ii-2', sku: 'SKU-B' },
+        { id: 'sv-3', inventory_item_id: 'ii-3', sku: 'SKU-C' },
+      ],
+      images: [],
+    });
+
+    const result = await pushProductToShopify(fake.db, 'store-1', 'prod-1');
+
+    expect(result.outcome).toBe('updated');
+    // SKU-C was sent WITHOUT id (no junction → no Shopify counterpart yet).
+    const putPayload = updateProductMock.mock.calls[0][1];
+    const skuCVariant = putPayload.variants.find(
+      (v: { sku: string }) => v.sku === 'SKU-C',
+    );
+    expect(skuCVariant).toBeDefined();
+    expect(skuCVariant.id).toBeUndefined();
+
+    // sv-1 + sv-2 → refreshed junctions; sv-3 → new junction row.
+    expect(fake.junctionUpdates).toHaveLength(2);
+    expect(fake.rows).toHaveLength(1);
+    expect(fake.rows[0]).toMatchObject({
+      shopifyVariantId: 'sv-3',
+      inventoryItemId: 'ii-3',
+      isPrimary: true,
+    });
   });
 
   it('returns outcome=error with the Shopify message when createProduct throws', async () => {
     const product = makeProductFixture();
-    const fake = makeFakeDb({ product, existingJunction: null });
+    const fake = makeFakeDb({ product, primaryJunctions: [] });
 
     createProductMock.mockRejectedValue(
       new ShopifyApiError(422, 'Shopify POST /products.json → 422: invalid weight unit'),
@@ -295,7 +453,7 @@ describe('pushProductToShopify', () => {
         createdAt: new Date('2026-01-02'),
       },
     ];
-    const fake = makeFakeDb({ product, existingJunction: null });
+    const fake = makeFakeDb({ product, primaryJunctions: [] });
 
     createProductMock.mockResolvedValue({
       id: 'shopify-prod-1',
@@ -336,7 +494,7 @@ describe('pushProductToShopify', () => {
     product.variants[0].imageUrl = 'https://cdn.example.com/shared.jpg';
     product.variants[1].imageUrl = 'https://cdn.example.com/variant-b.jpg';
 
-    const fake = makeFakeDb({ product, existingJunction: null });
+    const fake = makeFakeDb({ product, primaryJunctions: [] });
     createProductMock.mockResolvedValue({
       id: 'shopify-prod-1',
       variants: [
@@ -368,7 +526,7 @@ describe('pushProductToShopify', () => {
   it('does not roll back the create if updateVariantImage fails', async () => {
     const product = makeProductFixture();
     product.variants[0].imageUrl = 'https://cdn.example.com/a.jpg';
-    const fake = makeFakeDb({ product, existingJunction: null });
+    const fake = makeFakeDb({ product, primaryJunctions: [] });
 
     createProductMock.mockResolvedValue({
       id: 'shopify-prod-1',

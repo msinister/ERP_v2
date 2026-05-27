@@ -73,6 +73,11 @@ export type ShopifyVariantLookup = {
 // product_type, tags, body_html, weight) are omitted from the request
 // when null/undefined upstream.
 export type ShopifyCreateVariantInput = {
+  // Required on UPDATE to identify the existing Shopify variant; omitted
+  // on CREATE (or when adding a new variant to an existing product on
+  // update — Shopify creates a fresh variant for those). Without `id`,
+  // Shopify's PUT semantics will replace any unmatched existing variants.
+  id?: string;
   sku: string;
   price: string; // decimal string, e.g. "12.99"
   inventory_management: 'shopify';

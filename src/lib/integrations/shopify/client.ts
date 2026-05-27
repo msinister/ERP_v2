@@ -185,6 +185,54 @@ export class ShopifyClient {
   }
 
   /**
+   * Update an existing Shopify product (PUT /products/{id}.json). Same
+   * payload shape as createProduct — see ShopifyCreateProductInput for
+   * the variant-id and image-replacement semantics. Returns the full
+   * product the same way createProduct does so the caller can refresh
+   * junction rows + redo variant→image_id assignments (image ids change
+   * because PUT replaces the entire image set).
+   */
+  async updateProduct(
+    shopifyProductId: string,
+    input: ShopifyCreateProductInput,
+  ): Promise<ShopifyCreatedProduct> {
+    type Raw = {
+      product: {
+        id: string | number;
+        variants: Array<{
+          id: string | number;
+          inventory_item_id: string | number;
+          sku: string | null;
+        }>;
+        images?: Array<{
+          id: string | number;
+          position: number;
+          src: string;
+        }>;
+      };
+    };
+    const res = await this.request<Raw>(
+      'PUT',
+      `/products/${shopifyProductId}.json`,
+      { product: { id: Number(shopifyProductId), ...input } },
+    );
+    const p = res.body.product;
+    return {
+      id: String(p.id),
+      variants: p.variants.map((v) => ({
+        id: String(v.id),
+        inventory_item_id: String(v.inventory_item_id),
+        sku: v.sku,
+      })),
+      images: (p.images ?? []).map((i) => ({
+        id: String(i.id),
+        position: i.position,
+        src: i.src,
+      })),
+    };
+  }
+
+  /**
    * Assign a previously-created Shopify image to a Shopify variant via
    * PUT /variants/{id}.json. Used by pushProductToShopify after the
    * product create — variant.image_id can't be set on POST /products.json
