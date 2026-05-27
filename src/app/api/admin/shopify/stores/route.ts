@@ -1,19 +1,21 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { requireSuperAdmin } from '@/lib/auth/requireAuth';
+import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
-import { shopifyConfigInputSchema } from '@/lib/validation/shopify';
-import { getPublicConfig, saveConfig } from '@/server/services/shopifyConfig';
+import { shopifyStoreCreateSchema } from '@/lib/validation/shopifyStores';
+import { createStore, listStores } from '@/server/services/shopifyStores';
 
-// GET → public-safe config snapshot (no secrets), feeds the admin form's
-// defaultValues. PUT → upsert; secrets passed as empty/absent mean "leave
-// alone" so the form doesn't force re-typing tokens to change a toggle.
+// GET → list every store (public-safe, no secrets). POST → create a new
+// store. Both super-admin gated.
 
 export async function GET(req: Request) {
   try {
     await requireSuperAdmin(req);
-    const cfg = await getPublicConfig(db);
-    return NextResponse.json(cfg);
+    const includeArchived =
+      new URL(req.url).searchParams.get('includeArchived') === '1';
+    const stores = await listStores(db, { includeArchived });
+    return NextResponse.json({ stores });
   } catch (e) {
     const authResp = authErrorResponse(e);
     if (authResp) return authResp;
@@ -24,24 +26,25 @@ export async function GET(req: Request) {
   }
 }
 
-export async function PUT(req: Request) {
+export async function POST(req: Request) {
   try {
     const user = await requireSuperAdmin(req);
+    const ctx = auditCtxFromRequest(req, user);
     let body: unknown;
     try {
       body = await req.json();
     } catch {
       return NextResponse.json({ error: 'invalid json' }, { status: 400 });
     }
-    const parsed = shopifyConfigInputSchema.safeParse(body);
+    const parsed = shopifyStoreCreateSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(
         { error: 'validation', issues: parsed.error.issues },
         { status: 400 },
       );
     }
-    const cfg = await saveConfig(db, parsed.data, user.id);
-    return NextResponse.json(cfg);
+    const store = await createStore(db, parsed.data, ctx);
+    return NextResponse.json(store, { status: 201 });
   } catch (e) {
     const authResp = authErrorResponse(e);
     if (authResp) return authResp;

@@ -57,3 +57,12 @@ export type ShopifyWebhookSubscription = {
   address: string;
   format: 'json';
 };
+
+// Variant-level lookup. Only fields used by the inventory push path
+// (inventory_item_id is what /inventory_levels/set keys off of).
+export type ShopifyVariantLookup = {
+  id: string;
+  product_id: string;
+  sku: string | null;
+  inventory_item_id: string;
+};

@@ -2,21 +2,25 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { requireSuperAdmin } from '@/lib/auth/requireAuth';
 import { authErrorResponse } from '@/lib/auth/errors';
-import { getSecrets } from '@/server/services/shopifyConfig';
+import { getSecretsForStore } from '@/server/services/shopifyStores';
 import {
   ShopifyApiError,
   ShopifyClient,
 } from '@/lib/integrations/shopify/client';
 
-// Calls Shopify's /products/count.json with the stored access token. A
-// 200 means the token + store URL are valid; 401 means revoked/wrong
+// Calls Shopify's /products/count.json with this store's stored access token.
+// A 200 means the token + store URL are valid; 401 means revoked/wrong
 // token; 404 means wrong store URL. Returns the count on success so the
-// admin sees a useful "Connected — N products" confirmation.
+// admin sees a useful "Connected — N products" confirmation per store.
 
-export async function POST(req: Request) {
+export async function POST(
+  req: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
   try {
     await requireSuperAdmin(req);
-    const secrets = await getSecrets(db);
+    const { id } = await ctx.params;
+    const secrets = await getSecretsForStore(db, id);
     const client = new ShopifyClient({
       storeUrl: secrets.storeUrl,
       accessToken: secrets.accessToken,

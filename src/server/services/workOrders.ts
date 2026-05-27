@@ -20,6 +20,7 @@ import {
   createFifoLayerForReturnTx,
 } from '@/server/services/fifoLayers';
 import { recomputeOnHand } from '@/server/services/movements';
+import { markProductsDirtyFromVariants } from '@/server/services/inventoryPushTriggers';
 import { getNegativeInventoryAllowed } from '@/server/services/negativeInventory';
 import { post } from '@/lib/gl/post';
 import {
@@ -431,7 +432,7 @@ export async function completeWorkOrder(
   const data = completeWorkOrderInputSchema.parse(input);
   const qtyToComplete = new Prisma.Decimal(data.qtyToComplete);
 
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const wo = await tx.workOrder.findUnique({
       where: { id },
       include: {
@@ -783,8 +784,19 @@ export async function completeWorkOrder(
 
     const fresh = await loadWorkOrderInTx(tx, wo.id);
     if (!fresh) throw new Error(`WorkOrder not found after complete: ${wo.id}`);
-    return { workOrder: fresh, warnings };
+    return {
+      workOrder: fresh,
+      warnings,
+      affectedVariantIds: [
+        wo.variantId,
+        ...wo.components.map((c) => c.componentVariantId),
+      ],
+    };
   });
+  // Shopify inventory push — BUILD_CONSUME drops component onHand;
+  // BUILD_PRODUCE bumps finished-good onHand. Mark both sides dirty.
+  await markProductsDirtyFromVariants(db, result.affectedVariantIds);
+  return { workOrder: result.workOrder, warnings: result.warnings };
 }
 
 // ---------------------------------------------------------------------------

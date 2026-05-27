@@ -9,25 +9,31 @@ import { Field, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 
 export type ShopifyConfigFormInitial = {
+  name: string;
   storeUrl: string;
   hasAccessToken: boolean;
   hasWebhookSecret: boolean;
   syncEnabled: boolean;
 };
 
-// Inline form for the Shopify config. Secrets are write-only — when a
-// token / webhook secret is already stored the input shows a placeholder
-// instead of the cleartext value (we'd never ship secrets back to the
-// browser). Leaving the input blank on save means "keep the stored
-// value" — see PUT /api/admin/shopify/config.
+// Inline form for one ShopifyStore. Secrets are write-only — when a token /
+// webhook secret is already stored the input shows a placeholder instead of
+// the cleartext value (we'd never ship secrets back to the browser).
+// Leaving the input blank on save means "keep the stored value".
+//
+// Slice A: operates on the single default store. Slice B replaces with a
+// per-store editor.
 
 export function ShopifyConfigForm({
+  storeId,
   initial,
 }: {
+  storeId: string;
   initial: ShopifyConfigFormInitial;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [name, setName] = useState(initial.name);
   const [storeUrl, setStoreUrl] = useState(initial.storeUrl);
   const [accessToken, setAccessToken] = useState('');
   const [webhookSecret, setWebhookSecret] = useState('');
@@ -37,10 +43,14 @@ export function ShopifyConfigForm({
     e.preventDefault();
     startTransition(async () => {
       try {
-        const body: Record<string, unknown> = { storeUrl, syncEnabled };
+        const body: Record<string, unknown> = {
+          name,
+          storeUrl,
+          syncEnabled,
+        };
         if (accessToken.trim()) body.accessToken = accessToken.trim();
         if (webhookSecret.trim()) body.webhookSecret = webhookSecret.trim();
-        const res = await fetch('/api/admin/shopify/config', {
+        const res = await fetch(`/api/admin/shopify/stores/${storeId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -62,6 +72,17 @@ export function ShopifyConfigForm({
 
   return (
     <form onSubmit={onSubmit} className="space-y-4">
+      <Field>
+        <FieldLabel htmlFor="shopify-store-name">Display name</FieldLabel>
+        <Input
+          id="shopify-store-name"
+          placeholder="My Shopify store"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          autoComplete="off"
+        />
+      </Field>
+
       <Field>
         <FieldLabel htmlFor="shopify-store-url">Store URL</FieldLabel>
         <Input

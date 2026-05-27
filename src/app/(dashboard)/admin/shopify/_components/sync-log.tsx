@@ -1,5 +1,5 @@
 import { CheckCircle2, AlertTriangle } from 'lucide-react';
-import type { StoredSyncRun } from '@/server/services/shopifyConfig';
+import type { StoredSyncRun } from '@/server/services/shopifyStores';
 
 // Renders the last full-sync run summary. Server component — pure
 // presentation of the JSON stored alongside the config.

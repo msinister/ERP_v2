@@ -35,6 +35,7 @@ import {
   hasConfirmedBillForReceiptTx,
 } from '@/server/services/bills';
 import { applyPoPaymentsToBillTx } from '@/server/services/poPayments';
+import { markProductsDirtyFromVariants } from '@/server/services/inventoryPushTriggers';
 import { post } from '@/lib/gl/post';
 
 const RECEIPT_SEQUENCE_NAME = 'receipt';
@@ -208,7 +209,7 @@ export async function postReceipt(
   id: string,
   ctx?: AuditContext,
 ): Promise<PostReceiptResult> {
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const before = await tx.receipt.findUnique({
       where: { id },
       include: {
@@ -423,6 +424,13 @@ export async function postReceipt(
       affectedPurchaseOrderIds: Array.from(affectedPoIds),
     };
   });
+  // Shopify inventory push — every RECEIVE bumps onHand, so push the new
+  // available numbers to applicable stores after the tx commits.
+  await markProductsDirtyFromVariants(
+    db,
+    result.lines.map((l) => l.variantId),
+  );
+  return result;
 }
 
 export async function cancelReceipt(
@@ -432,7 +440,7 @@ export async function cancelReceipt(
   ctx?: AuditContext,
 ): Promise<ReceiptWithLines & { affectedPurchaseOrderIds: string[] }> {
   const data = cancelReceiptInputSchema.parse(input);
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const before = await tx.receipt.findUnique({
       where: { id },
       include: {
@@ -622,6 +630,14 @@ export async function cancelReceipt(
 
     return { ...after, affectedPurchaseOrderIds: Array.from(affectedPoIds) };
   });
+  // Shopify inventory push — RECEIVE_REVERSE drops onHand, so push the new
+  // available numbers. Use `before.lines` source: result.lines may already
+  // be soft-deleted, but the variantIds are the same.
+  await markProductsDirtyFromVariants(
+    db,
+    result.lines.map((l) => l.variantId),
+  );
+  return result;
 }
 
 export async function getReceipt(

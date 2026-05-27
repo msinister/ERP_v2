@@ -446,14 +446,37 @@ export async function transferInventoryTx(
 // ---------------------------------------------------------------------------
 // Public wrappers — open a transaction and delegate to the *Tx variant. These
 // preserve the existing API for callers that aren't already inside a tx.
+//
+// Each wrapper marks the affected product dirty for Shopify inventory push
+// AFTER the tx commits — so a rolled-back movement never triggers a stale
+// push. Orchestrators that call the *Tx variants inside their own tx (e.g.
+// receipts.postReceipt) trigger pushes themselves.
 // ---------------------------------------------------------------------------
+
+import { markProductsDirty } from '@/server/services/inventoryPushTriggers';
+
+async function variantProductId(
+  db: PrismaClient,
+  variantId: string,
+): Promise<string | null> {
+  const v = await db.productVariant.findUnique({
+    where: { id: variantId },
+    select: { productId: true },
+  });
+  return v?.productId ?? null;
+}
 
 export async function createAdjustment(
   db: PrismaClient,
   input: AdjustmentInput,
   ctx?: AuditContext,
 ): Promise<InventoryMovement> {
-  return db.$transaction((tx) => createAdjustmentTx(tx, input, ctx));
+  const result = await db.$transaction((tx) =>
+    createAdjustmentTx(tx, input, ctx),
+  );
+  const productId = await variantProductId(db, result.variantId);
+  if (productId) markProductsDirty([productId]);
+  return result;
 }
 
 export async function receiveInventory(
@@ -461,7 +484,12 @@ export async function receiveInventory(
   input: ReceiveInput,
   ctx?: AuditContext,
 ): Promise<InventoryMovement> {
-  return db.$transaction((tx) => receiveInventoryTx(tx, input, ctx));
+  const result = await db.$transaction((tx) =>
+    receiveInventoryTx(tx, input, ctx),
+  );
+  const productId = await variantProductId(db, result.variantId);
+  if (productId) markProductsDirty([productId]);
+  return result;
 }
 
 export async function consumeInventory(
@@ -469,7 +497,12 @@ export async function consumeInventory(
   input: ConsumeInput,
   ctx?: AuditContext,
 ): Promise<InventoryMovement> {
-  return db.$transaction((tx) => consumeInventoryTx(tx, input, ctx));
+  const result = await db.$transaction((tx) =>
+    consumeInventoryTx(tx, input, ctx),
+  );
+  const productId = await variantProductId(db, result.variantId);
+  if (productId) markProductsDirty([productId]);
+  return result;
 }
 
 export async function transferInventory(
@@ -477,7 +510,12 @@ export async function transferInventory(
   input: TransferInput,
   ctx?: AuditContext,
 ): Promise<{ out: InventoryMovement; in: InventoryMovement }> {
-  return db.$transaction((tx) => transferInventoryTx(tx, input, ctx));
+  const result = await db.$transaction((tx) =>
+    transferInventoryTx(tx, input, ctx),
+  );
+  const productId = await variantProductId(db, result.out.variantId);
+  if (productId) markProductsDirty([productId]);
+  return result;
 }
 
 export async function reverseReceive(
@@ -485,5 +523,10 @@ export async function reverseReceive(
   input: ReverseReceiveInput,
   ctx?: AuditContext,
 ): Promise<InventoryMovement> {
-  return db.$transaction((tx) => reverseReceiveTx(tx, input, ctx));
+  const result = await db.$transaction((tx) =>
+    reverseReceiveTx(tx, input, ctx),
+  );
+  const productId = await variantProductId(db, result.variantId);
+  if (productId) markProductsDirty([productId]);
+  return result;
 }

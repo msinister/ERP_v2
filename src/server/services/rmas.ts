@@ -22,6 +22,7 @@ import {
   type CreditMemoWithLines,
 } from './creditMemos';
 import { reverseCogsForCreditMemoTx } from './cogsReversal';
+import { markProductsDirtyFromVariants } from './inventoryPushTriggers';
 import {
   getRestockingFeeDefault,
   resolveRestockingFee,
@@ -276,7 +277,7 @@ export async function creditFromRma(
   ctx?: AuditContext,
 ): Promise<CreditFromRmaResult> {
   const data = creditFromRmaInputSchema.parse(input);
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT 1 FROM "Rma" WHERE "id" = ${rmaId} FOR UPDATE`;
     const rma = await tx.rma.findUnique({
       where: { id: rmaId },
@@ -441,6 +442,15 @@ export async function creditFromRma(
 
     return { rma: updatedRma, creditMemo: finalCm };
   });
+  // Shopify inventory push — goods-back RMAs restore inventory via
+  // RMA_RETURN movements; non-goods-back paths only touch AR. We mark dirty
+  // unconditionally and let pushInventoryForProduct's clamping handle
+  // no-op pushes if onHand happens to be unchanged.
+  const variantIds = result.creditMemo.lines
+    .map((l) => l.variantId)
+    .filter((v): v is string => v != null);
+  await markProductsDirtyFromVariants(db, variantIds);
+  return result;
 }
 
 // ---------------------------------------------------------------------------

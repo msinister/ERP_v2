@@ -17,6 +17,7 @@ import { consumeFromLayersTx } from '@/server/services/fifoLayers';
 import { createFifoLayerForReturnTx } from '@/server/services/fifoLayers';
 import { getNegativeInventoryAllowed } from '@/server/services/negativeInventory';
 import { recomputeOnHand } from '@/server/services/movements';
+import { markProductsDirtyFromVariants } from '@/server/services/inventoryPushTriggers';
 import { computeWac, getLastPurchaseCost } from '@/server/services/wac';
 import { getNextSequence } from '@/lib/sequences/sequences';
 import {
@@ -250,7 +251,7 @@ export async function postQuickAdjustment(
   ctx?: AuditContext,
 ): Promise<InventoryAdjustmentWithLines> {
   const data = quickAdjustmentInputSchema.parse(input);
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const warehouse = await tx.warehouse.findUnique({
       where: { id: data.warehouseId },
       select: { code: true, inventoryAccount: { select: { code: true } } },
@@ -323,6 +324,11 @@ export async function postQuickAdjustment(
       include: { lines: true },
     });
   });
+  await markProductsDirtyFromVariants(
+    db,
+    result.lines.map((l) => l.variantId),
+  );
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +342,7 @@ export async function voidAdjustment(
   ctx?: AuditContext,
 ): Promise<InventoryAdjustmentWithLines> {
   const data = voidAdjustmentInputSchema.parse(input);
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const adj = await tx.inventoryAdjustment.findUnique({
       where: { id: adjustmentId },
       include: {
@@ -407,6 +413,11 @@ export async function voidAdjustment(
       include: { lines: true },
     });
   });
+  await markProductsDirtyFromVariants(
+    db,
+    result.lines.map((l) => l.variantId),
+  );
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +430,7 @@ export async function postBatchAdjustment(
   ctx?: AuditContext,
 ): Promise<InventoryAdjustmentWithLines> {
   const data = batchAdjustmentInputSchema.parse(input);
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const warehouse = await tx.warehouse.findUnique({
       where: { id: data.warehouseId },
       select: { code: true, inventoryAccount: { select: { code: true } } },
@@ -493,6 +504,11 @@ export async function postBatchAdjustment(
       include: { lines: true },
     });
   });
+  await markProductsDirtyFromVariants(
+    db,
+    result.lines.map((l) => l.variantId),
+  );
+  return result;
 }
 
 // ---------------------------------------------------------------------------

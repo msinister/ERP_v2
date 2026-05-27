@@ -3,22 +3,22 @@ import { db } from '@/lib/db';
 import { requireSuperAdmin } from '@/lib/auth/requireAuth';
 import { authErrorResponse } from '@/lib/auth/errors';
 import {
-  getSecrets,
+  getSecretsForStore,
   recordWebhookSubscriptions,
-} from '@/server/services/shopifyConfig';
+} from '@/server/services/shopifyStores';
 import {
   ShopifyApiError,
   ShopifyClient,
 } from '@/lib/integrations/shopify/client';
 
-// Register the three product webhooks (create / update / delete) on
-// Shopify pointed at our /api/webhooks/shopify/... endpoints. Idempotent:
-// already-registered topics are detected via listWebhooks and skipped.
+// Register the three product webhooks (create / update / delete) on this
+// store, pointed at our shared /api/webhooks/shopify/products/... endpoints.
+// Idempotent: already-registered topics with a matching address are detected
+// via listWebhooks and skipped.
 //
-// The webhook URL needs a publicly-reachable host — admins set
-// SHOPIFY_PUBLIC_BASE_URL in their .env (e.g. https://erp.nakedkratom.com).
-// Defaults to the request's own origin when unset (works in dev with
-// a tunneling tool like Cloudflared).
+// The webhook URL is the same for every store — handlers look up the store
+// by X-Shopify-Shop-Domain header. SHOPIFY_PUBLIC_BASE_URL env var sets the
+// public origin; defaults to request origin (dev with cloudflared / ngrok).
 
 const TOPICS = [
   'products/create',
@@ -26,22 +26,28 @@ const TOPICS = [
   'products/delete',
 ] as const;
 
-export async function POST(req: Request) {
+export async function POST(
+  req: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
   try {
-    const user = await requireSuperAdmin(req);
-    const secrets = await getSecrets(db);
+    await requireSuperAdmin(req);
+    const { id } = await ctx.params;
+    const secrets = await getSecretsForStore(db, id);
     const client = new ShopifyClient({
       storeUrl: secrets.storeUrl,
       accessToken: secrets.accessToken,
     });
 
-    // Accept optional baseUrl override in request body (useful in dev with a
-    // tunnel URL before the env var is set). Falls back to env → request origin.
     let bodyBaseUrl: string | undefined;
     try {
       const body = await req.json();
-      if (typeof body?.baseUrl === 'string') bodyBaseUrl = body.baseUrl.replace(/\/+$/, '');
-    } catch { /* no body or not JSON — that's fine */ }
+      if (typeof body?.baseUrl === 'string') {
+        bodyBaseUrl = body.baseUrl.replace(/\/+$/, '');
+      }
+    } catch {
+      /* no body — fine */
+    }
 
     const base =
       bodyBaseUrl ||
@@ -67,8 +73,14 @@ export async function POST(req: Request) {
       created.push(topic);
     }
 
-    await recordWebhookSubscriptions(db, subs, user.id);
-    return NextResponse.json({ ok: true, base, created, skipped, subscriptions: subs });
+    await recordWebhookSubscriptions(db, id, subs);
+    return NextResponse.json({
+      ok: true,
+      base,
+      created,
+      skipped,
+      subscriptions: subs,
+    });
   } catch (e) {
     const authResp = authErrorResponse(e);
     if (authResp) return authResp;

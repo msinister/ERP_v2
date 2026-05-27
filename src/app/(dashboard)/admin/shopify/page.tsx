@@ -3,7 +3,8 @@ import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth/getCurrentUser';
-import { getPublicConfig } from '@/server/services/shopifyConfig';
+import { getDefaultStore } from '@/server/services/shopifyStores';
+import type { StoredSyncRun } from '@/server/services/shopifyStores';
 import {
   Card,
   CardContent,
@@ -16,14 +17,44 @@ import { ShopifySyncLog } from './_components/sync-log';
 
 export const revalidate = 0;
 
+// Slice A admin shim: operates on the first active ShopifyStore (the row
+// that the migration created from the legacy Setting blob). Slice B
+// replaces this with a multi-store list + per-store rule builder.
 export default async function ShopifyAdminPage() {
-  // Super-admin gate — same pattern as the admin index.
   const user = await getCurrentUser();
   if (!user?.isSuperAdmin) redirect('/dashboard');
 
-  const cfg = await getPublicConfig(db);
+  const cfg = await getDefaultStore(db);
+
+  if (!cfg) {
+    return (
+      <div className="space-y-6">
+        <Link
+          href="/admin"
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+        >
+          <ChevronLeft className="size-3.5" />
+          Admin
+        </Link>
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Shopify sync</h1>
+          <p className="text-sm text-muted-foreground">
+            No Shopify store is configured. Create one with{' '}
+            <code>POST /api/admin/shopify/stores</code> (multi-store admin UI
+            ships in the next slice).
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const configured =
     cfg.storeUrl !== '' && cfg.hasAccessToken && cfg.hasWebhookSecret;
+  const lastSync = cfg.lastSyncResult as StoredSyncRun | null;
+  const webhookSubscriptions = (cfg.webhookSubscriptionIds ?? null) as Record<
+    string,
+    string
+  > | null;
 
   return (
     <div className="space-y-6">
@@ -38,9 +69,9 @@ export default async function ShopifyAdminPage() {
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">Shopify sync</h1>
         <p className="text-sm text-muted-foreground">
-          Shopify is the source of truth for product catalog data (name,
-          description, images, vendor, category, tags). ERP keeps cost,
-          inventory, and pricing — nothing in this pane affects those.
+          Showing the default Shopify store ({cfg.name}). Multi-store
+          management UI is in the next slice — use the API for additional
+          stores in the meantime.
         </p>
       </div>
 
@@ -52,7 +83,9 @@ export default async function ShopifyAdminPage() {
             </CardHeader>
             <CardContent>
               <ShopifyConfigForm
+                storeId={cfg.id}
                 initial={{
+                  name: cfg.name,
                   storeUrl: cfg.storeUrl,
                   hasAccessToken: cfg.hasAccessToken,
                   hasWebhookSecret: cfg.hasWebhookSecret,
@@ -73,16 +106,16 @@ export default async function ShopifyAdminPage() {
                 </p>
               ) : !cfg.syncEnabled ? (
                 <p className="text-xs text-muted-foreground">
-                  Sync is currently <span className="font-medium">disabled</span>{' '}
-                  — webhooks and full-sync will short-circuit until you flip
-                  the toggle.
+                  Sync is currently{' '}
+                  <span className="font-medium">disabled</span> — webhooks and
+                  full-sync will short-circuit until you flip the toggle.
                 </p>
               ) : null}
-              <ShopifySyncActions configured={configured} />
-              {cfg.webhookSubscriptions ? (
+              <ShopifySyncActions storeId={cfg.id} configured={configured} />
+              {webhookSubscriptions ? (
                 <div className="pt-1 text-xs text-muted-foreground">
                   Registered webhooks:{' '}
-                  {Object.keys(cfg.webhookSubscriptions).join(', ') || 'none'}
+                  {Object.keys(webhookSubscriptions).join(', ') || 'none'}
                 </div>
               ) : null}
             </CardContent>
@@ -95,7 +128,7 @@ export default async function ShopifyAdminPage() {
               <CardTitle className="text-sm">Last sync</CardTitle>
             </CardHeader>
             <CardContent>
-              <ShopifySyncLog run={cfg.lastSync} />
+              <ShopifySyncLog run={lastSync} />
             </CardContent>
           </Card>
         </div>

@@ -12,13 +12,14 @@ import type {
   ShopifyVariant,
 } from '@/lib/integrations/shopify/types';
 import {
-  getSecrets,
+  getSecretsForStore,
   recordSyncRun,
   type StoredSyncRun,
-} from './shopifyConfig';
+} from './shopifyStores';
 
 // =============================================================================
-// Shopify → ERP product sync.
+// Shopify → ERP product sync. Multi-store aware: every entry point takes a
+// `storeId` and all junction lookups / writes are scoped to that store.
 //
 // Direction is one-way: Shopify is master for catalog data (name,
 // description, images, vendor, category, tags, status). ERP is master
@@ -37,20 +38,21 @@ import {
 //                       different price. Registered for future inventory-
 //                       push fan-out; never overwrite catalog fields.
 //
-// Match cascade for each incoming Shopify variant:
-//   1. Junction row where shopifyVariantId = <variant.id>
+// Multi-store: primary vs. secondary is per-store. An ERP product can be
+// primary in Store A AND primary in Store B simultaneously — each store
+// has its own catalog ownership chain.
+//
+// Match cascade for each incoming Shopify variant (within `storeId`):
+//   1. Junction row where (storeId, shopifyVariantId) = (this store, variant.id)
 //      → already registered; update primary or touch secondary syncedAt.
 //   2. ERP Product where sku = <variant.sku>
 //      → existing product matched by SKU.
-//        a. Product has a primary junction row from a DIFFERENT Shopify
-//           product → this is a secondary listing; add junction row,
-//           skip catalog writes.
-//        b. Product has no primary junction row (manually created) →
-//           adopt as primary; write catalog fields.
-//   3. No match → create ERP Product + primary junction row.
-//
-// When the inventory-push feature is built, it fans out to every
-// junction row for the product (all Shopify listings get the same qty).
+//        a. Product has a primary junction row IN THIS STORE from a DIFFERENT
+//           Shopify product → this is a secondary listing for this store;
+//           add junction row, skip catalog writes.
+//        b. Product has no primary junction row in this store → adopt as
+//           primary for this store; write catalog fields.
+//   3. No match → create ERP Product + primary junction row in this store.
 // =============================================================================
 
 export type UpsertOutcome = 'created' | 'updated' | 'skipped';
@@ -69,24 +71,23 @@ export type UpsertResult = {
  *
  * Behavior on Shopify status:
  *   - 'active' → upsert each variant.
- *   - 'draft' / 'archived' → remove any secondary junction rows for
- *     this product; deactivate ERP products that have this as their
- *     primary listing.
+ *   - 'draft' / 'archived' → remove this store's junction rows for the
+ *     product; if a removed row was primary in this store, deactivate the
+ *     ERP product (unless it's primary in another store still).
  */
 export async function upsertProductFromShopify(
   db: PrismaClient,
+  storeId: string,
   sp: ShopifyProduct,
   ctx?: AuditContext,
 ): Promise<UpsertResult[]> {
   if (sp.status !== 'active') {
-    return deactivateShopifyProduct(db, sp.id, ctx);
+    return deactivateShopifyProduct(db, storeId, sp.id, ctx);
   }
 
-  const vendor = sp.vendor
-    ? await resolveVendor(db, sp.vendor, ctx)
-    : null;
+  const vendor = sp.vendor ? await resolveVendor(db, sp.vendor, ctx) : null;
   const tagNames = parseTags(sp.tags);
-  const variantGroup = `shopify:${sp.id}`;
+  const variantGroup = `shopify:${storeId}:${sp.id}`;
 
   const results: UpsertResult[] = [];
   for (const variant of sp.variants ?? []) {
@@ -101,6 +102,7 @@ export async function upsertProductFromShopify(
     }
     try {
       const res = await upsertVariant(db, {
+        storeId,
         shopifyProduct: sp,
         shopifyVariant: variant,
         variantGroup,
@@ -122,14 +124,15 @@ export async function upsertProductFromShopify(
 }
 
 /**
- * Walk all active Shopify products and upsert each. Records the run
- * summary to the Setting row so the admin UI can render "Last sync".
+ * Walk all active Shopify products for one store and upsert each. Records the
+ * run summary to the ShopifyStore row so the admin UI can render "Last sync".
  */
 export async function runFullSync(
   db: PrismaClient,
+  storeId: string,
   ctx: AuditContext | undefined,
 ): Promise<StoredSyncRun> {
-  const secrets = await getSecrets(db);
+  const secrets = await getSecretsForStore(db, storeId);
   const client = new ShopifyClient({
     storeUrl: secrets.storeUrl,
     accessToken: secrets.accessToken,
@@ -144,7 +147,7 @@ export async function runFullSync(
   for await (const batch of client.iterateActiveProducts(250)) {
     for (const sp of batch) {
       try {
-        const results = await upsertProductFromShopify(db, sp, ctx);
+        const results = await upsertProductFromShopify(db, storeId, sp, ctx);
         for (const r of results) {
           if (r.outcome === 'created') created++;
           else if (r.outcome === 'updated') updated++;
@@ -167,26 +170,28 @@ export async function runFullSync(
     skipped,
     errors,
   };
-  await recordSyncRun(db, run, ctx?.userId ?? null);
+  await recordSyncRun(db, storeId, run);
   return run;
 }
 
 /**
- * Remove every junction row for the given Shopify product:
- *   - Primary rows   → mark the ERP product inactive.
+ * Remove every junction row for the given (store, Shopify product):
+ *   - Primary rows   → if no other store still lists this ERP product as
+ *     primary, mark the ERP product inactive.
  *   - Secondary rows → just remove the junction row (ERP product stays
- *     active; its primary listing on another Shopify product is intact).
+ *     active; its primary listings elsewhere are intact).
  *
  * Used by the products/delete webhook and by status transitions to
  * 'draft' / 'archived'.
  */
 export async function deactivateShopifyProduct(
   db: PrismaClient,
+  storeId: string,
   shopifyProductId: string,
   ctx?: AuditContext,
 ): Promise<UpsertResult[]> {
   const junctionRows = await db.productShopifyVariant.findMany({
-    where: { shopifyProductId },
+    where: { shopifyStoreId: storeId, shopifyProductId },
     select: { id: true, productId: true, isPrimary: true },
   });
 
@@ -198,7 +203,6 @@ export async function deactivateShopifyProduct(
       select: { id: true, sku: true, active: true, deletedAt: true },
     });
 
-    // Remove the junction row regardless of primary/secondary.
     await db.productShopifyVariant.delete({ where: { id: row.id } });
 
     if (!product || product.deletedAt) {
@@ -212,7 +216,7 @@ export async function deactivateShopifyProduct(
     }
 
     if (!row.isPrimary) {
-      // Secondary listing removed — ERP product unaffected.
+      // Secondary listing removed in this store — ERP product unaffected.
       results.push({
         outcome: 'updated',
         productId: product.id,
@@ -222,7 +226,22 @@ export async function deactivateShopifyProduct(
       continue;
     }
 
-    // Primary listing removed → deactivate the ERP product.
+    // Primary listing removed in this store — only deactivate the ERP
+    // product if no OTHER store still owns it as primary.
+    const otherPrimary = await db.productShopifyVariant.findFirst({
+      where: { productId: product.id, isPrimary: true },
+      select: { id: true },
+    });
+    if (otherPrimary) {
+      results.push({
+        outcome: 'updated',
+        productId: product.id,
+        sku: product.sku,
+        reason: 'primary in this store removed; remains primary elsewhere',
+      });
+      continue;
+    }
+
     if (!product.active) {
       results.push({
         outcome: 'skipped',
@@ -256,6 +275,7 @@ export async function deactivateShopifyProduct(
 // ---------------------------------------------------------------------------
 
 type VariantUpsertArgs = {
+  storeId: string;
   shopifyProduct: ShopifyProduct;
   shopifyVariant: ShopifyVariant;
   variantGroup: string;
@@ -268,18 +288,29 @@ async function upsertVariant(
   db: PrismaClient,
   args: VariantUpsertArgs,
 ): Promise<UpsertResult> {
-  const { shopifyProduct: sp, shopifyVariant: sv, variantGroup, tagNames, ctx } = args;
+  const {
+    storeId,
+    shopifyProduct: sp,
+    shopifyVariant: sv,
+    variantGroup,
+    tagNames,
+    ctx,
+  } = args;
 
-  // ── Step 1: look up by shopifyVariantId in junction table ──────────────
+  // ── Step 1: look up by (storeId, shopifyVariantId) in junction table ───
   const existingJunction = await db.productShopifyVariant.findUnique({
-    where: { shopifyVariantId: sv.id },
+    where: {
+      shopifyStoreId_shopifyVariantId: {
+        shopifyStoreId: storeId,
+        shopifyVariantId: sv.id,
+      },
+    },
     select: { id: true, productId: true, isPrimary: true },
   });
 
   if (existingJunction) {
     return db.$transaction(async (tx) => {
       if (existingJunction.isPrimary) {
-        // Primary listing — update catalog fields.
         const product = await tx.product.findUniqueOrThrow({
           where: { id: existingJunction.productId },
         });
@@ -324,21 +355,20 @@ async function upsertVariant(
   const bySkuProduct = await db.product.findUnique({ where: { sku: sv.sku } });
 
   if (bySkuProduct) {
-    // Check whether this product already has a primary junction row from
-    // a different Shopify product.
+    // Within THIS STORE, does this product already have a primary junction
+    // row from a different Shopify product? If so, this is a secondary
+    // listing for this store.
     const existingPrimary = await db.productShopifyVariant.findFirst({
-      where: { productId: bySkuProduct.id, isPrimary: true },
+      where: { productId: bySkuProduct.id, isPrimary: true, shopifyStoreId: storeId },
       select: { id: true, shopifyProductId: true },
     });
 
     if (existingPrimary && existingPrimary.shopifyProductId !== sp.id) {
-      // ── 2a: Secondary listing ──────────────────────────────────────────
-      // The ERP product is already owned by another Shopify product. This
-      // Shopify product (deal / bundle / mix-and-match) just gets a
-      // secondary junction row. No catalog updates.
+      // ── 2a: Secondary listing (this store) ──────────────────────────
       await db.productShopifyVariant.create({
         data: {
           productId: bySkuProduct.id,
+          shopifyStoreId: storeId,
           shopifyProductId: sp.id,
           shopifyVariantId: sv.id,
           isPrimary: false,
@@ -353,7 +383,7 @@ async function upsertVariant(
       };
     }
 
-    // ── 2b: Adopt as primary (manually created product or same product) ──
+    // ── 2b: Adopt as primary in this store ──────────────────────────────
     return db.$transaction(async (tx) => {
       const shopifyOwnedFields = buildShopifyOwnedFields(sp, sv);
       const before = extractAuditBefore(bySkuProduct);
@@ -361,8 +391,6 @@ async function upsertVariant(
         where: { id: bySkuProduct.id },
         data: { ...shopifyOwnedFields, shopifySyncedAt: new Date() },
       });
-      // Upsert the primary junction row (handles the case where the
-      // same Shopify product was previously synced via a different path).
       if (existingPrimary) {
         await tx.productShopifyVariant.update({
           where: { id: existingPrimary.id },
@@ -372,6 +400,7 @@ async function upsertVariant(
         await tx.productShopifyVariant.create({
           data: {
             productId: bySkuProduct.id,
+            shopifyStoreId: storeId,
             shopifyProductId: sp.id,
             shopifyVariantId: sv.id,
             isPrimary: true,
@@ -394,7 +423,7 @@ async function upsertVariant(
     });
   }
 
-  // ── Step 3: Create new ERP product + primary junction row ──────────────
+  // ── Step 3: Create new ERP product + primary junction row in this store ─
   return db.$transaction(async (tx) => {
     const shopifyOwnedFields = buildShopifyOwnedFields(sp, sv);
     const created = await tx.product.create({
@@ -407,6 +436,7 @@ async function upsertVariant(
     await tx.productShopifyVariant.create({
       data: {
         productId: created.id,
+        shopifyStoreId: storeId,
         shopifyProductId: sp.id,
         shopifyVariantId: sv.id,
         isPrimary: true,
@@ -463,11 +493,6 @@ function extractAuditBefore(product: Product) {
 // Side-effect helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Find a Vendor by case-insensitive name. Create one with type=STOCK and
- * an auto-generated code if absent. Conservative: never updates an
- * existing vendor's metadata.
- */
 async function resolveVendor(
   db: PrismaClient,
   name: string,
@@ -501,8 +526,6 @@ async function resolveVendor(
   return created;
 }
 
-// Ensure a ProductVariant row exists for the (productId, sku) pair and
-// has the right variantGroup. Only called for primary-listing syncs.
 async function ensureVariantRow(
   tx: Prisma.TransactionClient,
   productId: string,
@@ -523,9 +546,6 @@ async function ensureVariantRow(
     return;
   }
 
-  // Check for an orphaned PV with this SKU — can exist when the parent
-  // Product was soft-deleted but its ProductVariant row was not cleaned
-  // up, leaving a "ghost" that holds the unique-sku slot.
   const orphaned = await tx.productVariant.findFirst({
     where: { sku },
     select: { id: true },
@@ -543,9 +563,6 @@ async function ensureVariantRow(
   });
 }
 
-// Upsert tags: lazy-create new Tag rows, ensure ProductTag assignment,
-// drop assignments no longer in the incoming set (Shopify is master for
-// product tags, just like the rest of the catalog data).
 async function syncTags(
   tx: Prisma.TransactionClient,
   productId: string,
@@ -588,10 +605,6 @@ async function syncTags(
   }
 }
 
-// Image sync. We ONLY touch images carrying shopifyImageId — operator-
-// added images (no shopifyImageId) are preserved. First Shopify image
-// is marked primary unless an operator-added image already holds the
-// primary slot.
 async function syncImages(
   tx: Prisma.TransactionClient,
   productId: string,

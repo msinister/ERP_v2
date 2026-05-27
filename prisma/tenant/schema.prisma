@@ -353,7 +353,8 @@ model Product {
   // variant only) so the detail page can show "Synced from Shopify ·
   // {when}" without a join. All Shopify product/variant IDs live in
   // ProductShopifyVariant (junction); a product can link to multiple
-  // Shopify listings (primary + deal/bundle secondaries).
+  // Shopify listings — both primary + deal/bundle secondaries within a
+  // store, and across multiple ShopifyStores.
   shopifySyncedAt  DateTime?
   active           Boolean     @default(true)
   // Flat-dollar labor cost rolled into the cost of every finished
@@ -417,33 +418,130 @@ model ProductImage {
   @@index([shopifyImageId])
 }
 
-// One row per (ERP product, Shopify variant) pairing. An ERP product can
-// link to multiple Shopify listings — the primary listing (isPrimary=true)
-// drives catalog fields (name, description, images, tags). Secondary rows
-// represent deal/bundle/mix-and-match Shopify products whose variants map
-// to the same physical SKU; the sync registers them here without
-// overwriting catalog data or creating duplicate ERP products.
+// One row per (ERP product, ShopifyStore, Shopify variant) tuple. An ERP
+// product can link to multiple Shopify listings — within a store the
+// primary listing (isPrimary=true) drives catalog fields (name, images,
+// tags); secondary rows represent deal/bundle/mix-and-match Shopify
+// products whose variants map to the same physical SKU. The same product
+// can also appear across multiple stores, each with its own primary +
+// secondary rows.
 //
-// shopifyVariantId is globally unique (one Shopify variant → one ERP
-// product). shopifyProductId is NOT unique — the same Shopify product
-// can appear against many ERP products (one row per variant).
+// shopifyVariantId is unique PER STORE (composite unique), not globally —
+// different Shopify tenants have independent id namespaces. inventoryItemId
+// is cached on first push so subsequent pushes skip the lookup hop.
 //
-// When the ERP pushes inventory to Shopify it fans out to every row
-// for the product, keeping all Shopify listings in sync.
+// When the ERP pushes inventory to Shopify it fans out to every row for
+// the product, grouped by store; stores with inventoryPushEnabled=false
+// are skipped.
 model ProductShopifyVariant {
   id               String   @id @default(cuid())
   productId        String
+  shopifyStoreId   String
   shopifyProductId String
-  shopifyVariantId String   @unique
+  shopifyVariantId String
+  // Shopify inventory_item_id — cached lazily on first push so we can
+  // call /inventory_levels/set.json without re-fetching the variant.
+  inventoryItemId  String?
   isPrimary        Boolean  @default(false)
   syncedAt         DateTime
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  product Product @relation(fields: [productId], references: [id])
+  product Product      @relation(fields: [productId], references: [id])
+  store   ShopifyStore @relation(fields: [shopifyStoreId], references: [id])
 
+  @@unique([shopifyStoreId, shopifyVariantId])
   @@index([productId])
-  @@index([shopifyProductId])
+  @@index([shopifyStoreId, shopifyProductId])
+}
+
+// One ERP instance can connect to many Shopify stores. Each store carries
+// its own credentials (encrypted), sync flags, last-run results, and the
+// set of routing rules that decide which ERP products are eligible to
+// sync to / push inventory to it. Soft-delete (deletedAt) preserves
+// history; junction rows for an archived store remain but pushes are
+// gated by `active && inventoryPushEnabled`.
+//
+// Secrets are AES-256-GCM encrypted via lib/crypto and stored as Json
+// {ciphertext, iv} — same pattern as the legacy Setting blob.
+model ShopifyStore {
+  id                     String   @id @default(cuid())
+  name                   String
+  storeUrl               String   @unique
+  // {ciphertext, iv} per lib/crypto contract. Nullable so a store row can
+  // be created (UI scaffolding) before secrets are pasted.
+  accessToken            Json?
+  webhookSecret          Json?
+  syncEnabled            Boolean  @default(false)
+  inventoryPushEnabled   Boolean  @default(false)
+  // Shopify Location id (REST) that inventory is pushed against. Required
+  // for inventory_levels/set; if null, pushes for this store short-circuit
+  // with a clear error.
+  shopifyLocationId      String?
+  lastProductSyncAt      DateTime?
+  lastInventoryPushAt    DateTime?
+  // Last-run summaries — Json blobs mirror the legacy StoredSyncRun /
+  // a new StoredPushRun shape. Surfaced on the per-store admin tile.
+  lastSyncResult         Json?
+  lastPushResult         Json?
+  // Webhook subscription ids returned by Shopify on register. Shape:
+  // Record<topic, subscriptionId>. Lets the admin UI show "currently
+  // registered" without re-querying Shopify.
+  webhookSubscriptionIds Json?
+  sortOrder              Int      @default(0)
+  active                 Boolean  @default(true)
+  deletedAt              DateTime?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  createdBy              String?
+  updatedBy              String?
+
+  rules           ShopifyStoreRule[]
+  productVariants ProductShopifyVariant[]
+
+  @@index([active])
+  @@index([deletedAt])
+}
+
+// Routing-rule rows per store. Evaluated together to decide whether a
+// given product is eligible to sync into this store.
+//
+// Semantics (see shopifyStoreRules.productMatchesStore):
+//   - No rules    → no products eligible (explicit opt-in required).
+//   - INCLUDE_ALL → every active product eligible.
+//   - INCLUDE_X   → additive (union). A product matching ANY include is in.
+//   - EXCLUDE_X   → wins over includes. A product matching ANY exclude is out.
+//
+// Vendor matching uses the product's primary VendorProduct (isPrimary=true
+// on any variant). Category matches Product.category exactly (case-
+// insensitive). Tag matches any name on ProductTag for the product.
+model ShopifyStoreRule {
+  id             String               @id @default(cuid())
+  shopifyStoreId String
+  ruleType       ShopifyStoreRuleType
+  // Empty string for INCLUDE_ALL; vendor name / category / tag name for the
+  // typed variants. Stored as-typed by the operator; matching is case-
+  // insensitive at evaluation time.
+  value          String               @default("")
+  sortOrder      Int                  @default(0)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  createdBy      String?
+  updatedBy      String?
+
+  store ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId, sortOrder])
+}
+
+enum ShopifyStoreRuleType {
+  INCLUDE_ALL
+  INCLUDE_VENDOR
+  EXCLUDE_VENDOR
+  INCLUDE_CATEGORY
+  EXCLUDE_CATEGORY
+  INCLUDE_TAG
+  EXCLUDE_TAG
 }
 
 model ProductVariant {

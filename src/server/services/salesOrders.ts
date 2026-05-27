@@ -35,6 +35,7 @@ import { reverseCogsForInvoiceTx } from '@/server/services/cogsReversal';
 import { reversePaymentTx } from '@/server/services/payments';
 import { recomputeOnHand } from '@/server/services/movements';
 import { expandBundleLinesInTx } from '@/server/services/bundleExplode';
+import { markProductsDirtyFromVariants } from '@/server/services/inventoryPushTriggers';
 import { getOverShippingPolicy } from '@/server/services/overShipping';
 import {
   addSalesOrderLinesInputSchema,
@@ -555,7 +556,7 @@ export async function closeSalesOrder(
   } | null = null;
 
   try {
-    return await db.$transaction(async (tx) => {
+    const after = await db.$transaction(async (tx) => {
       const before = await tx.salesOrder.findUnique({
         where: { id },
         include: { lines: { where: { deletedAt: null } } },
@@ -722,6 +723,13 @@ export async function closeSalesOrder(
 
       return after;
     });
+    // Shopify inventory-push trigger — after the tx commits so we never
+    // push numbers for a rolled-back close.
+    await markProductsDirtyFromVariants(
+      db,
+      after.lines.map((l) => l.variantId),
+    );
+    return after;
   } catch (e) {
     if (pendingInsufficientAudit) {
       // Outer-db write so the audit row survives the inner rollback.
@@ -782,7 +790,7 @@ export async function reopenSalesOrder(
   ctx?: AuditContext,
 ): Promise<SalesOrderWithLines> {
   const data = reopenSalesOrderInputSchema.parse(input);
-  return db.$transaction(async (tx) => {
+  const after = await db.$transaction(async (tx) => {
     const before = await tx.salesOrder.findUnique({
       where: { id },
       include: {
@@ -1020,6 +1028,13 @@ export async function reopenSalesOrder(
 
     return after;
   });
+  // Shopify inventory-push trigger — reopen restored inventory via COGS
+  // reversal, so push the new available numbers after the tx commits.
+  await markProductsDirtyFromVariants(
+    db,
+    after.lines.map((l) => l.variantId),
+  );
+  return after;
 }
 
 /**
@@ -1562,7 +1577,7 @@ export async function cancelSalesOrder(
   ctx?: AuditContext,
 ): Promise<SalesOrderWithLines> {
   const data = cancelSalesOrderInputSchema.parse(input);
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     const before = await tx.salesOrder.findUnique({
       where: { id },
       include: { lines: { where: { deletedAt: null } } },
@@ -1656,8 +1671,18 @@ export async function cancelSalesOrder(
       after: { status: after.status },
       ctx: { ...ctx, reason: data.reason },
     });
-    return after;
+    return { after, wasReserved };
   });
+  // Reservation release affects "available" (= onHand - reserved). Push
+  // the new numbers AFTER the tx commits — but only when the cancel
+  // actually freed reserved qty (DRAFT cancels touch no inventory).
+  if (result.wasReserved) {
+    await markProductsDirtyFromVariants(
+      db,
+      result.after.lines.map((l) => l.variantId),
+    );
+  }
+  return result.after;
 }
 
 /**

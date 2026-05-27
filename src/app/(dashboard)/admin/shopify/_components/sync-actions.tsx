@@ -7,30 +7,29 @@ import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 
 // Three buttons: test the connection, register webhooks, run a full sync.
-// All three call admin routes; failures stay visible in the toast (8s
-// + close button per the toast policy) so the operator can read them.
+// All three hit the new per-store admin routes. Slice A operates on the
+// default store; Slice B will pass storeId explicitly per row.
 
 export function ShopifySyncActions({
+  storeId,
   configured,
 }: {
-  // Renders disabled when the config is incomplete — there's nothing
-  // useful to call until storeUrl + accessToken + webhookSecret are set.
+  storeId: string;
   configured: boolean;
 }) {
   const router = useRouter();
   const [testing, startTesting] = useTransition();
   const [registering, startRegistering] = useTransition();
   const [syncing, startSyncing] = useTransition();
-  // Tracks "we just kicked off a full sync" so the button label flips
-  // even between toast.success and the router.refresh round-trip.
   const [, setLastRunMarker] = useState(0);
 
   function onTest() {
     startTesting(async () => {
       try {
-        const res = await fetch('/api/admin/shopify/test-connection', {
-          method: 'POST',
-        });
+        const res = await fetch(
+          `/api/admin/shopify/stores/${storeId}/test-connection`,
+          { method: 'POST' },
+        );
         const body = (await res.json().catch(() => ({}))) as {
           ok?: boolean;
           productCount?: number;
@@ -56,9 +55,10 @@ export function ShopifySyncActions({
   function onRegister() {
     startRegistering(async () => {
       try {
-        const res = await fetch('/api/admin/shopify/register-webhooks', {
-          method: 'POST',
-        });
+        const res = await fetch(
+          `/api/admin/shopify/stores/${storeId}/register-webhooks`,
+          { method: 'POST' },
+        );
         const body = (await res.json().catch(() => ({}))) as {
           ok?: boolean;
           created?: string[];
@@ -85,9 +85,10 @@ export function ShopifySyncActions({
   function onFullSync() {
     startSyncing(async () => {
       try {
-        const res = await fetch('/api/admin/shopify/full-sync', {
-          method: 'POST',
-        });
+        const res = await fetch(
+          `/api/admin/shopify/stores/${storeId}/full-sync`,
+          { method: 'POST' },
+        );
         const body = (await res.json().catch(() => ({}))) as {
           created?: number;
           updated?: number;

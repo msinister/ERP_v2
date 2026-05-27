@@ -1,5 +1,6 @@
 import type {
   ShopifyProduct,
+  ShopifyVariantLookup,
   ShopifyWebhookSubscription,
 } from './types';
 
@@ -112,6 +113,49 @@ export class ShopifyClient {
       { webhook: { topic, address, format: 'json' } },
     );
     return { ...res.body.webhook, id: String(res.body.webhook.id) };
+  }
+
+  /**
+   * Fetch a single variant by id. Used by the inventory-push path to look
+   * up `inventory_item_id` the first time we touch a variant (the result is
+   * cached on ProductShopifyVariant so subsequent pushes skip this hop).
+   */
+  async getVariant(variantId: string): Promise<ShopifyVariantLookup> {
+    type Raw = {
+      variant: {
+        id: string | number;
+        product_id: string | number;
+        sku: string | null;
+        inventory_item_id: string | number;
+      };
+    };
+    const res = await this.request<Raw>('GET', `/variants/${variantId}.json`);
+    const v = res.body.variant;
+    return {
+      id: String(v.id),
+      product_id: String(v.product_id),
+      sku: v.sku,
+      inventory_item_id: String(v.inventory_item_id),
+    };
+  }
+
+  /**
+   * Set absolute inventory quantity at (location, inventory_item) on this
+   * Shopify store. Used by the inventory push service. Shopify expects a
+   * decimal quantity for some categories (e.g. weight-based) but for our
+   * pilot (each-based) it's always integer — we Math.floor at the call
+   * site to be safe.
+   */
+  async setInventoryLevel(
+    locationId: string,
+    inventoryItemId: string,
+    available: number,
+  ): Promise<void> {
+    await this.request<unknown>('POST', '/inventory_levels/set.json', {
+      location_id: Number(locationId),
+      inventory_item_id: Number(inventoryItemId),
+      available,
+    });
   }
 
   // ---------------------------------------------------------------------------
