@@ -9,7 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
+import { cn } from '@/lib/utils';
 import type {
+  MatchedCustomerAddress,
   MatchedCustomerEnrichment,
   PendingReviewListItem,
 } from '@/server/services/pendingOrderReviews';
@@ -87,6 +89,46 @@ export function ReviewCard({
   const enrichment = review.matchedCustomerEnrichment;
   const showCompare = matched != null;
   const linkedOverride = review.linkedCustomerOverride ?? false;
+
+  // ---------------------------------------------------------------------------
+  // Field-match detection. Computed once per render so both sides of the
+  // compare can highlight together. Email/phone use normalized exact match;
+  // address match keys (street+city+region+zip) are kept as a Set so the
+  // ERP address list can highlight each row individually against either the
+  // Shopify billing OR shipping address.
+  // ---------------------------------------------------------------------------
+  const shopifyEmail = (order.customer?.email ?? order.email ?? '')
+    .toLowerCase()
+    .trim();
+  const erpEmail = (matched?.primaryEmail ?? '').toLowerCase().trim();
+  const emailMatches = !!shopifyEmail && shopifyEmail === erpEmail;
+
+  const shopifyPhoneDigits = digits(order.customer?.phone ?? order.phone);
+  const erpPhoneDigits = digits(matched?.primaryPhone);
+  // Require ≥ 7 digits so a partial / extension number doesn't trigger a
+  // false positive against an unrelated short number.
+  const phoneMatches =
+    shopifyPhoneDigits.length >= 7 && shopifyPhoneDigits === erpPhoneDigits;
+
+  const shopifyName =
+    fullName(order.customer?.first_name, order.customer?.last_name) ||
+    fullName(
+      order.billing_address?.first_name,
+      order.billing_address?.last_name,
+    );
+  const nameMatches = compareName(shopifyName, matched?.name ?? '');
+
+  const erpAddrKeySet = new Set(
+    (matched?.addresses ?? [])
+      .map((a) => erpAddressKey(a))
+      .filter((k): k is string => k != null),
+  );
+  const shopifyBillingKey = shopifyAddressKey(order.billing_address);
+  const shopifyShippingKey = shopifyAddressKey(order.shipping_address);
+  const billingMatches =
+    shopifyBillingKey != null && erpAddrKeySet.has(shopifyBillingKey);
+  const shippingMatches =
+    shopifyShippingKey != null && erpAddrKeySet.has(shopifyShippingKey);
 
   function call(action: object, successMsg: string) {
     startTransition(async () => {
@@ -201,19 +243,18 @@ export function ReviewCard({
           <ComparePanel title="Shopify order">
             <KV
               label="Name"
-              value={
-                fullName(order.customer?.first_name, order.customer?.last_name) ||
-                fullName(
-                  order.billing_address?.first_name,
-                  order.billing_address?.last_name,
-                ) ||
-                '—'
-              }
+              value={shopifyName || '—'}
+              match={showCompare && nameMatches}
             />
-            <KV label="Email" value={order.email ?? order.customer?.email ?? '—'} />
+            <KV
+              label="Email"
+              value={order.email ?? order.customer?.email ?? '—'}
+              match={showCompare && emailMatches}
+            />
             <KV
               label="Phone"
               value={order.customer?.phone ?? order.phone ?? '—'}
+              match={showCompare && phoneMatches}
             />
             <KV
               label="Shopify customer id"
@@ -222,11 +263,13 @@ export function ReviewCard({
             />
             <KV
               label="Billing"
-              value={formatAddress(order.billing_address)}
+              value={formatShopifyAddress(order.billing_address)}
+              match={showCompare && billingMatches}
             />
             <KV
               label="Shipping"
-              value={formatAddress(order.shipping_address)}
+              value={formatShopifyAddress(order.shipping_address)}
+              match={showCompare && shippingMatches}
             />
             <KV
               label="Items"
@@ -262,15 +305,20 @@ export function ReviewCard({
                 </Link>
               }
             >
-              <KV label="Name" value={matched.name} />
-              <KV label="Email" value={matched.primaryEmail ?? '—'} />
-              <KV label="Phone" value={matched.primaryPhone ?? '—'} />
+              <KV label="Name" value={matched.name} match={nameMatches} />
+              <KV
+                label="Email"
+                value={matched.primaryEmail ?? '—'}
+                match={emailMatches}
+              />
+              <KV
+                label="Phone"
+                value={matched.primaryPhone ?? '—'}
+                match={phoneMatches}
+              />
               {enrichment ? (
                 <>
-                  <KV
-                    label="Orders"
-                    value={`${enrichment.orderCount}`}
-                  />
+                  <KV label="Orders" value={`${enrichment.orderCount}`} />
                   <KV
                     label="Lifetime revenue"
                     value={fmtMoney(enrichment.lifetimeRevenue, 'USD')}
@@ -279,12 +327,13 @@ export function ReviewCard({
                     label="Open AR"
                     value={fmtMoney(enrichment.openArBalance, 'USD')}
                   />
-                  <KV
-                    label="Addresses"
-                    value={`${enrichment.addressCount}`}
-                  />
                 </>
               ) : null}
+              <AddressList
+                addresses={matched.addresses}
+                billingMatchKey={billingMatches ? shopifyBillingKey : null}
+                shippingMatchKey={shippingMatches ? shopifyShippingKey : null}
+              />
             </ComparePanel>
           ) : null}
         </div>
@@ -387,19 +436,95 @@ function KV({
   label,
   value,
   mono,
+  match,
   extra,
 }: {
   label: string;
   value: string;
   mono?: boolean;
+  match?: boolean;
   extra?: React.ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[7rem_1fr] gap-2 text-xs">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd>
+    <div
+      className={cn(
+        'grid grid-cols-[7rem_1fr] gap-2 rounded-sm py-0.5 text-xs',
+        // Soft green when this field matches its counterpart on the other
+        // side. Tailwind's emerald scale renders on both light + dark.
+        match &&
+          'bg-emerald-50 px-1.5 dark:bg-emerald-950/40',
+      )}
+    >
+      <dt className={cn('text-muted-foreground', match && 'text-emerald-800 dark:text-emerald-200')}>
+        {label}
+      </dt>
+      <dd className={cn(match && 'text-emerald-900 dark:text-emerald-100')}>
         <span className={mono ? 'font-mono' : ''}>{value}</span>
         {extra}
+      </dd>
+    </div>
+  );
+}
+
+// Render all ERP customer addresses inline (replaces the prior single
+// "Addresses: N" count). Each row gets a green highlight when its
+// normalized key matches the Shopify billing or shipping address key —
+// the same color treatment as the KV match prop, so the operator can
+// scan and see what lines up.
+function AddressList({
+  addresses,
+  billingMatchKey,
+  shippingMatchKey,
+}: {
+  addresses: MatchedCustomerAddress[];
+  billingMatchKey: string | null;
+  shippingMatchKey: string | null;
+}) {
+  if (addresses.length === 0) {
+    return (
+      <div className="grid grid-cols-[7rem_1fr] gap-2 text-xs">
+        <dt className="text-muted-foreground">Addresses</dt>
+        <dd className="text-muted-foreground">No addresses on file</dd>
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-[7rem_1fr] gap-2 text-xs">
+      <dt className="text-muted-foreground">
+        Addresses
+        <span className="ml-1 text-muted-foreground/60">
+          ({addresses.length})
+        </span>
+      </dt>
+      <dd className="space-y-1">
+        {addresses.map((a) => {
+          const key = erpAddressKey(a);
+          const matches =
+            key != null &&
+            ((billingMatchKey != null && key === billingMatchKey) ||
+              (shippingMatchKey != null && key === shippingMatchKey));
+          return (
+            <div
+              key={a.id}
+              className={cn(
+                'rounded-sm py-0.5 leading-snug',
+                matches &&
+                  'bg-emerald-50 px-1.5 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100',
+              )}
+            >
+              <span className="mr-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                {a.kind === 'BILLING' ? 'Bill' : 'Ship'}
+                {a.isDefault ? '·default' : ''}
+              </span>
+              <span>{formatErpAddress(a)}</span>
+              {a.label ? (
+                <span className="ml-1 text-muted-foreground">
+                  ({a.label})
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
       </dd>
     </div>
   );
@@ -409,7 +534,7 @@ function fullName(a: string | null | undefined, b: string | null | undefined) {
   return [a, b].filter(Boolean).join(' ').trim();
 }
 
-function formatAddress(a: ShopifyAddressShape | null): string {
+function formatShopifyAddress(a: ShopifyAddressShape | null): string {
   if (!a) return '—';
   const parts = [
     a.address1,
@@ -418,6 +543,68 @@ function formatAddress(a: ShopifyAddressShape | null): string {
     a.country_code ?? a.country,
   ].filter((s): s is string => !!s && s.trim() !== '');
   return parts.join(', ') || '—';
+}
+
+function formatErpAddress(a: MatchedCustomerAddress): string {
+  const parts = [
+    a.line1,
+    a.line2,
+    [a.city, a.region, a.postalCode].filter(Boolean).join(' '),
+    a.country,
+  ].filter((s): s is string => !!s && s.trim() !== '');
+  return parts.join(', ') || '—';
+}
+
+// Normalize a phone string to digits-only. Empty input → empty string;
+// callers gate on length to skip trivially-short matches.
+function digits(s: string | null | undefined): string {
+  return (s ?? '').replace(/\D/g, '');
+}
+
+// Loose name comparison — case-insensitive equality OR one string
+// containing the other after normalization. The looser containment
+// branch catches "John Smith" vs "John Smith (Acme)" patterns common
+// when the ERP display name appends a city / company suffix per
+// docs/03-customers.md.
+function compareName(a: string, b: string): boolean {
+  const sa = a.toLowerCase().trim();
+  const sb = b.toLowerCase().trim();
+  if (!sa || !sb) return false;
+  if (sa === sb) return true;
+  // Avoid matches where one side is too short to be meaningful (e.g.
+  // last-name only colliding with a longer display name).
+  if (sa.length < 3 || sb.length < 3) return false;
+  return sa.includes(sb) || sb.includes(sa);
+}
+
+// Build a normalized key for ERP-side address comparison. Returns null
+// when either street or zip is missing — those are the load-bearing
+// fields; a "city only" match isn't useful.
+function erpAddressKey(a: MatchedCustomerAddress): string | null {
+  const line1 = a.line1.toLowerCase().replace(/\s+/g, ' ').trim();
+  const zip = a.postalCode.toLowerCase().trim();
+  if (!line1 || !zip) return null;
+  return [
+    line1,
+    a.city.toLowerCase().trim(),
+    a.region.toLowerCase().trim(),
+    zip,
+  ].join('|');
+}
+
+// Same shape from the Shopify side. Tolerates a missing province_code
+// by falling back to province (full name).
+function shopifyAddressKey(a: ShopifyAddressShape | null): string | null {
+  if (!a) return null;
+  const line1 = (a.address1 ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const zip = (a.zip ?? '').toLowerCase().trim();
+  if (!line1 || !zip) return null;
+  return [
+    line1,
+    (a.city ?? '').toLowerCase().trim(),
+    (a.province_code ?? a.province ?? '').toLowerCase().trim(),
+    zip,
+  ].join('|');
 }
 
 function fmtMoney(s: string, currency: string): string {

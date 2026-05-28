@@ -271,6 +271,22 @@ async function addShippingAddress(
 // Listing helpers used by the admin UI + dashboard widget
 // ---------------------------------------------------------------------------
 
+// Address shape the review UI needs to render the per-address list and
+// run the address-match check. Kept narrow — full CustomerAddress carries
+// soft-delete + audit columns the card doesn't use.
+export type MatchedCustomerAddress = {
+  id: string;
+  kind: 'BILLING' | 'SHIPPING';
+  isDefault: boolean;
+  label: string | null;
+  line1: string;
+  line2: string | null;
+  city: string;
+  region: string;
+  postalCode: string;
+  country: string;
+};
+
 export type PendingReviewListItem = PendingOrderReview & {
   store: { id: string; name: string };
   matchedCustomer: {
@@ -278,8 +294,28 @@ export type PendingReviewListItem = PendingOrderReview & {
     name: string;
     primaryEmail: string | null;
     primaryPhone: string | null;
+    addresses: MatchedCustomerAddress[];
   } | null;
 };
+
+// Sub-select for the matched customer's addresses. Inlined at each
+// callsite (listPendingReviews + getReviewWithEnrichment + the
+// existingLink.customer include) — extracting to a const tripped
+// Prisma's readonly/mutable mismatch on the orderBy tuple, so duplication
+// is the simpler path here. Keep the three sites in lockstep when
+// extending the shape.
+const ADDRESS_SELECT_FIELDS = {
+  id: true,
+  kind: true,
+  isDefault: true,
+  label: true,
+  line1: true,
+  line2: true,
+  city: true,
+  region: true,
+  postalCode: true,
+  country: true,
+} as const;
 
 export async function listPendingReviews(
   db: PrismaClient,
@@ -302,6 +338,11 @@ export async function listPendingReviews(
           name: true,
           primaryEmail: true,
           primaryPhone: true,
+          addresses: {
+            where: { deletedAt: null },
+            select: ADDRESS_SELECT_FIELDS,
+            orderBy: [{ kind: 'asc' }, { isDefault: 'desc' }],
+          },
         },
       },
     },
@@ -352,6 +393,11 @@ export async function getReviewWithEnrichment(
           name: true,
           primaryEmail: true,
           primaryPhone: true,
+          addresses: {
+            where: { deletedAt: null },
+            select: ADDRESS_SELECT_FIELDS,
+            orderBy: [{ kind: 'asc' }, { isDefault: 'desc' }],
+          },
         },
       },
     },
@@ -361,12 +407,7 @@ export async function getReviewWithEnrichment(
   // Check whether a store-scoped link already exists for this Shopify customer.
   // If it does and points to a different ERP customer than the stale email match,
   // prefer the link — it was established by a previous operator action.
-  type CustomerShape = {
-    id: string;
-    name: string;
-    primaryEmail: string | null;
-    primaryPhone: string | null;
-  };
+  type CustomerShape = NonNullable<PendingReviewListItem['matchedCustomer']>;
 
   let effectiveCustomer: CustomerShape | null = review.matchedCustomer;
   let linkedCustomerOverride = false;
@@ -386,6 +427,11 @@ export async function getReviewWithEnrichment(
             name: true,
             primaryEmail: true,
             primaryPhone: true,
+            addresses: {
+              where: { deletedAt: null },
+              select: ADDRESS_SELECT_FIELDS,
+              orderBy: [{ kind: 'asc' }, { isDefault: 'desc' }],
+            },
           },
         },
       },
@@ -400,7 +446,7 @@ export async function getReviewWithEnrichment(
 
   let enrichment: MatchedCustomerEnrichment | null = null;
   if (effectiveCustomerId) {
-    const [orderCount, revenueAgg, openArAgg, addressCount] = await Promise.all([
+    const [orderCount, revenueAgg, openArAgg] = await Promise.all([
       db.salesOrder.count({
         where: { customerId: effectiveCustomerId, deletedAt: null },
       }),
@@ -416,9 +462,6 @@ export async function getReviewWithEnrichment(
           status: { in: ['OPEN', 'PARTIAL'] },
         },
       }),
-      db.customerAddress.count({
-        where: { customerId: effectiveCustomerId, deletedAt: null },
-      }),
     ]);
     const ar = new Prisma.Decimal(openArAgg._sum.total ?? 0)
       .minus(openArAgg._sum.amountPaid ?? 0)
@@ -427,7 +470,7 @@ export async function getReviewWithEnrichment(
       orderCount,
       lifetimeRevenue: (revenueAgg._sum.total ?? new Prisma.Decimal(0)).toString(),
       openArBalance: ar.toString(),
-      addressCount,
+      addressCount: effectiveCustomer?.addresses.length ?? 0,
     };
   }
 
