@@ -5,7 +5,7 @@ import { db } from '@/lib/db';
 import { getCreditMemo } from '@/server/services/creditMemos';
 import { listCustomers } from '@/server/services/customers';
 import { listCategories } from '@/server/services/creditMemoCategories';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { creditMemoScopeWhere } from '@/lib/permissions/scope';
 import {
   CmForm,
@@ -23,8 +23,9 @@ export default async function EditCreditMemoPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  // No credit_memos.edit permission exists; create gates edits too —
+  // matches the spec where DRAFT is the only editable status.
+  const actor = await requirePagePermission('credit_memos.create');
   const cm = await getCreditMemo(db, id, creditMemoScopeWhere(actor));
   if (!cm) notFound();
   // Only DRAFT is editable. Bounce to the detail page so the operator

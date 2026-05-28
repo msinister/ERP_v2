@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getAccountTransfer } from '@/server/services/accountTransfers';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -24,6 +25,7 @@ export default async function TransferDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('gl.view');
   const { id } = await params;
   const transfer = await getAccountTransfer(db, id);
   if (!transfer) notFound();

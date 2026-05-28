@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listWarehouses } from '@/server/services/warehouse';
 import type { VariantPickerOption } from '@/components/shared/variant-picker';
 import { BatchAdjustmentForm } from './_components/batch-form';
@@ -8,6 +9,7 @@ import { BatchAdjustmentForm } from './_components/batch-form';
 export const revalidate = 0;
 
 export default async function NewAdjustmentPage() {
+  await requirePagePermission('inventory_adjustments.create');
   const [warehouses, variants] = await Promise.all([
     listWarehouses(db),
     db.productVariant.findMany({

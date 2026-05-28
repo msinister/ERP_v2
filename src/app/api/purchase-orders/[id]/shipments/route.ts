@@ -2,13 +2,13 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { createPoShipmentInputSchema } from '@/lib/validation/purchasing';
 import { createPoShipment, listPoShipments } from '@/server/services/poShipments';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'vendors.view');
     const { id } = await ctx.params;
     const list = await listPoShipments(db, id);
     return NextResponse.json(list);
@@ -24,7 +24,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'vendors.edit');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     let body: unknown;

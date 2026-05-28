@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import type { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { inventoryValuation } from '@/server/services/reports/operational';
 import { listWarehouses } from '@/server/services/warehouse';
 import {
@@ -36,6 +37,7 @@ export default async function InventoryValuationPage({
 }: {
   searchParams: SearchParams;
 }) {
+  await requirePagePermission('reports.view_operational');
   const sp = await searchParams;
   const warehouseIdParam = pick(sp.warehouseId) ?? '';
 

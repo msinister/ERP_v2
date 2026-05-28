@@ -6,8 +6,7 @@ import { listPurchaseOrdersPaged } from '@/server/services/purchaseOrders';
 import { listVendors } from '@/server/services/vendors';
 import { listAllOrderTags } from '@/server/services/orderTags';
 import { getTableViewPref } from '@/server/services/userPreferences';
-import { redirect } from 'next/navigation';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { rollupShipmentStatus } from '@/lib/po/shipmentRollup';
 import { Button } from '@/components/ui/button';
 import {
@@ -72,8 +71,7 @@ export default async function PurchaseOrdersPage({
   const sort = pickString(sp.sort) === 'balance' ? ('balance' as const) : undefined;
   const dir = pickString(sp.dir) === 'asc' ? ('asc' as const) : ('desc' as const);
 
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission('vendors.view');
 
   const [vendors, allOrderTags, page, viewPref] = await Promise.all([
     // Active vendors only in the filter dropdown — historical POs for

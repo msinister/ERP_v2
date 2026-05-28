@@ -1,11 +1,11 @@
 import Link from 'next/link';
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { getCustomer } from '@/server/services/customers';
 import { listSalesReps } from '@/server/services/salesReps';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { customerScopeWhere } from '@/lib/permissions/scope';
 import {
   CustomerForm,
@@ -20,8 +20,7 @@ export default async function EditCustomerPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission('customers.edit');
   const [customer, salesReps, paymentTerms] = await Promise.all([
     getCustomer(db, id, customerScopeWhere(actor)),
     listSalesReps(db, { active: true }),

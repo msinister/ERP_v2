@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import {
   BillPaymentStatus,
@@ -11,7 +10,7 @@ import { listBillsPaged } from '@/server/services/bills';
 import { listVendors } from '@/server/services/vendors';
 import { listAllOrderTags } from '@/server/services/orderTags';
 import { getTableViewPref } from '@/server/services/userPreferences';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { Button } from '@/components/ui/button';
 import { BillsFilters, type VendorOption } from './_components/filters';
 import { BillsTable, type BillRowData } from './_components/table';
@@ -79,8 +78,7 @@ export default async function BillsPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission('bills.view');
 
   const [vendors, allOrderTags, page, viewPref] = await Promise.all([
     // Active vendors only in the filter dropdown — historical bills for

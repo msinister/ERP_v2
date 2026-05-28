@@ -5,7 +5,7 @@ import { db } from '@/lib/db';
 import { listCustomers } from '@/server/services/customers';
 import { listWarehouses } from '@/server/services/warehouse';
 import { listSalesReps } from '@/server/services/salesReps';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { hasPermission } from '@/lib/permissions/actor';
 import { salesOrderScopeWhere } from '@/lib/permissions/scope';
 import {
@@ -30,8 +30,7 @@ export default async function EditSalesOrderPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission('sales_orders.edit');
   const so = await db.salesOrder.findFirst({
     where: { AND: [{ id, deletedAt: null }, salesOrderScopeWhere(actor)] },
     include: {

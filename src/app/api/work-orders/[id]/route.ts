@@ -5,7 +5,7 @@ import {
   getWorkOrder,
   updateWorkOrder,
 } from '@/server/services/workOrders';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -13,7 +13,7 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(req: Request, ctx: Ctx) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'work_orders.view');
     const { id } = await ctx.params;
     const wo = await getWorkOrder(db, id);
     if (!wo) {
@@ -31,7 +31,7 @@ export async function GET(req: Request, ctx: Ctx) {
 //   { laborCost?: string|null, notes?: string|null }
 export async function PATCH(req: Request, ctx: Ctx) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'work_orders.create');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     let body: unknown;

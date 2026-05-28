@@ -1,5 +1,6 @@
 import { AccountType } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listAccounts } from '@/server/services/glAccounts';
 import { listAccountTransfersPaged } from '@/server/services/accountTransfers';
 import { BillsPagination } from '../bills/_components/pagination';
@@ -40,6 +41,7 @@ export default async function TransfersPage({
 }: {
   searchParams: SearchParams;
 }) {
+  await requirePagePermission('gl.view');
   const sp = await searchParams;
   const fromAccountId = pickString(sp.fromAccountId);
   const toAccountId = pickString(sp.toAccountId);

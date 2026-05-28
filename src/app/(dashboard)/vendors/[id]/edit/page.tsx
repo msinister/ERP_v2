@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getVendor } from '@/server/services/vendors';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
 import {
@@ -16,6 +17,7 @@ export default async function EditVendorPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('vendors.edit');
   const { id } = await params;
   const [vendor, paymentTerms] = await Promise.all([
     getVendor(db, id),

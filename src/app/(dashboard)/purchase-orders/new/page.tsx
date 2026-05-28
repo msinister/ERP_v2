@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listVendors } from '@/server/services/vendors';
 import { listWarehouses } from '@/server/services/warehouse';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
@@ -17,6 +18,7 @@ import {
 export const revalidate = 0;
 
 export default async function NewPurchaseOrderPage() {
+  await requirePagePermission('vendors.create');
   // Pilot scale: dozens of vendors, dozens of variants, a few hundred
   // catalog rows max. One fetch each — no per-line API search.
   const [vendors, warehouses, variants, catalogRows, paymentTerms] =

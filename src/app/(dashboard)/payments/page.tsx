@@ -8,10 +8,9 @@ import {
 import { listCustomers } from '@/server/services/customers';
 import { listSalesReps } from '@/server/services/salesReps';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getTableViewPref } from '@/server/services/userPreferences';
 import { customerScopeWhere, paymentScopeWhere } from '@/lib/permissions/scope';
-import { redirect } from 'next/navigation';
 import { PaymentsFilters, type CustomerOption } from './_components/filters';
 import { PaymentsTable, type PaymentRowData } from './_components/table';
 import { PaymentsPagination } from './_components/pagination';
@@ -57,8 +56,10 @@ export default async function PaymentsPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission([
+    'payments.view_all',
+    'payments.view_own',
+  ]);
   const scope = paymentScopeWhere(actor);
 
   const [customers, page, salesReps, paymentTerms, viewPref] = await Promise.all([

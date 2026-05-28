@@ -1,9 +1,8 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft, Plus } from 'lucide-react';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { Button } from '@/components/ui/button';
 import { UsersFilters } from './_components/filters';
 import { UsersTable, type UserRowData } from './_components/table';
@@ -25,8 +24,7 @@ export default async function AdminUsersPage({
 }: {
   searchParams: SearchParams;
 }) {
-  const me = await getCurrentUser();
-  if (!me?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.edit_users');
 
   const sp = await searchParams;
   const q = pickString(sp.q);

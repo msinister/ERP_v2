@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listSalesReps } from '@/server/services/salesReps';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
 import { CustomerForm } from '../_components/customer-form';
@@ -10,6 +11,7 @@ import { CustomerForm } from '../_components/customer-form';
 export const revalidate = 0;
 
 export default async function NewCustomerPage() {
+  await requirePagePermission('customers.create');
   const [salesReps, paymentTerms] = await Promise.all([
     listSalesReps(db, { active: true }),
     listPaymentTerms(db, { active: true }),

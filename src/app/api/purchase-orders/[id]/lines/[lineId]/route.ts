@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { updatePurchaseOrderLineFieldsInputSchema } from '@/lib/validation/purchasing';
 import { updatePurchaseOrderLineFields } from '@/server/services/purchaseOrders';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -17,7 +17,7 @@ export async function PATCH(
   ctx: { params: Promise<{ id: string; lineId: string }> },
 ) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'vendors.edit');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id, lineId } = await ctx.params;
     let body: unknown;

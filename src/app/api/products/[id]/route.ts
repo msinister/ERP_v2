@@ -7,7 +7,7 @@ import {
   getProduct,
   updateProduct,
 } from '@/server/services/products';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -15,7 +15,7 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(req: Request, ctx: Ctx) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'products.view');
     const { id } = await ctx.params;
     const product = await getProduct(db, id);
     if (!product) {
@@ -31,7 +31,7 @@ export async function GET(req: Request, ctx: Ctx) {
 
 export async function PUT(req: Request, ctx: Ctx) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'products.edit');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
 
@@ -77,7 +77,7 @@ export async function PUT(req: Request, ctx: Ctx) {
 
 export async function DELETE(req: Request, ctx: Ctx) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'products.delete');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
 

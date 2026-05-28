@@ -1,8 +1,7 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listPeriods } from '@/server/services/fiscalPeriods';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -19,8 +18,7 @@ import { PeriodRowActions } from './_components/period-row-actions';
 export const revalidate = 0;
 
 export default async function AdminPeriodsPage() {
-  const me = await getCurrentUser();
-  if (!me?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('gl.close_period');
 
   // Periods auto-create when JEs post against a new month; the admin
   // list shows everything that exists. Sorted newest-first by the

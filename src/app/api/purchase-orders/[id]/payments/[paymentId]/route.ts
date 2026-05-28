@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { voidPoPaymentInputSchema } from '@/lib/validation/purchasing';
 import { voidPoPayment } from '@/server/services/poPayments';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -15,7 +15,7 @@ export async function DELETE(
   ctx: { params: Promise<{ id: string; paymentId: string }> },
 ) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'vendors.edit');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id, paymentId } = await ctx.params;
     // DELETE carries a JSON body with the reason. Tolerate an empty body —

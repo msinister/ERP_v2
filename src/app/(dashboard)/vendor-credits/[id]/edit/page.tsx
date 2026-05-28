@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getVendorCredit } from '@/server/services/vendorCredits';
 import { listVendors } from '@/server/services/vendors';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
@@ -18,6 +19,7 @@ export default async function EditVendorCreditPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('bills.create');
   const { id } = await params;
   const [vc, vendors, paymentTerms] = await Promise.all([
     getVendorCredit(db, id),

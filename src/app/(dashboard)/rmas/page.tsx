@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { Prisma, RmaStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
@@ -7,7 +6,7 @@ import { listRmasPaged } from '@/server/services/rmas';
 import { listCustomers } from '@/server/services/customers';
 import { listAllOrderTags } from '@/server/services/orderTags';
 import { getTableViewPref } from '@/server/services/userPreferences';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { rmaScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
 import {
@@ -50,8 +49,10 @@ export default async function RmasPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission([
+    'rmas.view_all',
+    'rmas.view_own',
+  ]);
   const scope = rmaScopeWhere(actor);
 
   const [customers, allOrderTags, page, viewPref] = await Promise.all([

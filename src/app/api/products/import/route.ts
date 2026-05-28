@@ -6,7 +6,7 @@ import {
   IMPORT_MAX_BATCH,
   type ImportRowInput,
 } from '@/server/services/productImport';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -44,7 +44,7 @@ const bodySchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'products.create');
     const auditCtx = auditCtxFromRequest(req, user);
     let body: unknown;
     try {

@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { Prisma, SalesOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
@@ -15,7 +14,7 @@ import {
   computeLineBillableTotal,
   effectiveBillableQty,
 } from '@/lib/sales/lineTotals';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { hasPermission } from '@/lib/permissions/actor';
 import { salesOrderScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
@@ -102,8 +101,10 @@ export default async function SalesOrdersPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission([
+    'sales_orders.view_all',
+    'sales_orders.view_own',
+  ]);
   const scope = salesOrderScopeWhere(actor);
   // Gates the Total COGS column + cost data end-to-end: when false, the
   // service nulls invoice.cogsAtClose on every row and the customizer

@@ -1,8 +1,7 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listAccounts } from '@/server/services/glAccounts';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -19,8 +18,7 @@ import { AccountRowActions } from './_components/account-row-actions';
 export const revalidate = 0;
 
 export default async function AdminGlAccountsPage() {
-  const me = await getCurrentUser();
-  if (!me?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.edit_coa');
 
   // Pilot scale: a few dozen GL accounts. One fetch covers active +
   // inactive (no `active` filter passed) so the table can show

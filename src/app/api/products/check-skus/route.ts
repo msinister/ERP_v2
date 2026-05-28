@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { db } from '@/lib/db';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 // Returns which of the supplied SKUs already exist (non-deleted). Used by
@@ -13,7 +13,7 @@ const bodySchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'products.view');
     let body: unknown;
     try {
       body = await req.json();

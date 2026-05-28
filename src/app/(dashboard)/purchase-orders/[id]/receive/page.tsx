@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import {
   ReceiveForm,
   type ReceiveLineSeed,
@@ -15,6 +16,7 @@ export default async function ReceivePurchaseOrderPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('vendors.receive');
   const { id } = await params;
   const po = await db.purchaseOrder.findFirst({
     where: { id, deletedAt: null },

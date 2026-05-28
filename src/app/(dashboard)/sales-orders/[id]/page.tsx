@@ -1,4 +1,4 @@
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import {
@@ -6,7 +6,7 @@ import {
   computeSalesOrderShippedTotal,
   computeSalesOrderTotal,
 } from '@/lib/ar/openSos';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { hasPermission } from '@/lib/permissions/actor';
 import { salesOrderScopeWhere } from '@/lib/permissions/scope';
 import {
@@ -49,8 +49,10 @@ export default async function SalesOrderDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission([
+    'sales_orders.view_all',
+    'sales_orders.view_own',
+  ]);
   const so = await db.salesOrder.findFirst({
     // AND the data-scope fragment so a "view own" user can't open an SO
     // for another rep's customer by URL.

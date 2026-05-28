@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { ProductThumbnail } from '@/components/shared/product-thumbnail';
 import { computeWac, getLastPurchaseCost } from '@/server/services/wac';
 import { listTagsForProduct } from '@/server/services/productTags';
@@ -46,6 +47,7 @@ export default async function ProductDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('products.view');
   const { id } = await params;
   const product = await db.product.findUnique({
     where: { id },

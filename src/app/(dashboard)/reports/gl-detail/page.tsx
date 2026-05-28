@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { glDetail } from '@/server/services/reports/financial';
 import { listAccounts } from '@/server/services/glAccounts';
 import {
@@ -38,6 +39,7 @@ export default async function GlDetailPage({
 }: {
   searchParams: SearchParams;
 }) {
+  await requirePagePermission('reports.view_financial');
   const sp = await searchParams;
   const todayStr = formatDateInput(todayUtc());
   const yearStartStr = formatDateInput(yearStartUtc());

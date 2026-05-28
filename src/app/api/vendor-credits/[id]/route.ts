@@ -6,13 +6,13 @@ import {
   softDeleteVendorCredit,
   updateVendorCredit,
 } from '@/server/services/vendorCredits';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'bills.view');
     const { id } = await ctx.params;
     const vc = await getVendorCredit(db, id);
     if (!vc) return NextResponse.json({ error: 'not found' }, { status: 404 });
@@ -29,7 +29,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'bills.create');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     let body: unknown;
@@ -59,7 +59,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
 export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'bills.void');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     const vc = await softDeleteVendorCredit(db, id, auditCtx);

@@ -2,13 +2,13 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { cancelVendorCreditInputSchema } from '@/lib/validation/ap';
 import { cancelVendorCredit } from '@/server/services/vendorCredits';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'bills.void');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     let body: unknown;

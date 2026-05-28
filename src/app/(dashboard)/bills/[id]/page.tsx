@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { AccountType } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listAccounts } from '@/server/services/glAccounts';
 import { resolveLineImageUrl } from '@/lib/products/lineItemImage';
 import { BillHeader } from './_components/header';
@@ -41,6 +42,7 @@ export default async function BillDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('bills.view');
   const { id } = await params;
 
   // Single round-trip pulls bill + vendor + lines (with variant or

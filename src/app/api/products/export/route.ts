@@ -4,7 +4,7 @@ import {
   listProductsForExport,
   type ProductStatusFilter,
 } from '@/server/services/products';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 // Returns ALL products matching the list filters (status / brand / category /
@@ -17,7 +17,7 @@ function isStatus(v: string | null): v is ProductStatusFilter {
 
 export async function GET(req: Request) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'products.view');
     const url = new URL(req.url);
     const statusRaw = url.searchParams.get('status');
     const status: ProductStatusFilter = isStatus(statusRaw) ? statusRaw : 'active';

@@ -6,13 +6,13 @@ import {
   createVendorCreditDraft,
   listVendorCreditsPaged,
 } from '@/server/services/vendorCredits';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 export async function GET(req: Request) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'bills.view');
     const url = new URL(req.url);
     const vendorId = url.searchParams.get('vendorId') ?? undefined;
     const statusParam = url.searchParams.get('status');
@@ -48,7 +48,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'bills.create');
     const auditCtx = auditCtxFromRequest(req, user);
     let body: unknown;
     try {

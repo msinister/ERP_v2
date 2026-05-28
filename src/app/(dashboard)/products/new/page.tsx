@@ -1,10 +1,12 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { ProductForm } from '../_components/product-form';
 
 export const revalidate = 0;
 
-export default function NewProductPage() {
+export default async function NewProductPage() {
+  await requirePagePermission('products.create');
   return (
     <div className="space-y-6">
       <div className="space-y-3">

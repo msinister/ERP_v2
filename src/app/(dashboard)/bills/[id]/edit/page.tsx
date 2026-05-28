@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { AccountType } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getBill } from '@/server/services/bills';
 import { listVendors } from '@/server/services/vendors';
 import { listAccounts } from '@/server/services/glAccounts';
@@ -23,6 +24,7 @@ export default async function EditBillPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('bills.create');
   const { id } = await params;
   const [bill, vendors, variants, allAccounts, catalogRows, paymentTerms] =
     await Promise.all([

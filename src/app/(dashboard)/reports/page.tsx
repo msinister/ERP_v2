@@ -10,6 +10,7 @@ import {
   Users,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 type ReportCard = {
@@ -73,7 +74,13 @@ const OPERATIONAL: ReportCard[] = [
   },
 ];
 
-export default function ReportsHubPage() {
+export default async function ReportsHubPage() {
+  // ANY-of: either flavor of reports access unlocks the hub. The
+  // individual reports gate themselves with their specific type.
+  await requirePagePermission([
+    'reports.view_financial',
+    'reports.view_operational',
+  ]);
   return (
     <div className="space-y-6">
       <div className="space-y-1">

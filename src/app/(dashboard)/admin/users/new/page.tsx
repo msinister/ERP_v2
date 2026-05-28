@@ -1,14 +1,12 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { UserForm } from '../_components/user-form';
 
 export const revalidate = 0;
 
 export default async function NewUserPage() {
-  const me = await getCurrentUser();
-  if (!me?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.edit_users');
 
   return (
     <div className="space-y-6">

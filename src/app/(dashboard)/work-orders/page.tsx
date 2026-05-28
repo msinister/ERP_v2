@@ -1,12 +1,11 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Wrench } from 'lucide-react';
 import { WorkOrderStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { listWorkOrdersPaged } from '@/server/services/workOrders';
 import { listAllOrderTags } from '@/server/services/orderTags';
 import { getTableViewPref } from '@/server/services/userPreferences';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { formatStatusLabel } from '@/lib/format';
 import { WorkOrderTagFilter } from './_components/tag-filter';
 import { WorkOrderSearchInput } from './_components/search-input';
@@ -43,8 +42,7 @@ export default async function WorkOrdersPage({
   const tagsParam = pickString(sp.tags);
   const tagIds = tagsParam ? tagsParam.split(',').filter(Boolean) : undefined;
 
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission('work_orders.view');
 
   const [allOrderTags, page, viewPref] = await Promise.all([
     listAllOrderTags(db),

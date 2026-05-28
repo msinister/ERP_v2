@@ -3,7 +3,7 @@ import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { productCreateSchema } from '@/lib/validation/product';
 import { createProduct, listProducts } from '@/server/services/products';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -11,7 +11,7 @@ const MAX_TAKE = 200;
 
 export async function GET(req: Request) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'products.view');
     const url = new URL(req.url);
     const skip = Math.max(0, Number(url.searchParams.get('skip') ?? 0) || 0);
     const takeRaw = Number(url.searchParams.get('take') ?? 50) || 50;
@@ -29,7 +29,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'products.create');
     const auditCtx = auditCtxFromRequest(req, user);
     let body: unknown;
     try {

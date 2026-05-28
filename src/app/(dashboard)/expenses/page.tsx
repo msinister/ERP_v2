@@ -1,5 +1,6 @@
 import { AccountType } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listAccounts } from '@/server/services/glAccounts';
 import { listVendors } from '@/server/services/vendors';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
@@ -49,6 +50,7 @@ export default async function ExpensesPage({
 }: {
   searchParams: SearchParams;
 }) {
+  await requirePagePermission('bills.view');
   const sp = await searchParams;
   const vendorId = pickString(sp.vendorId);
   const expenseAccountId = pickString(sp.category);

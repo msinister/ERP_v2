@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { AccountType } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listVendors } from '@/server/services/vendors';
 import { listAccounts } from '@/server/services/glAccounts';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
@@ -16,6 +17,7 @@ import {
 export const revalidate = 0;
 
 export default async function NewBillPage() {
+  await requirePagePermission('bills.create');
   // Pilot scale: a few dozen vendors, a few dozen variants, a few
   // dozen GL accounts. Fetch all active in one go — no per-line API
   // search. Vendor catalog rows (VendorProduct) provide the picker's

@@ -1,8 +1,7 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import {
   Card,
   CardContent,
@@ -44,8 +43,7 @@ type NegativeInventoryOnDisk = { allowed: boolean };
 type OverShippingPolicyOnDisk = { policy: OverShippingPolicyValue };
 
 export default async function AdminSettingsPage() {
-  const me = await getCurrentUser();
-  if (!me?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.edit_settings');
 
   const rows = await db.setting.findMany({
     where: {

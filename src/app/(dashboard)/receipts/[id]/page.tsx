@@ -1,6 +1,7 @@
 import { Prisma } from '@/generated/tenant';
 import { notFound } from 'next/navigation';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import {
   Card,
   CardContent,
@@ -28,6 +29,7 @@ export default async function ReceiptDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('vendors.view');
   const { id } = await params;
 
   // Single round-trip pulling the receipt, its lines (with variant +

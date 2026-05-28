@@ -6,6 +6,7 @@ import {
   Prisma,
 } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listAdjustmentsPaged } from '@/server/services/inventoryAdjustments';
 import { listWarehouses } from '@/server/services/warehouse';
 import { Button } from '@/components/ui/button';
@@ -43,6 +44,7 @@ export default async function InventoryAdjustmentsPage({
 }: {
   searchParams: SearchParams;
 }) {
+  await requirePagePermission('inventory_adjustments.view');
   const sp = await searchParams;
   const status = isStatus(pick(sp.status)) ? (pick(sp.status) as AdjustmentStatus) : undefined;
   const category = isCategory(pick(sp.category))

@@ -1,10 +1,12 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { ImportWizard } from './_components/import-wizard';
 
 export const metadata = { title: 'Import products' };
 
-export default function ProductImportPage() {
+export default async function ProductImportPage() {
+  await requirePagePermission('products.create');
   return (
     <div className="space-y-6">
       <div className="space-y-3">

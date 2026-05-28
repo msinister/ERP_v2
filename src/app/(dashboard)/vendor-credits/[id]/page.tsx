@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { VendorCreditHeader } from './_components/header';
 import {
   VendorCreditLinesTable,
@@ -27,6 +28,7 @@ export default async function VendorCreditDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('bills.view');
   const { id } = await params;
 
   const vc = await db.vendorCredit.findFirst({

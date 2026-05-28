@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { confirmBill } from '@/server/services/bills';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'bills.confirm');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     const bill = await confirmBill(db, id, auditCtx);

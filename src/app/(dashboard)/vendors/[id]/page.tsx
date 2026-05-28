@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import { notFound } from 'next/navigation';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getVendor } from '@/server/services/vendors';
 import {
   Tabs,
@@ -34,6 +35,7 @@ export default async function VendorDetailPage({
   // current filter/page.
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requirePagePermission('vendors.view');
   const { id } = await params;
   const sp = await searchParams;
   const vendor = await getVendor(db, id);

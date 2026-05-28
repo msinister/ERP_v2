@@ -1,10 +1,10 @@
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { db } from '@/lib/db';
 import {
   lineItemImageVariantSelect,
   resolveLineImageUrl,
 } from '@/lib/products/lineItemImage';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { creditMemoScopeWhere } from '@/lib/permissions/scope';
 import { CreditMemoHeader } from './_components/header';
 import {
@@ -33,8 +33,10 @@ export default async function CreditMemoDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission([
+    'credit_memos.view_all',
+    'credit_memos.view_own',
+  ]);
 
   const cm = await db.creditMemo.findFirst({
     where: { AND: [{ id, deletedAt: null }, creditMemoScopeWhere(actor)] },

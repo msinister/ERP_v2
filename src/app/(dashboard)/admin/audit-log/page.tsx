@@ -1,9 +1,8 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { AuditAction, Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { AuditLogFilters, type UserOption } from './_components/filters';
 import { AuditLogTable, type AuditRowData } from './_components/table';
 import { AuditLogPagination } from './_components/pagination';
@@ -42,8 +41,7 @@ export default async function AdminAuditLogPage({
 }: {
   searchParams: SearchParams;
 }) {
-  const me = await getCurrentUser();
-  if (!me?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.view_audit_log');
 
   const sp = await searchParams;
   const entityType = pickString(sp.entityType);

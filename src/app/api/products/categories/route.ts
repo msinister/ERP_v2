@@ -4,7 +4,7 @@ import {
   listProductBrands,
   listProductCategories,
 } from '@/server/services/products';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 // Distinct existing product categories + brands. Powers the inline
@@ -13,7 +13,7 @@ import { authErrorResponse } from '@/lib/auth/errors';
 // VariantPicker. Pilot data volume is small enough that DISTINCT is cheap.
 export async function GET(req: Request) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'products.view');
     const [categories, brands] = await Promise.all([
       listProductCategories(db),
       listProductBrands(db),

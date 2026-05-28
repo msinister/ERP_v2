@@ -1,8 +1,8 @@
 import Link from 'next/link';
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getSalesRep } from '@/server/services/salesReps';
 import { SalesRepForm } from '../../_components/sales-rep-form';
 
@@ -13,8 +13,7 @@ export default async function EditSalesRepPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const me = await getCurrentUser();
-  if (!me?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.edit_users');
 
   const { id } = await params;
   const rep = await getSalesRep(db, id);

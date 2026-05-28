@@ -1,8 +1,7 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft, Inbox } from 'lucide-react';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import {
   getReviewWithEnrichment,
   listPendingReviews,
@@ -31,8 +30,10 @@ export default async function PendingOrdersPage({
 }: {
   searchParams: Promise<{ status?: string }>;
 }) {
-  const user = await getCurrentUser();
-  if (!user?.isSuperAdmin) redirect('/dashboard');
+  // Pending order reviews are a sales-orders workflow surface even
+  // though they live under /admin — gate on view_all OR view_own so
+  // any sales rep with order visibility can triage.
+  await requirePagePermission(['sales_orders.view_all', 'sales_orders.view_own']);
 
   const sp = await searchParams;
   const status: Status = isStatus(sp.status) ? sp.status : 'PENDING';

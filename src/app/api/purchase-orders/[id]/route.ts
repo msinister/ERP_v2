@@ -6,13 +6,13 @@ import {
   softDeletePurchaseOrder,
   updatePurchaseOrder,
 } from '@/server/services/purchaseOrders';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'vendors.view');
     const { id } = await ctx.params;
     const po = await getPurchaseOrder(db, id);
     if (!po) return NextResponse.json({ error: 'not found' }, { status: 404 });
@@ -29,7 +29,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'vendors.edit');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     let body: unknown;
@@ -59,7 +59,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
 export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'vendors.edit');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     const po = await softDeletePurchaseOrder(db, id, auditCtx);

@@ -1,11 +1,11 @@
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import {
   lineItemImageVariantSelect,
   resolveLineImageUrl,
 } from '@/lib/products/lineItemImage';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { rmaScopeWhere } from '@/lib/permissions/scope';
 import {
   getRestockingFeeDefault,
@@ -34,8 +34,10 @@ export default async function RmaDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission([
+    'rmas.view_all',
+    'rmas.view_own',
+  ]);
 
   const [rma, restockingDefault, categories] = await Promise.all([
     db.rma.findFirst({

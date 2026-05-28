@@ -1,12 +1,11 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { listCustomers } from '@/server/services/customers';
 import { listCategories } from '@/server/services/creditMemoCategories';
 import { listSalesReps } from '@/server/services/salesReps';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { customerScopeWhere } from '@/lib/permissions/scope';
 import {
   CmForm,
@@ -18,8 +17,7 @@ import {
 export const revalidate = 0;
 
 export default async function NewCreditMemoPage() {
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission('credit_memos.create');
   // Pilot scale: a few dozen customers, a few dozen variants. One fetch
   // each — no per-line API search. Invoices for the picked customer
   // load client-side via /api/invoices?customerId=… so we don't pull

@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import {
   Users,
   Sliders,
@@ -12,7 +11,7 @@ import {
   ShoppingBag,
   type LucideIcon,
 } from 'lucide-react';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePageAnyPermissionInModule } from '@/lib/permissions/requirePagePermission';
 import {
   Card,
   CardContent,
@@ -95,8 +94,11 @@ const TILES: AdminTile[] = [
 ];
 
 export default async function AdminPage() {
-  const user = await getCurrentUser();
-  if (!user?.isSuperAdmin) redirect('/dashboard');
+  // Any admin.* permission unlocks the index. Each tile links to a page
+  // that gates itself with its own specific permission, so non-super
+  // users with (say) only admin.view_audit_log land here and see every
+  // tile but can only open the ones their role grants.
+  await requirePageAnyPermissionInModule('admin');
 
   return (
     <div className="space-y-6">

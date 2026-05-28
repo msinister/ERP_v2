@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
 import { VendorForm } from '../_components/vendor-form';
 
@@ -10,6 +11,7 @@ import { VendorForm } from '../_components/vendor-form';
 export const revalidate = 0;
 
 export default async function NewVendorPage() {
+  await requirePagePermission('vendors.create');
   const paymentTerms = await listPaymentTerms(db, { active: true });
 
   return (

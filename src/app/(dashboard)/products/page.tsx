@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Plus, Upload } from 'lucide-react';
 import { db } from '@/lib/db';
 import {
@@ -9,7 +8,7 @@ import {
   type ProductStatusFilter,
 } from '@/server/services/products';
 import { listAllTags } from '@/server/services/productTags';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { hasPermission } from '@/lib/permissions/actor';
 import { getTableViewPref } from '@/server/services/userPreferences';
 import { Button } from '@/components/ui/button';
@@ -49,8 +48,7 @@ export default async function ProductsPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission('products.view');
   // Gates the WAC column + cost data end-to-end: when false, the service
   // doesn't compute WAC, the row carries null, and the customizer never
   // offers the column.

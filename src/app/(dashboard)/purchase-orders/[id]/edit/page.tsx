@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getPurchaseOrder } from '@/server/services/purchaseOrders';
 import { listVendors } from '@/server/services/vendors';
 import { listWarehouses } from '@/server/services/warehouse';
@@ -22,6 +23,7 @@ export default async function EditPurchaseOrderPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('vendors.edit');
   const { id } = await params;
   const [po, vendors, warehouses, variants, catalogRows, paymentTerms] =
     await Promise.all([

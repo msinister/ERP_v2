@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { journalReport } from '@/server/services/reports/financial';
 import {
   Table,
@@ -39,6 +40,7 @@ export default async function JournalReportPage({
 }: {
   searchParams: SearchParams;
 }) {
+  await requirePagePermission('reports.view_financial');
   const sp = await searchParams;
   const todayStr = formatDateInput(todayUtc());
   const yearStartStr = formatDateInput(yearStartUtc());

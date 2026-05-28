@@ -3,13 +3,14 @@ import { db } from '@/lib/db';
 import { RmaStatus } from '@/generated/tenant';
 import { createRmaInputSchema } from '@/lib/validation/invoicing';
 import { createRma, listRmas } from '@/server/services/rmas';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
+import { assertCustomerInScope } from '@/lib/permissions/scope';
 
 export async function GET(req: Request) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'rmas.view_all');
     const url = new URL(req.url);
     const customerId = url.searchParams.get('customerId') ?? undefined;
     const invoiceId = url.searchParams.get('invoiceId') ?? undefined;
@@ -44,8 +45,8 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const user = await requireAuth(req);
-    const auditCtx = auditCtxFromRequest(req, user);
+    const actor = await requirePermission(req, 'rmas.approve');
+    const auditCtx = auditCtxFromRequest(req, actor);
     let body: unknown;
     try {
       body = await req.json();
@@ -59,6 +60,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
+    await assertCustomerInScope(db, actor, parsed.data.customerId);
     const rma = await createRma(db, parsed.data, auditCtx);
     return NextResponse.json(rma, { status: 201 });
   } catch (e) {

@@ -6,7 +6,7 @@ import {
   createWorkOrder,
   listWorkOrdersPaged,
 } from '@/server/services/workOrders';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -14,7 +14,7 @@ import { authErrorResponse } from '@/lib/auth/errors';
 // filters + skip/take pagination. Defaults to 50 rows.
 export async function GET(req: Request) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'work_orders.view');
     const url = new URL(req.url);
     const statusRaw = url.searchParams.get('status');
     const status =
@@ -49,7 +49,7 @@ export async function GET(req: Request) {
 //     laborCost?: string|null, notes? }
 export async function POST(req: Request) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'work_orders.create');
     const auditCtx = auditCtxFromRequest(req, user);
     let body: unknown;
     try {

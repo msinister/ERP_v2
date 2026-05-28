@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { completeWorkOrderInputSchema } from '@/lib/validation/workOrders';
 import { completeWorkOrder } from '@/server/services/workOrders';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -16,7 +16,7 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'work_orders.complete');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     let body: unknown;

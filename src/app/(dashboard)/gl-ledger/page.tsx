@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { AccountType } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import {
   listGlAccountsForLedger,
   listMoneyAccountsWithBalances,
@@ -81,6 +82,7 @@ export default async function GlLedgerPage({
 }: {
   searchParams: SearchParams;
 }) {
+  await requirePagePermission('gl.view');
   const sp = await searchParams;
   const accountParam = pickString(sp.account);
   const dateFrom = parseDateInput(pickString(sp.dateFrom), false);

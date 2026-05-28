@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import {
   ProductForm,
   type ProductFormValues,
@@ -31,6 +32,7 @@ export default async function EditProductPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('products.edit');
   const { id } = await params;
   const product = await db.product.findUnique({ where: { id } });
   if (!product) notFound();

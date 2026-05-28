@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { salesByCustomer } from '@/server/services/reports/operational';
 import {
   Table,
@@ -37,6 +38,7 @@ export default async function SalesByCustomerPage({
 }: {
   searchParams: SearchParams;
 }) {
+  await requirePagePermission('reports.view_operational');
   const sp = await searchParams;
   const todayStr = formatDateInput(todayUtc());
   const yearStartStr = formatDateInput(yearStartUtc());

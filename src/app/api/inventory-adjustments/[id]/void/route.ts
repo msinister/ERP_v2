@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { voidAdjustmentInputSchema } from '@/lib/validation/inventoryAdjustments';
 import { voidAdjustment } from '@/server/services/inventoryAdjustments';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -11,7 +11,7 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'inventory_adjustments.void');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     let body: unknown;

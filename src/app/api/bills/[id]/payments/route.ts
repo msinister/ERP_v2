@@ -2,13 +2,13 @@ import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { recordBillPaymentInputSchema } from '@/lib/validation/ap';
 import { listBillPayments, recordBillPayment } from '@/server/services/billPayments';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    await requireAuth(req);
+    await requirePermission(req, 'bills.view');
     const { id } = await ctx.params;
     const list = await listBillPayments(db, { billId: id });
     return NextResponse.json(list);
@@ -24,7 +24,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'bills.record_payment');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id } = await ctx.params;
     let body: unknown;

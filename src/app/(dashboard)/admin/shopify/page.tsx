@@ -1,8 +1,7 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listStores } from '@/server/services/shopifyStores';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -18,8 +17,7 @@ import { CreateStoreButton } from './_components/create-store-dialog';
 export const revalidate = 0;
 
 export default async function ShopifyStoresPage() {
-  const user = await getCurrentUser();
-  if (!user?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.edit_settings');
 
   const stores = await listStores(db);
 

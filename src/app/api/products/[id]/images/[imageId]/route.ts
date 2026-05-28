@@ -5,7 +5,7 @@ import {
   deleteProductImage,
   setPrimaryProductImage,
 } from '@/server/services/productImages';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -19,7 +19,7 @@ const patchSchema = z.object({
 
 export async function PATCH(req: Request, ctx: Ctx) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'products.edit');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id, imageId } = await ctx.params;
     let body: unknown;
@@ -49,7 +49,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
 export async function DELETE(req: Request, ctx: Ctx) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'products.edit');
     const auditCtx = auditCtxFromRequest(req, user);
     const { imageId } = await ctx.params;
     const image = await deleteProductImage(db, imageId, auditCtx);

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listWarehouses } from '@/server/services/warehouse';
 import {
   Card,
@@ -20,6 +21,7 @@ export default async function AddPoLinesPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('vendors.edit');
   const { id } = await params;
 
   const po = await db.purchaseOrder.findFirst({

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listVendors } from '@/server/services/vendors';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
 import { VcForm, type VendorOption } from '../_components/vc-form';
@@ -8,6 +9,7 @@ import { VcForm, type VendorOption } from '../_components/vc-form';
 export const revalidate = 0;
 
 export default async function NewVendorCreditPage() {
+  await requirePagePermission('bills.create');
   const [vendors, paymentTerms] = await Promise.all([
     listVendors(db, { active: true, take: 1000 }),
     listPaymentTerms(db, { active: true }),

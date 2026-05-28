@@ -1,14 +1,12 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { RoleForm } from '../_components/role-form';
 
 export const revalidate = 0;
 
 export default async function NewRolePage() {
-  const me = await getCurrentUser();
-  if (!me?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.edit_roles');
 
   return (
     <div className="space-y-6">

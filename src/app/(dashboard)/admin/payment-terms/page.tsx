@@ -1,8 +1,7 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -19,8 +18,7 @@ import { TermRowActions } from './_components/term-row-actions';
 export const revalidate = 0;
 
 export default async function AdminPaymentTermsPage() {
-  const me = await getCurrentUser();
-  if (!me?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.edit_settings');
 
   const terms = await listPaymentTerms(db, { take: 500 });
 

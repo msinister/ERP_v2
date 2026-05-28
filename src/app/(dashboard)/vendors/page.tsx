@@ -1,12 +1,11 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { db } from '@/lib/db';
 import { VendorType } from '@/generated/tenant';
 import { listVendorsPaged } from '@/server/services/vendors';
 import { apBalanceForVendor } from '@/server/services/ap';
 import { getTableViewPref } from '@/server/services/userPreferences';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { Button } from '@/components/ui/button';
 import { VendorsFilters } from './_components/filters';
 import { VendorsTable, type VendorRowData } from './_components/table';
@@ -45,8 +44,7 @@ export default async function VendorsPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission('vendors.view');
 
   const [page, viewPref] = await Promise.all([
     listVendorsPaged(db, { q, type, active, skip, take }),

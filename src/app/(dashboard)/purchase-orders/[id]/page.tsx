@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { AccountType, Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listAccounts } from '@/server/services/glAccounts';
 import { resolveLineImageUrl } from '@/lib/products/lineItemImage';
 import { rollupShipmentStatus } from '@/lib/po/shipmentRollup';
@@ -35,6 +36,7 @@ export default async function PurchaseOrderDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('vendors.view');
   const { id } = await params;
 
   // Single round-trip: PO with vendor + lines (variant + warehouse +

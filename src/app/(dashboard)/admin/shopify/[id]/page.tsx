@@ -1,8 +1,8 @@
 import Link from 'next/link';
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getStore } from '@/server/services/shopifyStores';
 import type {
   StoredSyncRun,
@@ -33,8 +33,7 @@ export default async function ShopifyStoreDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const user = await getCurrentUser();
-  if (!user?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.edit_settings');
 
   const { id } = await params;
   const store = await getStore(db, id);

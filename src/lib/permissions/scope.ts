@@ -1,4 +1,5 @@
-import type { Prisma } from '@/generated/tenant';
+import type { Prisma, PrismaClient } from '@/generated/tenant';
+import { AuthError } from '@/lib/auth/errors';
 import { hasPermission, type Actor } from './actor';
 import { SCOPE_PAIRS, type PermissionKey } from './constants';
 
@@ -117,6 +118,38 @@ export function dashboardScopeSalesRepId(
   const mode = resolveScope(actor, pair.all, pair.own);
   if (mode !== 'own') return null;
   return actor.salesRepId ?? MATCH_NONE;
+}
+
+/**
+ * Throw AuthError(403) when `customerId` falls outside this actor's
+ * customer scope. Used by create routes that take a customerId in the
+ * request body (sales orders, credit memos, RMAs, payments) — for a
+ * view_all actor the customer-scope where clause is `{}` so any non-
+ * soft-deleted customer passes; for a view_own actor the customer must
+ * be assigned to the actor's linked sales rep; an actor with neither
+ * scope perm always trips (the scope clause yields a sentinel id that
+ * matches no rows).
+ *
+ * Returns nothing on success so the call site stays declarative:
+ *
+ *   await assertCustomerInScope(db, actor, parsed.data.customerId);
+ *
+ * The lookup runs `customer.findFirst({ id, deletedAt: null } AND
+ * customerScopeWhere(actor))` so a missing / archived customer also
+ * returns 403 (the route doesn't leak "customer not found" vs
+ * "forbidden" — both look the same to the client).
+ */
+export async function assertCustomerInScope(
+  db: Pick<PrismaClient, 'customer'>,
+  actor: Actor,
+  customerId: string,
+): Promise<void> {
+  const scope = customerScopeWhere(actor);
+  const found = await db.customer.findFirst({
+    where: { AND: [{ id: customerId, deletedAt: null }, scope] },
+    select: { id: true },
+  });
+  if (!found) throw new AuthError(403, 'forbidden');
 }
 
 /** Prisma `where` fragment scoping a SalesOrder query for this actor. */

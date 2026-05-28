@@ -1,8 +1,7 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { db } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth/getCurrentUser';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { listRoles } from '@/server/services/roles';
 import { Button } from '@/components/ui/button';
 import {
@@ -17,8 +16,7 @@ import {
 export const revalidate = 0;
 
 export default async function RolesPage() {
-  const me = await getCurrentUser();
-  if (!me?.isSuperAdmin) redirect('/dashboard');
+  await requirePagePermission('admin.edit_roles');
 
   const roles = await listRoles(db);
 

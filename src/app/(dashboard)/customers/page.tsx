@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { db } from '@/lib/db';
 import { CustomerType } from '@/generated/tenant';
@@ -7,7 +6,7 @@ import { listCustomersPaged } from '@/server/services/customers';
 import { listSalesReps } from '@/server/services/salesReps';
 import { arBalanceForCustomer } from '@/server/services/ar';
 import { getTableViewPref } from '@/server/services/userPreferences';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { customerScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
 import { CustomersFilters, type SalesRepOption } from './_components/filters';
@@ -54,8 +53,10 @@ export default async function CustomersPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission([
+    'customers.view_all',
+    'customers.view_own',
+  ]);
   const scope = customerScopeWhere(actor);
 
   const [salesReps, page, viewPref] = await Promise.all([

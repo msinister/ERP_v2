@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getWorkOrder } from '@/server/services/workOrders';
 import {
   Card,
@@ -32,6 +33,7 @@ export default async function WorkOrderDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('work_orders.view');
   const { id } = await params;
   const wo = await getWorkOrder(db, id);
   if (!wo) notFound();

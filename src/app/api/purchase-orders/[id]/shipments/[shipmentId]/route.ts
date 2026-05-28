@@ -5,7 +5,7 @@ import {
   softDeletePoShipment,
   updatePoShipment,
 } from '@/server/services/poShipments';
-import { requireAuth } from '@/lib/auth/requireAuth';
+import { requirePermission } from '@/lib/auth/requirePermission';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 
@@ -16,7 +16,7 @@ export async function PATCH(
   ctx: { params: Promise<{ id: string; shipmentId: string }> },
 ) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'vendors.edit');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id, shipmentId } = await ctx.params;
     let body: unknown;
@@ -50,7 +50,7 @@ export async function DELETE(
   ctx: { params: Promise<{ id: string; shipmentId: string }> },
 ) {
   try {
-    const user = await requireAuth(req);
+    const user = await requirePermission(req, 'vendors.edit');
     const auditCtx = auditCtxFromRequest(req, user);
     const { id, shipmentId } = await ctx.params;
     const shipment = await softDeletePoShipment(db, id, shipmentId, auditCtx);

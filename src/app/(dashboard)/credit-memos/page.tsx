@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import { CreditMemoStatus } from '@/generated/tenant';
 import { db } from '@/lib/db';
@@ -8,7 +7,7 @@ import { listCustomers } from '@/server/services/customers';
 import { listCategories } from '@/server/services/creditMemoCategories';
 import { listAllOrderTags } from '@/server/services/orderTags';
 import { getTableViewPref } from '@/server/services/userPreferences';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { creditMemoScopeWhere } from '@/lib/permissions/scope';
 import { Button } from '@/components/ui/button';
 import {
@@ -56,8 +55,10 @@ export default async function CreditMemosPage({
   const skip = Math.max(0, Number(pickString(sp.skip) ?? '0') || 0);
   const take = DEFAULT_PAGE_SIZE;
 
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission([
+    'credit_memos.view_all',
+    'credit_memos.view_own',
+  ]);
   const scope = creditMemoScopeWhere(actor);
 
   const [customers, categories, allOrderTags, page, viewPref] = await Promise.all([

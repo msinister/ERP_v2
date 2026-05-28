@@ -1,12 +1,11 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { listCustomers } from '@/server/services/customers';
 import { getRestockingFeeDefault } from '@/server/services/restockingFee';
 import { listSalesReps } from '@/server/services/salesReps';
 import { listPaymentTerms } from '@/server/services/paymentTerms';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { customerScopeWhere } from '@/lib/permissions/scope';
 import {
   RmaForm,
@@ -18,8 +17,10 @@ import {
 export const revalidate = 0;
 
 export default async function NewRmaPage() {
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  // No rmas.create perm exists; rmas.approve is the closest fit for
+  // someone allowed to file one. Reps who can only view their own
+  // RMAs are gated out.
+  const actor = await requirePagePermission('rmas.approve');
   // Catalog snapshot for client-side variantId → SKU/product joining on
   // the invoice-line rows. Pilot scale (a few hundred variants) keeps
   // this cheap; if the catalog grows past ~5k variants this should move

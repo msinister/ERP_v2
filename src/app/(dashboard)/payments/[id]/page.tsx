@@ -1,8 +1,8 @@
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
 import { agingForCustomer } from '@/server/services/ar';
-import { getActor } from '@/lib/permissions/getActor';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { paymentScopeWhere } from '@/lib/permissions/scope';
 import { journalEntriesForEntity } from '@/server/services/reports/financial';
 import {
@@ -32,8 +32,10 @@ export default async function PaymentDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const actor = await getActor();
-  if (!actor) redirect('/login');
+  const actor = await requirePagePermission([
+    'payments.view_all',
+    'payments.view_own',
+  ]);
 
   const payment = await db.payment.findFirst({
     where: { AND: [{ id, deletedAt: null }, paymentScopeWhere(actor)] },

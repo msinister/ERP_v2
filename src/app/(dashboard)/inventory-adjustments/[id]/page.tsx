@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { Prisma } from '@/generated/tenant';
 import { db } from '@/lib/db';
+import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
 import { getAdjustment } from '@/server/services/inventoryAdjustments';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -26,6 +27,7 @@ export default async function AdjustmentDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePagePermission('inventory_adjustments.view');
   const { id } = await params;
   const adj = await getAdjustment(db, id);
   if (!adj) notFound();
