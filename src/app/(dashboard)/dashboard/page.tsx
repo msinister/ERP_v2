@@ -14,6 +14,7 @@ import { LowStockWidget } from './_widgets/low-stock';
 import { UnappliedPaymentsWidget } from './_widgets/unapplied-payments';
 import { RecentActivityWidget } from './_widgets/recent-activity';
 import { CashPositionWidget } from './_widgets/cash-position';
+import { PendingOrderReviewsWidget } from './_widgets/pending-order-reviews';
 import { WidgetSkeleton } from './_widgets/widget-card';
 
 // Dashboard always reflects live data (no caching) — operational
@@ -129,6 +130,13 @@ export default async function DashboardPage() {
         {canGl ? (
           <Suspense fallback={<WidgetSkeleton title="Cash Position" />}>
             <CashPositionWidget />
+          </Suspense>
+        ) : null}
+        {actor.isSuperAdmin ? (
+          <Suspense
+            fallback={<WidgetSkeleton title="Pending Order Reviews" />}
+          >
+            <PendingOrderReviewsWidget />
           </Suspense>
         ) : null}
       </div>

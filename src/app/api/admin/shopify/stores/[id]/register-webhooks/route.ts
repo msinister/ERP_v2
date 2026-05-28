@@ -24,6 +24,9 @@ const TOPICS = [
   'products/create',
   'products/update',
   'products/delete',
+  'orders/create',
+  'orders/updated',
+  'orders/cancelled',
 ] as const;
 
 export async function POST(

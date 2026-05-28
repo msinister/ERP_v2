@@ -1,5 +1,9 @@
 import { Prisma, AuditAction } from '@/generated/tenant';
-import type { PrismaClient, ShopifyStore } from '@/generated/tenant';
+import type {
+  CustomerType,
+  PrismaClient,
+  ShopifyStore,
+} from '@/generated/tenant';
 import { audit, type AuditContext } from '@/lib/audit/audit';
 import { decrypt, encrypt } from '@/lib/crypto';
 import {
@@ -46,11 +50,18 @@ export type ShopifyStorePublic = {
   hasWebhookSecret: boolean;
   syncEnabled: boolean;
   inventoryPushEnabled: boolean;
+  orderSyncEnabled: boolean;
   shopifyLocationId: string | null;
+  defaultWarehouseId: string | null;
+  defaultSalesRepId: string | null;
+  defaultPaymentTermId: string | null;
+  defaultCustomerType: CustomerType | null;
   lastProductSyncAt: Date | null;
   lastInventoryPushAt: Date | null;
+  lastOrderSyncAt: Date | null;
   lastSyncResult: Prisma.JsonValue | null;
   lastPushResult: Prisma.JsonValue | null;
+  lastOrderSyncResult: Prisma.JsonValue | null;
   webhookSubscriptionIds: Prisma.JsonValue | null;
   sortOrder: number;
   active: boolean;
@@ -67,11 +78,18 @@ function toPublic(s: ShopifyStore): ShopifyStorePublic {
     hasWebhookSecret: s.webhookSecret != null,
     syncEnabled: s.syncEnabled,
     inventoryPushEnabled: s.inventoryPushEnabled,
+    orderSyncEnabled: s.orderSyncEnabled,
     shopifyLocationId: s.shopifyLocationId,
+    defaultWarehouseId: s.defaultWarehouseId,
+    defaultSalesRepId: s.defaultSalesRepId,
+    defaultPaymentTermId: s.defaultPaymentTermId,
+    defaultCustomerType: s.defaultCustomerType,
     lastProductSyncAt: s.lastProductSyncAt,
     lastInventoryPushAt: s.lastInventoryPushAt,
+    lastOrderSyncAt: s.lastOrderSyncAt,
     lastSyncResult: s.lastSyncResult,
     lastPushResult: s.lastPushResult,
+    lastOrderSyncResult: s.lastOrderSyncResult,
     webhookSubscriptionIds: s.webhookSubscriptionIds,
     sortOrder: s.sortOrder,
     active: s.active,
@@ -152,7 +170,12 @@ export async function createStore(
           : Prisma.DbNull,
         syncEnabled: data.syncEnabled,
         inventoryPushEnabled: data.inventoryPushEnabled,
+        orderSyncEnabled: data.orderSyncEnabled,
         shopifyLocationId: data.shopifyLocationId ?? null,
+        defaultWarehouseId: data.defaultWarehouseId ?? null,
+        defaultSalesRepId: data.defaultSalesRepId ?? null,
+        defaultPaymentTermId: data.defaultPaymentTermId ?? null,
+        defaultCustomerType: data.defaultCustomerType ?? null,
         sortOrder,
         active: data.active,
         createdBy: ctx?.userId ?? null,
@@ -201,7 +224,12 @@ export async function updateStore(
         webhookSecret,
         syncEnabled: data.syncEnabled,
         inventoryPushEnabled: data.inventoryPushEnabled,
+        orderSyncEnabled: data.orderSyncEnabled,
         shopifyLocationId: data.shopifyLocationId,
+        defaultWarehouseId: data.defaultWarehouseId,
+        defaultSalesRepId: data.defaultSalesRepId,
+        defaultPaymentTermId: data.defaultPaymentTermId,
+        defaultCustomerType: data.defaultCustomerType,
         sortOrder: data.sortOrder,
         active: data.active,
         updatedBy: ctx?.userId ?? null,
@@ -235,6 +263,7 @@ export async function archiveStore(
         active: false,
         syncEnabled: false,
         inventoryPushEnabled: false,
+        orderSyncEnabled: false,
         updatedBy: ctx?.userId ?? null,
       },
     });
@@ -327,6 +356,25 @@ export type StoredPushRun = {
   pushed: number;
   skipped: number;
   errors: Array<{ productId: string; storeId: string; message: string }>;
+};
+
+// Order sync summary written by syncOrdersForStore. Mirrors the
+// SyncRun / PushRun shapes so the admin "last runs" panel can render
+// all three with the same component. `pendingReview` counts orders
+// parked on the PendingOrderReview queue (ambiguous customer match or
+// unknown SKU); `errors` carries non-fatal per-order failures so the
+// rest of the batch still imports.
+export type StoredOrderSyncRun = {
+  startedAt: string;
+  finishedAt: string;
+  imported: number;
+  skipped: number;
+  pendingReview: number;
+  errors: Array<{
+    shopifyOrderId: string;
+    shopifyOrderNumber: string;
+    message: string;
+  }>;
 };
 
 export async function recordSyncRun(

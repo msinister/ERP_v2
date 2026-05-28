@@ -2,6 +2,7 @@ import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import type {
   StoredSyncRun,
   StoredPushRun,
+  StoredOrderSyncRun,
 } from '@/server/services/shopifyStores';
 import {
   Card,
@@ -10,15 +11,18 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 
-// Two stacked panels — last full sync + last inventory push. Server
-// components: pure render of the JSON stored on the ShopifyStore row.
+// Three stacked panels — last full sync, last inventory push, last
+// order sync. Server components: pure render of the JSON stored on the
+// ShopifyStore row.
 
 export function StoreLastRuns({
   sync,
   push,
+  orderSync,
 }: {
   sync: StoredSyncRun | null;
   push: StoredPushRun | null;
+  orderSync: StoredOrderSyncRun | null;
 }) {
   return (
     <div className="space-y-6">
@@ -39,6 +43,65 @@ export function StoreLastRuns({
           <PushSummary run={push} />
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Last order sync</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <OrderSyncSummary run={orderSync} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function OrderSyncSummary({ run }: { run: StoredOrderSyncRun | null }) {
+  if (!run) {
+    return (
+      <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+        No order sync has run yet for this store.
+      </div>
+    );
+  }
+  const startedAt = new Date(run.startedAt);
+  const finishedAt = new Date(run.finishedAt);
+  const durationSec = Math.max(
+    1,
+    Math.round((finishedAt.getTime() - startedAt.getTime()) / 1000),
+  );
+  const hasErrors = run.errors.length > 0;
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs text-muted-foreground">
+        {startedAt.toLocaleString()} · {durationSec}s
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Stat label="Imported" value={run.imported} />
+        <Stat label="Skipped" value={run.skipped} muted />
+        <Stat
+          label="Pending review"
+          value={run.pendingReview}
+          tone={run.pendingReview > 0 ? 'destructive' : 'ok'}
+        />
+        <Stat
+          label="Errors"
+          value={run.errors.length}
+          tone={hasErrors ? 'destructive' : 'ok'}
+        />
+      </div>
+      {hasErrors ? (
+        <ErrorList
+          items={run.errors.slice(0, 8).map((e) => ({
+            head: `${e.shopifyOrderNumber} (${e.shopifyOrderId})`,
+            tail: e.message,
+          }))}
+          more={run.errors.length - 8}
+        />
+      ) : (
+        <NoErrors />
+      )}
     </div>
   );
 }

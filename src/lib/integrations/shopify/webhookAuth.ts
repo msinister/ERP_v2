@@ -9,8 +9,9 @@ import {
 
 // =============================================================================
 // Shared webhook authentication for multi-store Shopify routes. Each route
-// (products/create, products/update, products/delete) calls
-// `authenticateShopifyWebhook(req, raw)` before its own dispatch logic.
+// (products/create, products/update, products/delete, orders/create,
+// orders/updated, orders/cancelled) calls
+// `authenticateShopifyWebhook(req, raw, { gate })` before its own dispatch.
 //
 // Auth flow:
 //   1. Read X-Shopify-Shop-Domain header → identifies the source store.
@@ -20,11 +21,14 @@ import {
 //   3. Fetch that store's webhook secret. If absent → 200 no-secret.
 //   4. Verify HMAC against the raw bytes of the body — anything mismatched
 //      gets 401 so Shopify reports a security alert.
-//   5. If store has syncEnabled = false → 200 disabled (intentional).
+//   5. If the topic-specific gate flag is off (syncEnabled for product
+//      webhooks, orderSyncEnabled for order webhooks) → 200 disabled.
 //
-// On success the helper returns { store }; the caller then parses the body
-// and dispatches with store.id.
+// On success the helper returns { storeId, storeUrl }; the caller then
+// parses the body and dispatches with store.id.
 // =============================================================================
+
+export type WebhookGate = 'product' | 'order';
 
 export type ShopifyWebhookAuthResult =
   | { ok: true; storeId: string; storeUrl: string }
@@ -33,6 +37,7 @@ export type ShopifyWebhookAuthResult =
 export async function authenticateShopifyWebhook(
   req: Request,
   raw: string,
+  opts: { gate: WebhookGate } = { gate: 'product' },
 ): Promise<ShopifyWebhookAuthResult> {
   const shopDomain = req.headers.get('x-shopify-shop-domain');
   if (!shopDomain) {
@@ -73,10 +78,15 @@ export async function authenticateShopifyWebhook(
     };
   }
 
-  if (!store.syncEnabled) {
+  const gateOn =
+    opts.gate === 'order' ? store.orderSyncEnabled : store.syncEnabled;
+  if (!gateOn) {
     return {
       ok: false,
-      response: NR.json({ ok: false, reason: 'disabled' }, { status: 200 }),
+      response: NR.json(
+        { ok: false, reason: 'disabled', gate: opts.gate },
+        { status: 200 },
+      ),
     };
   }
 

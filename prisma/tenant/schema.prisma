@@ -144,6 +144,12 @@ enum PaymentMethod {
   CASH
   MONEY_ORDER
   APPLIED_CREDIT // deducting unapplied credit balance
+  // Payment was collected outside the ERP (Shopify Payments, PayPal,
+  // etc.). The recordPayment path still posts a cash-receipt JE against
+  // the supplied cashAccountId — typically a Shopify Clearing asset
+  // account — so AR balances cleanly even though no money moved inside
+  // the ERP itself. Reference field carries the upstream gateway id.
+  EXTERNAL
 }
 
 enum PaymentStatus {
@@ -322,61 +328,61 @@ enum BillSource {
 }
 
 model Product {
-  id               String      @id @default(cuid())
-  sku              String      @unique
-  name             String
-  shortDescription String?
-  longDescription  String?
-  brand            String?
-  category         String?
+  id                     String      @id @default(cuid())
+  sku                    String      @unique
+  name                   String
+  shortDescription       String?
+  longDescription        String?
+  brand                  String?
+  category               String?
   // Manufacturer part number — a product-level catalog attribute. Distinct
   // from PurchaseOrderLine.manufacturerPartNumber (which is per-PO-line);
   // this is the canonical MPN shown on the product list + detail.
   manufacturerPartNumber String?
-  type             ProductType @default(SIMPLE)
-  tracksInventory  Boolean     @default(true)
-  basePrice        Decimal?    @db.Decimal(18, 5)
-  weight           Decimal?    @db.Decimal(18, 5)
-  weightUnit       String?     @default("lb")
-  lengthDim        Decimal?    @db.Decimal(18, 5)
-  widthDim         Decimal?    @db.Decimal(18, 5)
-  heightDim        Decimal?    @db.Decimal(18, 5)
-  dimensionUnit    String?     @default("in")
+  type                   ProductType @default(SIMPLE)
+  tracksInventory        Boolean     @default(true)
+  basePrice              Decimal?    @db.Decimal(18, 5)
+  weight                 Decimal?    @db.Decimal(18, 5)
+  weightUnit             String?     @default("lb")
+  lengthDim              Decimal?    @db.Decimal(18, 5)
+  widthDim               Decimal?    @db.Decimal(18, 5)
+  heightDim              Decimal?    @db.Decimal(18, 5)
+  dimensionUnit          String?     @default("in")
   // Trade-compliance master data (no inventory impact). Free-text by
   // design: countryOfOrigin is an ISO-ish label, hsCode is the
   // Harmonized System tariff code. hazmat flags dangerous-goods
   // handling for shipping/labeling downstream.
-  countryOfOrigin  String?
-  hsCode           String?
-  hazmat           Boolean     @default(false)
+  countryOfOrigin        String?
+  hsCode                 String?
+  hazmat                 Boolean     @default(false)
   // Stamped on every successful upsertProductFromShopify run (primary
   // variant only) so the detail page can show "Synced from Shopify ·
   // {when}" without a join. All Shopify product/variant IDs live in
   // ProductShopifyVariant (junction); a product can link to multiple
   // Shopify listings — both primary + deal/bundle secondaries within a
   // store, and across multiple ShopifyStores.
-  shopifySyncedAt  DateTime?
-  active           Boolean     @default(true)
+  shopifySyncedAt        DateTime?
+  active                 Boolean     @default(true)
   // Flat-dollar labor cost rolled into the cost of every finished
   // unit produced from this product's BOM. Optional — null = no
   // labor charge. Only meaningful when the product has BOM lines
   // (type IN (SIMPLE, ASSEMBLED)). Stored at the same Decimal
   // precision as unit costs so the build cost rollup stays exact.
-  bomLaborCost     Decimal?    @db.Decimal(18, 5)
-  deletedAt        DateTime?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
+  bomLaborCost           Decimal?    @db.Decimal(18, 5)
+  deletedAt              DateTime?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
 
-  variants                 ProductVariant[]
-  shopifyVariants          ProductShopifyVariant[]
-  images                   ProductImage[]
-  tags                     ProductTag[]
-  bomLines                 BomLine[]        @relation("ProductBomLines")
-  workOrders               WorkOrder[]      @relation("WorkOrderProduct")
+  variants                    ProductVariant[]
+  shopifyVariants             ProductShopifyVariant[]
+  images                      ProductImage[]
+  tags                        ProductTag[]
+  bomLines                    BomLine[]               @relation("ProductBomLines")
+  workOrders                  WorkOrder[]             @relation("WorkOrderProduct")
   // Back-relations for the bundle-explode flow: SalesOrderLine and
   // InvoiceLine rows that point at this BUNDLE product as their source.
-  bundleSourceSalesOrderLines SalesOrderLine[] @relation("BundleSourceSalesOrderLines")
-  bundleSourceInvoiceLines    InvoiceLine[]    @relation("BundleSourceInvoiceLines")
+  bundleSourceSalesOrderLines SalesOrderLine[]        @relation("BundleSourceSalesOrderLines")
+  bundleSourceInvoiceLines    InvoiceLine[]           @relation("BundleSourceInvoiceLines")
 
   @@index([category])
   @@index([brand])
@@ -395,20 +401,20 @@ model Product {
 // "swap primary" flow — service-layer enforcement is the spec
 // precedent here (customer payment methods, etc.).
 model ProductImage {
-  id        String    @id @default(cuid())
-  productId String
-  url       String
-  isPrimary Boolean   @default(false)
-  sortOrder Int       @default(0)
-  altText   String?
+  id             String    @id @default(cuid())
+  productId      String
+  url            String
+  isPrimary      Boolean   @default(false)
+  sortOrder      Int       @default(0)
+  altText        String?
   // Shopify-side image id when this row was synced from Shopify. Lets
   // re-syncs upsert in place instead of duplicating rows, and lets
   // image-removal sweeps target only Shopify-sourced images (operator-
   // added images stay regardless of what's in Shopify).
   shopifyImageId String?
-  deletedAt DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   product Product @relation(fields: [productId], references: [id])
 
@@ -465,42 +471,69 @@ model ProductShopifyVariant {
 // Secrets are AES-256-GCM encrypted via lib/crypto and stored as Json
 // {ciphertext, iv} — same pattern as the legacy Setting blob.
 model ShopifyStore {
-  id                     String   @id @default(cuid())
+  id                     String        @id @default(cuid())
   name                   String
-  storeUrl               String   @unique
+  storeUrl               String        @unique
   // {ciphertext, iv} per lib/crypto contract. Nullable so a store row can
   // be created (UI scaffolding) before secrets are pasted.
   accessToken            Json?
   webhookSecret          Json?
-  syncEnabled            Boolean  @default(false)
-  inventoryPushEnabled   Boolean  @default(false)
+  // Product-direction sync (Shopify → ERP product upsert + ERP → Shopify
+  // product create/update). The flag is intentionally named `syncEnabled`
+  // for back-compat with the slice-A migration; it gates the product
+  // webhook auth path and the full-sync / push-products buttons.
+  syncEnabled            Boolean       @default(false)
+  inventoryPushEnabled   Boolean       @default(false)
+  // Order-direction sync (Shopify → ERP order import). Distinct gate
+  // from `syncEnabled` so an operator can run product sync without ever
+  // pulling orders, or vice versa. When false, /sync-orders short-circuits
+  // and the order webhooks return 200 disabled.
+  orderSyncEnabled       Boolean       @default(false)
   // Shopify Location id (REST) that inventory is pushed against. Required
   // for inventory_levels/set; if null, pushes for this store short-circuit
   // with a clear error.
   shopifyLocationId      String?
+  // Per-store defaults applied when importing orders. Used by the order
+  // sync service to seed SalesOrder.warehouseId, Customer.salesRepId /
+  // .paymentTermId / .type when auto-creating a customer from a Shopify
+  // payload. Nullable on the model (legacy rows pre-date these); the
+  // service throws "store not configured for order sync" when an import
+  // fires against a store that's missing any of them.
+  defaultWarehouseId     String?
+  defaultSalesRepId      String?
+  defaultPaymentTermId   String?
+  defaultCustomerType    CustomerType?
   lastProductSyncAt      DateTime?
   lastInventoryPushAt    DateTime?
+  lastOrderSyncAt        DateTime?
   // Last-run summaries — Json blobs mirror the legacy StoredSyncRun /
-  // a new StoredPushRun shape. Surfaced on the per-store admin tile.
+  // StoredPushRun shape. Surfaced on the per-store admin tile.
   lastSyncResult         Json?
   lastPushResult         Json?
+  lastOrderSyncResult    Json?
   // Webhook subscription ids returned by Shopify on register. Shape:
   // Record<topic, subscriptionId>. Lets the admin UI show "currently
   // registered" without re-querying Shopify.
   webhookSubscriptionIds Json?
-  sortOrder              Int      @default(0)
-  active                 Boolean  @default(true)
+  sortOrder              Int           @default(0)
+  active                 Boolean       @default(true)
   deletedAt              DateTime?
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
   createdBy              String?
   updatedBy              String?
 
-  rules           ShopifyStoreRule[]
-  productVariants ProductShopifyVariant[]
+  rules               ShopifyStoreRule[]
+  productVariants     ProductShopifyVariant[]
+  salesOrders         SalesOrder[]
+  pendingOrderReviews PendingOrderReview[]
+  defaultWarehouse    Warehouse?              @relation("ShopifyStoreDefaultWarehouse", fields: [defaultWarehouseId], references: [id])
+  defaultSalesRep     SalesRep?               @relation("ShopifyStoreDefaultSalesRep", fields: [defaultSalesRepId], references: [id])
+  defaultPaymentTerm  PaymentTerm?            @relation("ShopifyStoreDefaultPaymentTerm", fields: [defaultPaymentTermId], references: [id])
 
   @@index([active])
   @@index([deletedAt])
+  @@index([orderSyncEnabled])
 }
 
 // Routing-rule rows per store. Evaluated together to decide whether a
@@ -565,24 +598,24 @@ model ProductVariant {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  product            Product                 @relation(fields: [productId], references: [id])
-  inventory          InventoryItem[]
-  movements          InventoryMovement[]
-  purchaseOrderLines PurchaseOrderLine[]
-  receiptLines       ReceiptLine[]
-  salesOrderLines    SalesOrderLine[]
-  priceOverrides     CustomerPriceOverride[]
-  invoiceLines       InvoiceLine[]
-  creditMemoLines    CreditMemoLine[]
-  fifoLayers         FifoLayer[]
-  vendorProducts     VendorProduct[]
-  billLines          BillLine[]
+  product                  Product                   @relation(fields: [productId], references: [id])
+  inventory                InventoryItem[]
+  movements                InventoryMovement[]
+  purchaseOrderLines       PurchaseOrderLine[]
+  receiptLines             ReceiptLine[]
+  salesOrderLines          SalesOrderLine[]
+  priceOverrides           CustomerPriceOverride[]
+  invoiceLines             InvoiceLine[]
+  creditMemoLines          CreditMemoLine[]
+  fifoLayers               FifoLayer[]
+  vendorProducts           VendorProduct[]
+  billLines                BillLine[]
   inventoryAdjustmentLines InventoryAdjustmentLine[]
-  bomComponentUsage  BomLine[]               @relation("BomLineComponent")
+  bomComponentUsage        BomLine[]                 @relation("BomLineComponent")
   // Built as the finished variant on a Work Order.
-  workOrdersBuilt    WorkOrder[]             @relation("WorkOrderFinishedVariant")
+  workOrdersBuilt          WorkOrder[]               @relation("WorkOrderFinishedVariant")
   // Consumed as a component in a Work Order's snapshot BOM.
-  workOrderComponents WorkOrderComponent[]   @relation("WorkOrderComponentVariant")
+  workOrderComponents      WorkOrderComponent[]      @relation("WorkOrderComponentVariant")
 
   @@index([productId])
 }
@@ -632,19 +665,20 @@ model Warehouse {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  inventory          InventoryItem[]
-  movements          InventoryMovement[]
-  purchaseOrderLines PurchaseOrderLine[]
-  receipts           Receipt[]
-  receiptLines       ReceiptLine[]
-  salesOrders        SalesOrder[]
-  salesOrderLines    SalesOrderLine[]
-  invoices           Invoice[]
-  fifoLayers         FifoLayer[]
-  users              User[]
-  workOrders         WorkOrder[]
+  inventory            InventoryItem[]
+  movements            InventoryMovement[]
+  purchaseOrderLines   PurchaseOrderLine[]
+  receipts             Receipt[]
+  receiptLines         ReceiptLine[]
+  salesOrders          SalesOrder[]
+  salesOrderLines      SalesOrderLine[]
+  invoices             Invoice[]
+  fifoLayers           FifoLayer[]
+  users                User[]
+  workOrders           WorkOrder[]
   inventoryAdjustments InventoryAdjustment[]
-  inventoryAccount   GlAccount?          @relation(fields: [inventoryAccountId], references: [id])
+  inventoryAccount     GlAccount?            @relation(fields: [inventoryAccountId], references: [id])
+  shopifyStoreDefaults ShopifyStore[]        @relation("ShopifyStoreDefaultWarehouse")
 }
 
 model InventoryItem {
@@ -1117,136 +1151,158 @@ model ReceiptLine {
 }
 
 model Customer {
-  id                String       @id @default(cuid())
+  id                    String       @id @default(cuid())
   // Auto-issued CUST-YYYY-NNNNN via the Sequence helper. Original stub
   // exposed this as `code` and we keep that name for FK stability.
-  code              String       @unique
+  code                  String       @unique
   // Display name. CITEXT makes the @unique case-insensitive natively.
   // Convention is to add `(City)` suffix on collision — see docs/03-customers.md.
-  name              String       @unique @db.Citext
-  type              CustomerType @default(WHOLESALE_REGULAR)
+  name                  String       @unique @db.Citext
+  type                  CustomerType @default(WHOLESALE_REGULAR)
   // Required relations. Existing rows are backfilled to UNASSIGNED / NET30
   // before the NOT NULL flip in the migration.
-  salesRepId        String
-  paymentTermId     String
+  salesRepId            String
+  paymentTermId         String
   // Financial terms.
-  creditLimit       Decimal?     @db.Decimal(18, 5) // null = no limit
-  arHoldDays        Int? // null = AR hold off
-  taxExempt         Boolean      @default(false)
-  resaleCertNumber  String?
+  creditLimit           Decimal?     @db.Decimal(18, 5) // null = no limit
+  arHoldDays            Int? // null = AR hold off
+  taxExempt             Boolean      @default(false)
+  resaleCertNumber      String?
   // Phone/email may be duplicated across customers (one owner, many stores).
-  primaryPhone      String?
-  primaryEmail      String?
+  primaryPhone          String?
+  primaryEmail          String?
   // Sticky internal notes — print on every internal document for this customer
   // (per docs/03-customers.md). Distinct from CustomerActivity (timeline) and
   // AuditLog (security/compliance ledger).
-  internalNotes     String?
-  shopifyCustomerId String? // future Shopify sync
+  internalNotes         String?
+  shopifyCustomerId     String? // Shopify customer.id — set on first import / auto-link
+  shipstationCustomerId String? // ShipStation customer id — set when SS integration ships
   // Cost-plus % captured for future resolver branch; not wired in this slice.
-  costPlusPercent   Decimal?     @db.Decimal(18, 5)
-  active            Boolean      @default(true)
-  deletedAt         DateTime?
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+  costPlusPercent       Decimal?     @db.Decimal(18, 5)
+  active                Boolean      @default(true)
+  deletedAt             DateTime?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
 
-  salesRep       SalesRep                     @relation(fields: [salesRepId], references: [id])
-  paymentTerm    PaymentTerm                  @relation(fields: [paymentTermId], references: [id])
-  addresses      CustomerAddress[]
-  contacts       CustomerContact[]
-  priceOverrides CustomerPriceOverride[]
-  paymentMethods CustomerPaymentMethod[]
-  documents      CustomerDocument[]
-  activities     CustomerActivity[]
-  tags           CustomerTagAssignment[]
-  categories     CustomerCategoryAssignment[]
-  salesOrders    SalesOrder[]
-  invoices       Invoice[]
-  payments       Payment[]
-  creditMemos    CreditMemo[]
-  rmas           Rma[]
+  salesRep            SalesRep                     @relation(fields: [salesRepId], references: [id])
+  paymentTerm         PaymentTerm                  @relation(fields: [paymentTermId], references: [id])
+  addresses           CustomerAddress[]
+  contacts            CustomerContact[]
+  priceOverrides      CustomerPriceOverride[]
+  paymentMethods      CustomerPaymentMethod[]
+  documents           CustomerDocument[]
+  activities          CustomerActivity[]
+  tags                CustomerTagAssignment[]
+  categories          CustomerCategoryAssignment[]
+  salesOrders         SalesOrder[]
+  invoices            Invoice[]
+  payments            Payment[]
+  creditMemos         CreditMemo[]
+  rmas                Rma[]
+  pendingOrderReviews PendingOrderReview[]         @relation("PendingOrderReviewMatchedCustomer")
 
   @@index([type])
   @@index([salesRepId])
   @@index([active, deletedAt])
   @@index([shopifyCustomerId])
+  @@index([shipstationCustomerId])
+  @@index([primaryEmail])
 }
 
 model SalesOrder {
-  id                   String           @id @default(cuid())
-  number               String           @unique
-  customerId           String
-  warehouseId          String
+  id                     String           @id @default(cuid())
+  number                 String           @unique
+  customerId             String
+  warehouseId            String
   // Per-order sales-rep override. NULL = inherit the customer's rep
   // (customer.salesRepId) — the default. When set, THIS rep is the
   // order's effective rep: it drives commission accrual, "view own"
   // scoping, and display, without changing the customer's default. Set
   // via setSalesOrderSalesRep (Draft/Confirmed/Dispatched only).
-  salesRepId           String?
-  status               SalesOrderStatus @default(DRAFT)
-  source               SalesOrderSource @default(STAFF)
-  currency             String?          @default("USD")
-  customerPo           String?
-  promisedShipDate     DateTime?
-  orderDate            DateTime         @default(now())
+  salesRepId             String?
+  status                 SalesOrderStatus @default(DRAFT)
+  source                 SalesOrderSource @default(STAFF)
+  currency               String?          @default("USD")
+  customerPo             String?
+  promisedShipDate       DateTime?
+  orderDate              DateTime         @default(now())
   // Order-level money. Decimal(18,5); rounding happens at display only.
   // discountPercent and discountAmount are mutually exclusive (Zod-enforced).
-  orderDiscountPercent Decimal?         @db.Decimal(18, 5)
-  orderDiscountAmount  Decimal?         @db.Decimal(18, 5)
-  shippingAmount       Decimal?         @db.Decimal(18, 5)
-  handlingAmount       Decimal?         @db.Decimal(18, 5)
+  orderDiscountPercent   Decimal?         @db.Decimal(18, 5)
+  orderDiscountAmount    Decimal?         @db.Decimal(18, 5)
+  shippingAmount         Decimal?         @db.Decimal(18, 5)
+  handlingAmount         Decimal?         @db.Decimal(18, 5)
   // Free-text ship-to for pilot. The customer master slice will replace
   // this with a proper Address relation; intentionally nullable now.
-  shippingAddress      String?
-  customerNotes        String?
-  internalNotes        String?
-  createdById          String?
+  shippingAddress        String?
+  customerNotes          String?
+  internalNotes          String?
+  createdById            String?
   // Lifecycle timestamps. Per docs/05-sales-orders.md, picked_at /
   // packed_at / shipping_calculated_at / invoice_generated_at /
   // payment_captured_at are flags-not-statuses and land with the
   // pick/pack/invoice workflows in later slices.
-  confirmedAt          DateTime?
-  dispatchedAt         DateTime?
-  closedAt             DateTime?
-  cancelledAt          DateTime?
-  cancelReason         String?
-  deletedAt            DateTime?
-  createdAt            DateTime         @default(now())
-  updatedAt            DateTime         @updatedAt
+  confirmedAt            DateTime?
+  dispatchedAt           DateTime?
+  closedAt               DateTime?
+  cancelledAt            DateTime?
+  cancelReason           String?
+  // Shopify provenance (set when source=SHOPIFY). shopifyOrderId is
+  // unique to make the import path idempotent — a duplicate webhook fire
+  // collides on the unique index and the importer short-circuits.
+  // shopifyOrderNumber is the human "#1045" string Shopify shows in its
+  // own admin; preserved for cross-referencing.
+  shopifyOrderId         String?          @unique
+  shopifyOrderNumber     String?
+  shopifyStoreId         String?
+  // External-payment flags. When true, payment was collected outside the
+  // ERP (Shopify Payments, PayPal, etc.) — the SO close path still
+  // generates an invoice but the payment is auto-recorded as method
+  // EXTERNAL so AR stays balanced. For B2B Shopify imports, the operator
+  // controls the AR flow and these flags stay false.
+  isExternalPayment      Boolean          @default(false)
+  externalPaymentStatus  String?
+  externalPaymentGateway String?
+  deletedAt              DateTime?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
 
-  customer  Customer                  @relation(fields: [customerId], references: [id])
-  warehouse Warehouse                 @relation(fields: [warehouseId], references: [id])
-  salesRep  SalesRep?                 @relation(fields: [salesRepId], references: [id])
-  lines     SalesOrderLine[]
-  invoice   Invoice?
-  tags      SalesOrderTagAssignment[]
+  customer     Customer                  @relation(fields: [customerId], references: [id])
+  warehouse    Warehouse                 @relation(fields: [warehouseId], references: [id])
+  salesRep     SalesRep?                 @relation(fields: [salesRepId], references: [id])
+  lines        SalesOrderLine[]
+  invoice      Invoice?
+  tags         SalesOrderTagAssignment[]
+  shopifyStore ShopifyStore?             @relation(fields: [shopifyStoreId], references: [id])
 
   @@index([customerId, status])
   @@index([status, orderDate])
   @@index([warehouseId])
   @@index([salesRepId])
   @@index([deletedAt])
+  @@index([shopifyStoreId])
 }
 
 model SalesOrderLine {
-  id                  String              @id @default(cuid())
-  salesOrderId        String
-  variantId           String
-  warehouseId         String
-  qtyOrdered          Decimal             @db.Decimal(18, 5)
-  qtyReserved         Decimal             @default(0) @db.Decimal(18, 5)
-  qtyShipped          Decimal             @default(0) @db.Decimal(18, 5)
-  unitPrice           Decimal             @db.Decimal(18, 5)
-  priceRule           PriceResolutionRule
+  id                    String              @id @default(cuid())
+  salesOrderId          String
+  variantId             String
+  warehouseId           String
+  qtyOrdered            Decimal             @db.Decimal(18, 5)
+  qtyReserved           Decimal             @default(0) @db.Decimal(18, 5)
+  qtyShipped            Decimal             @default(0) @db.Decimal(18, 5)
+  unitPrice             Decimal             @db.Decimal(18, 5)
+  priceRule             PriceResolutionRule
   // discountPercent and discountAmount are mutually exclusive (Zod-enforced).
-  discountPercent     Decimal?            @db.Decimal(18, 5)
-  discountAmount      Decimal?            @db.Decimal(18, 5)
-  customerNote        String?
-  internalNote        String?
+  discountPercent       Decimal?            @db.Decimal(18, 5)
+  discountAmount        Decimal?            @db.Decimal(18, 5)
+  customerNote          String?
+  internalNote          String?
   // Set by closeSalesOrder once consumeInventoryTx creates the CONSUME
   // movement for this line. Part 3 of the costing engine slice walks
   // SOLine → InventoryMovement → FifoConsumption to compute COGS at
   // invoice time. Nullable for legacy / pre-close rows.
-  inventoryMovementId String?             @unique
+  inventoryMovementId   String?             @unique
   // Bundle grouping: when a BUNDLE product is added to an SO it
   // explodes into N component lines that all share the same
   // bundleGroupId + bundleSourceProductId. The bundle itself never
@@ -1255,9 +1311,9 @@ model SalesOrderLine {
   // render a synthetic header ("Bundle: NK-COMBO-3") above the group.
   bundleGroupId         String?
   bundleSourceProductId String?
-  deletedAt           DateTime?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  deletedAt             DateTime?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
 
   salesOrder          SalesOrder         @relation(fields: [salesOrderId], references: [id])
   variant             ProductVariant     @relation(fields: [variantId], references: [id])
@@ -1284,8 +1340,9 @@ model PaymentTerm {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
-  customers Customer[]
-  vendors   Vendor[]
+  customers            Customer[]
+  vendors              Vendor[]
+  shopifyStoreDefaults ShopifyStore[] @relation("ShopifyStoreDefaultPaymentTerm")
 }
 
 // Vendor address. Mirrors CustomerAddress but with VendorAddressKind
@@ -1443,13 +1500,14 @@ model SalesRep {
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
-  customers          Customer[]
-  commissionAccruals CommissionAccrual[]
-  user               User?
+  customers            Customer[]
+  commissionAccruals   CommissionAccrual[]
+  user                 User?
   // Sales orders whose rep was explicitly overridden to this rep
   // (SalesOrder.salesRepId). Orders that inherit the customer's rep do
   // NOT appear here.
-  salesOrders        SalesOrder[]
+  salesOrders          SalesOrder[]
+  shopifyStoreDefaults ShopifyStore[]      @relation("ShopifyStoreDefaultSalesRep")
 }
 
 model CustomerAddress {
@@ -1661,11 +1719,11 @@ model CustomerTagAssignment {
 // first use via the autocomplete editor. Name is CITEXT so "Organic"
 // and "organic" collide in the unique index.
 model Tag {
-  id        String       @id @default(cuid())
-  name      String       @unique @db.Citext
-  createdAt DateTime     @default(now())
+  id        String   @id @default(cuid())
+  name      String   @unique @db.Citext
+  createdAt DateTime @default(now())
 
-  products  ProductTag[]
+  products ProductTag[]
 }
 
 model ProductTag {
@@ -1942,25 +2000,25 @@ model Invoice {
 // Snapshot of SO line at close-time. Decoupled from SOLine so SO edits
 // after close can never mutate posted invoices.
 model InvoiceLine {
-  id               String    @id @default(cuid())
-  invoiceId        String
-  salesOrderLineId String?
-  variantId        String
-  description      String
-  qty              Decimal   @db.Decimal(18, 5)
-  unitPrice        Decimal   @db.Decimal(18, 5)
-  discountPercent  Decimal?  @db.Decimal(18, 5)
-  discountAmount   Decimal?  @db.Decimal(18, 5)
-  lineTotal        Decimal   @db.Decimal(18, 5)
-  qtyReturned      Decimal   @default(0) @db.Decimal(18, 5)
+  id                    String    @id @default(cuid())
+  invoiceId             String
+  salesOrderLineId      String?
+  variantId             String
+  description           String
+  qty                   Decimal   @db.Decimal(18, 5)
+  unitPrice             Decimal   @db.Decimal(18, 5)
+  discountPercent       Decimal?  @db.Decimal(18, 5)
+  discountAmount        Decimal?  @db.Decimal(18, 5)
+  lineTotal             Decimal   @db.Decimal(18, 5)
+  qtyReturned           Decimal   @default(0) @db.Decimal(18, 5)
   // Bundle grouping, copied from SalesOrderLine at invoice generation
   // time. The PDF template doesn't render bundle headers yet (deferred
   // slice) but the data is preserved so it can.
   bundleGroupId         String?
   bundleSourceProductId String?
-  deletedAt        DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  deletedAt             DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   invoice             Invoice          @relation(fields: [invoiceId], references: [id])
   variant             ProductVariant   @relation(fields: [variantId], references: [id])
@@ -2996,3 +3054,77 @@ model WorkOrderCompletion {
   @@index([workOrderId])
 }
 
+// =============================================================================
+// Shopify → ERP order sync. Imports park here when the customer match is
+// ambiguous (same email, different Shopify customer.id; multiple ERP customers
+// share the email) OR when a line_item.sku doesn't resolve to a ProductVariant.
+// An operator resolves each pending review from /admin/pending-orders by
+// choosing "use existing customer", "create new customer", or "dismiss" — at
+// which point the importer re-runs the order under the chosen path and the
+// SalesOrder lands like a normal Shopify import.
+//
+// shopifyOrderData stores the FULL Shopify order payload (line items, addresses,
+// transactions, etc.) so the operator can see exactly what's being imported and
+// the resolve action can re-build the import without re-fetching from Shopify.
+// =============================================================================
+
+enum PendingOrderReviewStatus {
+  PENDING
+  RESOLVED_EXISTING // operator picked an existing ERP customer; order imported
+  RESOLVED_NEW // operator forced new-customer creation; order imported
+  DISMISSED // operator decided to ignore; no order imported
+}
+
+enum PendingOrderReviewReason {
+  // Same email exists on one ERP customer but with a different
+  // shopifyCustomerId already set — could be a returning B2B customer
+  // who later created a separate B2C account, or a fraudster.
+  EMAIL_MATCH_DIFFERENT_ID
+  // Multiple ERP customers share this email — common for franchise
+  // owners with several locations under one contact email.
+  MULTIPLE_EMAIL_MATCHES
+  // line_item.sku didn't resolve to any active ProductVariant. Operator
+  // either maps the SKU to an existing variant (future) or creates the
+  // product upstream and re-runs.
+  UNKNOWN_SKU
+}
+
+model PendingOrderReview {
+  id                   String                   @id @default(cuid())
+  shopifyStoreId       String
+  shopifyOrderId       String
+  shopifyOrderNumber   String
+  shopifyCustomerEmail String
+  shopifyCustomerId    String?
+  // Full Shopify order payload as returned by orders.json. Used by the
+  // review UI to render the side-by-side comparison and by the resolve
+  // action to re-run the import without re-fetching from Shopify.
+  shopifyOrderData     Json
+  reason               PendingOrderReviewReason
+  // For email-match cases: the single ERP customer the email pointed at.
+  // For multiple-email-match cases: null (the UI shows the list inline).
+  // For unknown-SKU cases: null (no customer match issue at all).
+  matchedCustomerId    String?
+  // For unknown-SKU cases: the offending line_item.sku so the UI can
+  // highlight it. Null for customer-match cases.
+  unknownSku           String?
+  status               PendingOrderReviewStatus @default(PENDING)
+  resolvedAt           DateTime?
+  resolvedById         String?
+  // When status=RESOLVED_*, the SalesOrder.id the resolve action produced.
+  // Null on PENDING / DISMISSED rows.
+  resolvedSalesOrderId String?
+  notes                String?
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+
+  store           ShopifyStore @relation(fields: [shopifyStoreId], references: [id])
+  matchedCustomer Customer?    @relation("PendingOrderReviewMatchedCustomer", fields: [matchedCustomerId], references: [id])
+
+  // (shopifyStoreId, shopifyOrderId) is unique among PENDING rows so a
+  // webhook re-fire doesn't queue a duplicate review. Resolved/dismissed
+  // rows stay in history. Service-layer guard.
+  @@index([shopifyStoreId, shopifyOrderId])
+  @@index([status, createdAt])
+  @@index([matchedCustomerId])
+}

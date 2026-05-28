@@ -1,6 +1,7 @@
 import type {
   ShopifyCreateProductInput,
   ShopifyCreatedProduct,
+  ShopifyOrder,
   ShopifyProduct,
   ShopifyVariantLookup,
   ShopifyWebhookSubscription,
@@ -30,6 +31,17 @@ export type ShopifyClientOptions = {
   accessToken: string;
   // Optional fetch override for tests. Defaults to global fetch.
   fetchImpl?: typeof fetch;
+};
+
+export type ListOrdersParams = {
+  status?: 'open' | 'closed' | 'cancelled' | 'any';
+  // Comma-joined or single value: 'paid', 'paid,authorized', etc.
+  financialStatus?: string;
+  fulfillmentStatus?: string;
+  createdAtMin?: string;
+  createdAtMax?: string;
+  updatedAtMin?: string;
+  limit?: number;
 };
 
 export class ShopifyClient {
@@ -247,6 +259,53 @@ export class ShopifyClient {
   }
 
   /**
+   * Count orders matching the same filters as iterateOrders. Used by
+   * the manual-sync route to show "fetched N orders" before paging.
+   */
+  async orderCount(params: ListOrdersParams = {}): Promise<number> {
+    const qs = buildOrderQuery(params);
+    const res = await this.request<{ count: number }>(
+      'GET',
+      `/orders/count.json${qs ? `?${qs}` : ''}`,
+    );
+    return res.body.count;
+  }
+
+  /**
+   * Single-order fetch. Used by the import-by-id path (manual retry from
+   * the pending-review UI) and order webhook handlers that prefer to
+   * re-fetch the canonical state instead of trusting the webhook payload.
+   */
+  async getOrder(orderId: string): Promise<ShopifyOrder> {
+    const res = await this.request<{ order: ShopifyOrder }>(
+      'GET',
+      `/orders/${orderId}.json`,
+    );
+    return normalizeOrder(res.body.order);
+  }
+
+  /**
+   * Iterate orders with cursor pagination. Mirrors iterateActiveProducts.
+   * Filters supported:
+   *   - status: 'open' | 'closed' | 'cancelled' | 'any'  (default 'any')
+   *   - financialStatus: 'paid' | 'pending' | 'authorized' | ...
+   *   - createdAtMin / createdAtMax: ISO date strings for incremental sync
+   *   - updatedAtMin: used by the "since lastOrderSyncAt" sync path
+   *   - limit: max per page (Shopify caps at 250)
+   */
+  async *iterateOrders(
+    params: ListOrdersParams = {},
+  ): AsyncGenerator<ShopifyOrder[], void, void> {
+    const qs = buildOrderQuery({ ...params, limit: params.limit ?? 250 });
+    let path: string | null = `/orders.json${qs ? `?${qs}` : ''}`;
+    while (path) {
+      const res = await this.request<{ orders: ShopifyOrder[] }>('GET', path);
+      yield res.body.orders.map(normalizeOrder);
+      path = parseNextLink(res.linkHeader, this.baseUrl);
+    }
+  }
+
+  /**
    * Set absolute inventory quantity at (location, inventory_item) on this
    * Shopify store. Used by the inventory push service. Shopify expects a
    * decimal quantity for some categories (e.g. weight-based) but for our
@@ -373,4 +432,54 @@ function normalizeProduct(p: ShopifyProduct): ShopifyProduct {
     })),
     images: (p.images ?? []).map((i) => ({ ...i, id: String(i.id) })),
   };
+}
+
+// Same id-coercion treatment for orders. Customer + line items carry
+// their own numeric ids on the wire.
+function normalizeOrder(o: ShopifyOrder): ShopifyOrder {
+  return {
+    ...o,
+    id: String(o.id),
+    customer: o.customer
+      ? { ...o.customer, id: String(o.customer.id) }
+      : null,
+    line_items: (o.line_items ?? []).map((li) => ({
+      ...li,
+      id: String(li.id),
+      variant_id: li.variant_id == null ? null : String(li.variant_id),
+      product_id: li.product_id == null ? null : String(li.product_id),
+    })),
+    shipping_lines: (o.shipping_lines ?? []).map((sl) => ({
+      ...sl,
+      id: String(sl.id),
+    })),
+    transactions: (o.transactions ?? []).map((t) => ({
+      ...t,
+      id: String(t.id),
+    })),
+  };
+}
+
+function buildOrderQuery(params: ListOrdersParams): string {
+  const parts: string[] = [];
+  parts.push(`status=${encodeURIComponent(params.status ?? 'any')}`);
+  if (params.financialStatus) {
+    parts.push(`financial_status=${encodeURIComponent(params.financialStatus)}`);
+  }
+  if (params.fulfillmentStatus) {
+    parts.push(`fulfillment_status=${encodeURIComponent(params.fulfillmentStatus)}`);
+  }
+  if (params.createdAtMin) {
+    parts.push(`created_at_min=${encodeURIComponent(params.createdAtMin)}`);
+  }
+  if (params.createdAtMax) {
+    parts.push(`created_at_max=${encodeURIComponent(params.createdAtMax)}`);
+  }
+  if (params.updatedAtMin) {
+    parts.push(`updated_at_min=${encodeURIComponent(params.updatedAtMin)}`);
+  }
+  if (params.limit != null) {
+    parts.push(`limit=${Math.min(Math.max(params.limit, 1), 250)}`);
+  }
+  return parts.join('&');
 }

@@ -124,3 +124,123 @@ export type ShopifyCreatedProduct = {
     src: string;
   }>;
 };
+
+// ---------------------------------------------------------------------------
+// Order resource — Shopify → ERP direction. Only fields the importer + UI
+// actually read are typed; raw payload is preserved verbatim on
+// PendingOrderReview.shopifyOrderData when we need the full picture later.
+// ---------------------------------------------------------------------------
+
+export type ShopifyAddress = {
+  first_name: string | null;
+  last_name: string | null;
+  company: string | null;
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  province: string | null;
+  province_code: string | null;
+  country: string | null;
+  country_code: string | null;
+  zip: string | null;
+  phone: string | null;
+  name: string | null;
+};
+
+export type ShopifyOrderCustomer = {
+  id: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  default_address: ShopifyAddress | null;
+};
+
+export type ShopifyLineItem = {
+  id: string;
+  variant_id: string | null;
+  product_id: string | null;
+  sku: string | null;
+  title: string;
+  variant_title: string | null;
+  vendor: string | null;
+  quantity: number;
+  // Per-unit price as decimal string ("12.99").
+  price: string;
+  // Total discount allocated to the line (decimal string, sum across
+  // discount_allocations[]).
+  total_discount: string;
+  taxable: boolean;
+  requires_shipping: boolean;
+};
+
+export type ShopifyShippingLine = {
+  id: string;
+  title: string;
+  price: string; // decimal string
+  code: string | null;
+  source: string | null;
+};
+
+// We only need to know that *some* transaction settled this order; the
+// full transaction history (refunds, partials, gateway-specific blobs)
+// stays in shopifyOrderData verbatim.
+export type ShopifyTransactionSummary = {
+  id: string;
+  kind: string; // "sale", "authorization", "capture", "refund", "void"
+  status: string; // "success", "pending", "failure", "error"
+  gateway: string | null;
+  amount: string; // decimal string
+  created_at: string;
+};
+
+export type ShopifyOrderFinancialStatus =
+  | 'pending'
+  | 'authorized'
+  | 'partially_paid'
+  | 'paid'
+  | 'partially_refunded'
+  | 'refunded'
+  | 'voided';
+
+export type ShopifyOrderFulfillmentStatus =
+  | 'fulfilled'
+  | 'partial'
+  | 'restocked'
+  | null;
+
+export type ShopifyOrder = {
+  id: string;
+  // Shopify's "#1045" — note the literal hash prefix is preserved.
+  name: string;
+  // Plain numeric order number ("1045").
+  order_number: number;
+  email: string | null;
+  phone: string | null;
+  currency: string;
+  financial_status: ShopifyOrderFinancialStatus | null;
+  fulfillment_status: ShopifyOrderFulfillmentStatus;
+  // Per-order money totals as decimal strings.
+  subtotal_price: string;
+  total_discounts: string;
+  total_shipping_price_set: { shop_money: { amount: string; currency_code: string } } | null;
+  total_price: string;
+  total_tax: string;
+  // Optional gateway hint when a single gateway processed everything.
+  payment_gateway_names: string[];
+  customer: ShopifyOrderCustomer | null;
+  billing_address: ShopifyAddress | null;
+  shipping_address: ShopifyAddress | null;
+  line_items: ShopifyLineItem[];
+  shipping_lines: ShopifyShippingLine[];
+  transactions?: ShopifyTransactionSummary[];
+  note: string | null;
+  tags: string;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ShopifyOrderWebhookPayload = ShopifyOrder;

@@ -16,6 +16,18 @@ import { z } from 'zod';
 // canonical avoids URL surprises if the field is ever echoed to logs.
 const STORE_URL_RE = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i;
 
+// Mirrors the CustomerType enum in the tenant schema. Kept inline (not
+// imported from @/generated/tenant) so this validation file stays
+// importable from edge / client bundles that can't reach the Prisma
+// runtime.
+const CUSTOMER_TYPE = z.enum([
+  'WHOLESALE_REGULAR',
+  'WHOLESALE_PREFERRED',
+  'WHOLESALE_DISTRIBUTOR',
+  'WHOLESALE_MASTER_DISTRIBUTOR',
+  'RETAIL',
+]);
+
 export const shopifyStoreCreateSchema = z.object({
   name: z.string().trim().min(1).max(120),
   storeUrl: z
@@ -27,14 +39,31 @@ export const shopifyStoreCreateSchema = z.object({
   webhookSecret: z.string().trim().min(1).max(512).optional(),
   syncEnabled: z.boolean().default(false),
   inventoryPushEnabled: z.boolean().default(false),
+  orderSyncEnabled: z.boolean().default(false),
   shopifyLocationId: z.string().trim().min(1).max(64).optional(),
+  // Order-import defaults — every one is required before order sync can
+  // actually run, but the service accepts them piecemeal so an operator
+  // can stand up the store first and fill these in afterwards. The
+  // importer throws StoreNotConfiguredForOrderSyncError when one is
+  // missing at import time.
+  defaultWarehouseId: z.string().min(1).optional(),
+  defaultSalesRepId: z.string().min(1).optional(),
+  defaultPaymentTermId: z.string().min(1).optional(),
+  defaultCustomerType: CUSTOMER_TYPE.optional(),
   // Omitted on create → service computes max(sortOrder) + 10 so new stores
   // append to the end of the list without disturbing existing order.
   sortOrder: z.number().int().min(0).optional(),
   active: z.boolean().default(true),
 });
 
-export const shopifyStoreUpdateSchema = shopifyStoreCreateSchema.partial();
+export const shopifyStoreUpdateSchema = shopifyStoreCreateSchema.partial().extend({
+  // Allow explicit null on the update path so an operator can clear a
+  // default they previously set. The service maps null → Prisma.DbNull.
+  defaultWarehouseId: z.string().min(1).nullable().optional(),
+  defaultSalesRepId: z.string().min(1).nullable().optional(),
+  defaultPaymentTermId: z.string().min(1).nullable().optional(),
+  defaultCustomerType: CUSTOMER_TYPE.nullable().optional(),
+});
 
 export type ShopifyStoreCreateInput = z.infer<typeof shopifyStoreCreateSchema>;
 export type ShopifyStoreUpdateInput = z.infer<typeof shopifyStoreUpdateSchema>;

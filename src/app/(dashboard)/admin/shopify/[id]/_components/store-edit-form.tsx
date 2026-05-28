@@ -7,6 +7,20 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Field, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+
+export type CustomerTypeValue =
+  | 'WHOLESALE_REGULAR'
+  | 'WHOLESALE_PREFERRED'
+  | 'WHOLESALE_DISTRIBUTOR'
+  | 'WHOLESALE_MASTER_DISTRIBUTOR'
+  | 'RETAIL';
 
 export type StoreEditFormInitial = {
   name: string;
@@ -15,21 +29,46 @@ export type StoreEditFormInitial = {
   hasWebhookSecret: boolean;
   syncEnabled: boolean;
   inventoryPushEnabled: boolean;
+  orderSyncEnabled: boolean;
   shopifyLocationId: string | null;
+  defaultWarehouseId: string | null;
+  defaultSalesRepId: string | null;
+  defaultPaymentTermId: string | null;
+  defaultCustomerType: CustomerTypeValue | null;
   active: boolean;
 };
 
+export type StoreEditOptions = {
+  warehouses: Array<{ id: string; code: string; name: string }>;
+  salesReps: Array<{ id: string; code: string; name: string }>;
+  paymentTerms: Array<{ id: string; code: string; label: string }>;
+};
+
+const CUSTOMER_TYPE_OPTIONS: Array<{ value: CustomerTypeValue; label: string }> = [
+  { value: 'RETAIL', label: 'Retail (B2C — auto-invoice + payment as EXTERNAL)' },
+  { value: 'WHOLESALE_REGULAR', label: 'Wholesale Regular' },
+  { value: 'WHOLESALE_PREFERRED', label: 'Wholesale Preferred' },
+  { value: 'WHOLESALE_DISTRIBUTOR', label: 'Wholesale Distributor' },
+  { value: 'WHOLESALE_MASTER_DISTRIBUTOR', label: 'Wholesale Master Distributor' },
+];
+
+const UNSET = '__unset__';
+
 // Per-store connection settings form. Secrets are write-only: when one is
 // already stored the input shows a placeholder instead of the cleartext
-// value. Blank on save → keep stored value. Slice B replaces the legacy
-// single-store form with this — same submit semantics, more fields.
+// value. Blank on save → keep stored value. The order-sync defaults
+// (warehouse / sales rep / payment term / customer type) are required
+// for order import; the form lets you save them piecemeal but the
+// "Sync Orders" button stays disabled until every one is set.
 
 export function StoreEditForm({
   storeId,
   initial,
+  options,
 }: {
   storeId: string;
   initial: StoreEditFormInitial;
+  options: StoreEditOptions;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -42,10 +81,29 @@ export function StoreEditForm({
   const [inventoryPushEnabled, setInventoryPushEnabled] = useState(
     initial.inventoryPushEnabled,
   );
+  const [orderSyncEnabled, setOrderSyncEnabled] = useState(
+    initial.orderSyncEnabled,
+  );
   const [shopifyLocationId, setShopifyLocationId] = useState(
     initial.shopifyLocationId ?? '',
   );
+  const [defaultWarehouseId, setDefaultWarehouseId] = useState<string>(
+    initial.defaultWarehouseId ?? UNSET,
+  );
+  const [defaultSalesRepId, setDefaultSalesRepId] = useState<string>(
+    initial.defaultSalesRepId ?? UNSET,
+  );
+  const [defaultPaymentTermId, setDefaultPaymentTermId] = useState<string>(
+    initial.defaultPaymentTermId ?? UNSET,
+  );
+  const [defaultCustomerType, setDefaultCustomerType] = useState<string>(
+    initial.defaultCustomerType ?? UNSET,
+  );
   const [active, setActive] = useState(initial.active);
+
+  function valueOrNull(v: string): string | null {
+    return v === UNSET || v === '' ? null : v;
+  }
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -56,14 +114,16 @@ export function StoreEditForm({
           storeUrl,
           syncEnabled,
           inventoryPushEnabled,
+          orderSyncEnabled,
           active,
         };
         if (accessToken.trim()) body.accessToken = accessToken.trim();
         if (webhookSecret.trim()) body.webhookSecret = webhookSecret.trim();
-        // Allow clearing the location id with an explicit empty string;
-        // empty string in the form value means "clear" if the user wiped
-        // an existing value (we send '' so the service nulls it).
         body.shopifyLocationId = shopifyLocationId.trim() || null;
+        body.defaultWarehouseId = valueOrNull(defaultWarehouseId);
+        body.defaultSalesRepId = valueOrNull(defaultSalesRepId);
+        body.defaultPaymentTermId = valueOrNull(defaultPaymentTermId);
+        body.defaultCustomerType = valueOrNull(defaultCustomerType);
 
         const res = await fetch(`/api/admin/shopify/stores/${storeId}`, {
           method: 'PUT',
@@ -166,13 +226,105 @@ export function StoreEditForm({
         </p>
       </Field>
 
+      <div className="space-y-3 rounded-md border border-dashed p-4">
+        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Order import defaults
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Required before &ldquo;Sync orders&rdquo; / order webhooks can import.
+          Auto-created customers + sales orders inherit these.
+        </p>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor="store-default-warehouse">Default warehouse</FieldLabel>
+            <Select
+              value={defaultWarehouseId}
+              onValueChange={(v) => setDefaultWarehouseId(v ?? UNSET)}
+            >
+              <SelectTrigger id="store-default-warehouse">
+                <SelectValue placeholder="Select warehouse…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNSET}>— Not set —</SelectItem>
+                {options.warehouses.map((w) => (
+                  <SelectItem key={w.id} value={w.id}>
+                    {w.code} · {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="store-default-rep">Default sales rep</FieldLabel>
+            <Select
+              value={defaultSalesRepId}
+              onValueChange={(v) => setDefaultSalesRepId(v ?? UNSET)}
+            >
+              <SelectTrigger id="store-default-rep">
+                <SelectValue placeholder="Select sales rep…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNSET}>— Not set —</SelectItem>
+                {options.salesReps.map((r) => (
+                  <SelectItem key={r.id} value={r.id}>
+                    {r.code} · {r.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="store-default-terms">Default payment terms</FieldLabel>
+            <Select
+              value={defaultPaymentTermId}
+              onValueChange={(v) => setDefaultPaymentTermId(v ?? UNSET)}
+            >
+              <SelectTrigger id="store-default-terms">
+                <SelectValue placeholder="Select payment terms…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNSET}>— Not set —</SelectItem>
+                {options.paymentTerms.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.code} · {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="store-default-type">Default customer type</FieldLabel>
+            <Select
+              value={defaultCustomerType}
+              onValueChange={(v) => setDefaultCustomerType(v ?? UNSET)}
+            >
+              <SelectTrigger id="store-default-type">
+                <SelectValue placeholder="Select customer type…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNSET}>— Not set —</SelectItem>
+                {CUSTOMER_TYPE_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
+      </div>
+
       <div className="flex flex-wrap gap-x-6 gap-y-2 pt-1">
         <label className="flex cursor-pointer items-center gap-2 text-sm">
           <Checkbox
             checked={syncEnabled}
             onCheckedChange={(v) => setSyncEnabled(v === true)}
           />
-          Sync enabled (webhooks process, full-sync allowed)
+          Product sync enabled (webhooks process, full-sync allowed)
         </label>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
           <Checkbox
@@ -180,6 +332,13 @@ export function StoreEditForm({
             onCheckedChange={(v) => setInventoryPushEnabled(v === true)}
           />
           Inventory push enabled
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <Checkbox
+            checked={orderSyncEnabled}
+            onCheckedChange={(v) => setOrderSyncEnabled(v === true)}
+          />
+          Order sync enabled (Shopify → ERP order import + webhooks)
         </label>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
           <Checkbox
