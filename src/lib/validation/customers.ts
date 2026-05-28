@@ -125,7 +125,6 @@ export const createCustomerInputSchema = z.object({
   primaryPhone: z.string().max(64).optional(),
   primaryEmail: z.string().email().max(255).optional(),
   internalNotes: z.string().max(10000).optional(),
-  shopifyCustomerId: z.string().max(128).optional(),
   costPlusPercent: percentDecimal.optional(),
   active: z.boolean().optional(),
   createdById: z.string().optional(),
@@ -153,7 +152,6 @@ export const updateCustomerInputSchema = z.object({
   primaryPhone: z.string().max(64).nullable().optional(),
   primaryEmail: z.string().email().max(255).nullable().optional(),
   internalNotes: z.string().max(10000).nullable().optional(),
-  shopifyCustomerId: z.string().max(128).nullable().optional(),
   costPlusPercent: percentDecimal.nullable().optional(),
   active: z.boolean().optional(),
 });

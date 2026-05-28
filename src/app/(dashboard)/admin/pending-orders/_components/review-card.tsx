@@ -16,7 +16,7 @@ import type {
 
 // Side-by-side review card. On the left: Shopify order data extracted
 // from the parked payload. On the right: the candidate ERP customer
-// when one was matched (email match with a different shopifyCustomerId,
+// when one was matched (email match with a conflicting store-scoped link,
 // or operator's chosen customer for a multiple-email-match scenario).
 //
 // For UNKNOWN_SKU reviews there's no customer to compare; the card
@@ -26,6 +26,7 @@ import type {
 
 type ReviewWithEnrichment = PendingReviewListItem & {
   matchedCustomerEnrichment: MatchedCustomerEnrichment | null;
+  linkedCustomerOverride?: boolean;
 };
 
 type ShopifyOrderShape = {
@@ -85,6 +86,7 @@ export function ReviewCard({
   const matched = review.matchedCustomer;
   const enrichment = review.matchedCustomerEnrichment;
   const showCompare = matched != null;
+  const linkedOverride = review.linkedCustomerOverride ?? false;
 
   function call(action: object, successMsg: string) {
     startTransition(async () => {
@@ -245,7 +247,11 @@ export function ReviewCard({
 
           {matched ? (
             <ComparePanel
-              title={`ERP customer — ${matched.name}`}
+              title={
+                linkedOverride
+                  ? `ERP customer (already linked) — ${matched.name}`
+                  : `ERP customer — ${matched.name}`
+              }
               cta={
                 <Link
                   href={`/customers/${matched.id}`}
@@ -259,11 +265,6 @@ export function ReviewCard({
               <KV label="Name" value={matched.name} />
               <KV label="Email" value={matched.primaryEmail ?? '—'} />
               <KV label="Phone" value={matched.primaryPhone ?? '—'} />
-              <KV
-                label="Shopify customer id"
-                value={matched.shopifyCustomerId ?? '— (not linked yet)'}
-                mono
-              />
               {enrichment ? (
                 <>
                   <KV
@@ -298,15 +299,22 @@ export function ReviewCard({
                   disabled={pending}
                 >
                   <Check />
-                  Use existing customer
+                  {linkedOverride ? 'Import under linked customer' : 'Use existing customer'}
                 </Button>
-                <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                  <Checkbox
-                    checked={addAsNewAddress}
-                    onCheckedChange={(v) => setAddAsNewAddress(v === true)}
-                  />
-                  Also add Shopify ship-to as a new address
-                </label>
+                {linkedOverride ? (
+                  <span className="text-xs text-muted-foreground">
+                    A previous order already linked this Shopify account to{' '}
+                    <strong>{matched.name}</strong>.
+                  </span>
+                ) : (
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                    <Checkbox
+                      checked={addAsNewAddress}
+                      onCheckedChange={(v) => setAddAsNewAddress(v === true)}
+                    />
+                    Also add Shopify ship-to as a new address
+                  </label>
+                )}
               </>
             ) : null}
             {review.reason !== 'UNKNOWN_SKU' ? (
@@ -341,9 +349,11 @@ function ReasonBadge({ reason }: { reason: string }) {
       ? 'Email matches a different Shopify id'
       : reason === 'MULTIPLE_EMAIL_MATCHES'
         ? 'Email matches multiple customers'
-        : reason === 'UNKNOWN_SKU'
-          ? 'Unknown SKU'
-          : reason;
+        : reason === 'EMAIL_MATCH_NO_STORE_LINK'
+          ? 'New Shopify customer — confirm or create billing account'
+          : reason === 'UNKNOWN_SKU'
+            ? 'Unknown SKU'
+            : reason;
   return (
     <Badge variant="outline" className="text-xs">
       {label}

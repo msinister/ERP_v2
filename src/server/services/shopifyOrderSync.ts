@@ -49,6 +49,55 @@ import {
 const SO_SEQUENCE_NAME = 'sales_order';
 const SO_PREFIX = 'SO';
 
+// Returns a Date 30 days before now — the default lookback window when
+// a store has never synced (lastOrderSyncAt is null).
+function thirtyDaysAgo(): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - 30);
+  return d;
+}
+
+// Convert a Shopify money string (e.g. "12.50") to a Prisma Decimal.
+// Returns Decimal(0) when the value is absent or unparseable.
+function parseDecimal(value: string | null | undefined): Prisma.Decimal {
+  if (!value) return new Prisma.Decimal(0);
+  try {
+    return new Prisma.Decimal(value);
+  } catch {
+    return new Prisma.Decimal(0);
+  }
+}
+
+// Build a short internal-notes string from interesting Shopify order metadata
+// (tags, note attributes, fulfillment instructions) so operators have context
+// without opening Shopify.
+function buildInternalNotes(order: ShopifyOrder): string | null {
+  const parts: string[] = [];
+  if (order.tags) parts.push(`Tags: ${order.tags}`);
+  if (order.note_attributes?.length) {
+    const attrs = order.note_attributes
+      .map((a) => `${a.name}: ${a.value}`)
+      .join(', ');
+    parts.push(`Note attrs: ${attrs}`);
+  }
+  return parts.length ? parts.join(' | ') : null;
+}
+
+// Collapse a Shopify address object into a single display string for the
+// SalesOrder.shippingAddress text field.
+function formatAddressOneLine(a: ShopifyAddress | null | undefined): string | null {
+  if (!a) return null;
+  const parts = [
+    [a.first_name, a.last_name].filter(Boolean).join(' '),
+    a.company,
+    a.address1,
+    a.address2,
+    [a.city, a.province_code ?? a.province, a.zip].filter(Boolean).join(' '),
+    a.country_code ?? a.country,
+  ].filter((s): s is string => !!s && s.trim() !== '');
+  return parts.join(', ') || null;
+}
+
 // Methods Shopify uses for financial_status when the customer has
 // effectively paid (or committed to pay via deferred capture). Anything
 // outside this set is skipped by the sync (refunded / voided already-
@@ -86,7 +135,7 @@ export type ImportOutcome =
   | {
       outcome: 'pending_review';
       pendingReviewId: string;
-      reason: 'EMAIL_MATCH_DIFFERENT_ID' | 'MULTIPLE_EMAIL_MATCHES' | 'UNKNOWN_SKU';
+      reason: 'EMAIL_MATCH_DIFFERENT_ID' | 'MULTIPLE_EMAIL_MATCHES' | 'EMAIL_MATCH_NO_STORE_LINK' | 'UNKNOWN_SKU';
     }
   | {
       outcome: 'error';
@@ -104,6 +153,12 @@ export async function importShopifyOrder(
   storeId: string,
   order: ShopifyOrder,
   ctx?: AuditContext,
+  opts?: {
+    // When resolving a PendingOrderReview, pass its ID here so the
+    // idempotency check at step 2 doesn't re-detect it as an existing
+    // pending review and short-circuit the import.
+    excludeReviewId?: string;
+  },
 ): Promise<ImportOutcome> {
   // 0. Sanity: the matching service will need store defaults; fetch the
   // store row once up front so we fail fast on misconfigured stores
@@ -114,8 +169,10 @@ export async function importShopifyOrder(
   }
 
   // 1. Idempotency: skip if we already imported this order.
+  // Exclude soft-deleted SOs so a cancelled+deleted order can be
+  // re-imported (e.g. after correcting a customer mismatch).
   const existing = await db.salesOrder.findFirst({
-    where: { shopifyOrderId: order.id },
+    where: { shopifyOrderId: order.id, deletedAt: null },
     select: { id: true },
   });
   if (existing) {
@@ -126,12 +183,29 @@ export async function importShopifyOrder(
     };
   }
 
+  // 1b. Hard-delete any soft-deleted SO for this Shopify order so the
+  // unique constraint on shopifyOrderId doesn't block a fresh insert.
+  // This only fires when an operator soft-deleted the SO specifically
+  // to allow re-import (e.g. after a customer mismatch correction).
+  const softDeleted = await db.salesOrder.findFirst({
+    where: { shopifyOrderId: order.id, deletedAt: { not: null } },
+    select: { id: true },
+  });
+  if (softDeleted) {
+    // Delete child rows first (RESTRICT FK on SalesOrderLine).
+    await db.salesOrderLine.deleteMany({ where: { salesOrderId: softDeleted.id } });
+    await db.salesOrder.delete({ where: { id: softDeleted.id } });
+  }
+
   // 2. Idempotency: a PENDING review for this order already exists.
+  // Exclude the review currently being resolved (opts.excludeReviewId) so
+  // resolution actions don't get short-circuited by the very row they own.
   const existingReview = await db.pendingOrderReview.findFirst({
     where: {
       shopifyStoreId: storeId,
       shopifyOrderId: order.id,
       status: 'PENDING',
+      ...(opts?.excludeReviewId ? { id: { not: opts.excludeReviewId } } : {}),
     },
     select: { id: true },
   });
@@ -150,7 +224,7 @@ export async function importShopifyOrder(
   }
 
   // 4. Customer match.
-  const matchResult = await matchCustomerForShopifyOrder(db, order);
+  const matchResult = await matchCustomerForShopifyOrder(db, order, storeId);
   if (matchResult.kind === 'ambiguous') {
     const review = await createPendingReview(db, {
       storeId,
@@ -526,7 +600,11 @@ type ResolvedLine = {
 type CreateReviewArgs = {
   storeId: string;
   order: ShopifyOrder;
-  reason: 'EMAIL_MATCH_DIFFERENT_ID' | 'MULTIPLE_EMAIL_MATCHES' | 'UNKNOWN_SKU';
+  reason:
+    | 'EMAIL_MATCH_DIFFERENT_ID'
+    | 'MULTIPLE_EMAIL_MATCHES'
+    | 'EMAIL_MATCH_NO_STORE_LINK'
+    | 'UNKNOWN_SKU';
   matchedCustomerId: string | null;
   unknownSku: string | null;
   ctx?: AuditContext;
@@ -542,9 +620,15 @@ async function createPendingReview(
         shopifyStoreId: args.storeId,
         shopifyOrderId: args.order.id,
         shopifyOrderNumber: args.order.name,
-        shopifyCustomerEmail: (args.order.customer?.email ?? args.order.email ?? '').trim(),
+        shopifyCustomerEmail: (
+          args.order.customer?.email ??
+          args.order.email ??
+          ''
+        ).trim(),
         shopifyCustomerId: args.order.customer?.id?.toString() ?? null,
-        shopifyOrderData: JSON.parse(JSON.stringify(args.order)) as Prisma.InputJsonValue,
+        shopifyOrderData: JSON.parse(
+          JSON.stringify(args.order),
+        ) as Prisma.InputJsonValue,
         reason: args.reason,
         matchedCustomerId: args.matchedCustomerId,
         unknownSku: args.unknownSku,
@@ -560,41 +644,3 @@ async function createPendingReview(
     return { id: created.id };
   });
 }
-
-function buildInternalNotes(order: ShopifyOrder): string {
-  const lines: string[] = [
-    `Imported from Shopify order ${order.name}`,
-    `financial_status=${order.financial_status ?? 'null'}`,
-    `fulfillment_status=${order.fulfillment_status ?? 'null'}`,
-  ];
-  if (order.payment_gateway_names?.length) {
-    lines.push(`gateway=${order.payment_gateway_names.join(', ')}`);
-  }
-  if (order.tags) lines.push(`shopify_tags=${order.tags}`);
-  return lines.join('\n').slice(0, 2000);
-}
-
-function formatAddressOneLine(a: ShopifyAddress): string {
-  const parts = [
-    a.name ?? `${a.first_name ?? ''} ${a.last_name ?? ''}`.trim(),
-    a.company,
-    a.address1,
-    a.address2,
-    [a.city, a.province_code ?? a.province, a.zip].filter(Boolean).join(' '),
-    a.country_code ?? a.country,
-  ].filter((s): s is string => !!s && s.trim() !== '');
-  return parts.join(', ').slice(0, 2000);
-}
-
-function parseDecimal(s: string | undefined | null): Prisma.Decimal | null {
-  if (s == null || s === '') return null;
-  const d = new Prisma.Decimal(s);
-  return d.greaterThan(0) ? d : null;
-}
-
-function thirtyDaysAgo(): Date {
-  const d = new Date();
-  d.setDate(d.getDate() - 30);
-  return d;
-}
-

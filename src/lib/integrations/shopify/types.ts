@@ -235,6 +235,11 @@ export type ShopifyOrder = {
   shipping_lines: ShopifyShippingLine[];
   transactions?: ShopifyTransactionSummary[];
   note: string | null;
+  // Operator-supplied key/value pairs attached to the order (e.g.
+  // "Gift wrap: yes"). Stored on Shopify alongside `note` but separate
+  // from `tags` (which is a single comma-separated string). Optional
+  // because not every order payload includes the field.
+  note_attributes?: Array<{ name: string; value: string }>;
   tags: string;
   cancelled_at: string | null;
   cancel_reason: string | null;

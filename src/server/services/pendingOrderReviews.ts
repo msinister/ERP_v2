@@ -84,20 +84,51 @@ export async function resolvePendingOrderReview(
   const order = review.shopifyOrderData as unknown as ShopifyOrder;
 
   if (input.action === 'use_existing') {
-    // Link the Shopify customer id onto the chosen ERP customer (so
-    // future orders short-circuit on the shopify-id branch in the
-    // matching service). If the operator opted to add Shopify's
-    // ship-to as a new address, do that too.
+    // Determine the effective customer to bind. If a ShopifyCustomerLink
+    // already exists for this Shopify account on this store (e.g. created
+    // when a sibling review was resolved), and the operator's customerId
+    // is the stale email-matched customer from when the review was created
+    // (review.matchedCustomerId), prefer the existing link's customer —
+    // it's more authoritative. The operator can still override by
+    // explicitly picking a different customer from the search field.
+    let effectiveCustomerId = input.customerId;
     if (review.shopifyCustomerId) {
-      await db.customer.update({
-        where: { id: input.customerId },
-        data: { shopifyCustomerId: review.shopifyCustomerId },
+      const existingLink = await db.shopifyCustomerLink.findUnique({
+        where: {
+          shopifyStoreId_shopifyCustomerId: {
+            shopifyStoreId: review.shopifyStoreId,
+            shopifyCustomerId: review.shopifyCustomerId,
+          },
+        },
+        select: { customerId: true },
       });
+      if (existingLink && input.customerId === review.matchedCustomerId) {
+        // Operator accepted the stale email-match suggestion; use the
+        // already-established link instead of overwriting it.
+        effectiveCustomerId = existingLink.customerId;
+      } else {
+        // No link yet, or operator explicitly chose a different customer —
+        // create/update the link to the operator's selection.
+        await db.shopifyCustomerLink.upsert({
+          where: {
+            shopifyStoreId_shopifyCustomerId: {
+              shopifyStoreId: review.shopifyStoreId,
+              shopifyCustomerId: review.shopifyCustomerId,
+            },
+          },
+          create: {
+            shopifyStoreId: review.shopifyStoreId,
+            shopifyCustomerId: review.shopifyCustomerId,
+            customerId: effectiveCustomerId,
+          },
+          update: { customerId: effectiveCustomerId },
+        });
+      }
     }
     if (input.addAsNewAddress && order.shipping_address) {
-      await addShippingAddress(db, input.customerId, order.shipping_address);
+      await addShippingAddress(db, effectiveCustomerId, order.shipping_address);
     }
-    const r = await importShopifyOrder(db, review.shopifyStoreId, order, ctx);
+    const r = await importShopifyOrder(db, review.shopifyStoreId, order, ctx, { excludeReviewId: review.id });
     return finalizeAfterImport(db, review, r, 'RESOLVED_EXISTING', ctx);
   }
 
@@ -120,9 +151,9 @@ export async function resolvePendingOrderReview(
     }
     throw e;
   }
-  // The new customer now exists with shopifyCustomerId pre-set, so the
-  // import path's id-match branch finds them immediately.
-  const r = await importShopifyOrder(db, review.shopifyStoreId, order, ctx);
+  // The new customer now exists with a ShopifyCustomerLink, so the
+  // import path's link-lookup branch finds them immediately.
+  const r = await importShopifyOrder(db, review.shopifyStoreId, order, ctx, { excludeReviewId: review.id });
   return finalizeAfterImport(db, review, r, 'RESOLVED_NEW', ctx);
 }
 
@@ -247,7 +278,6 @@ export type PendingReviewListItem = PendingOrderReview & {
     name: string;
     primaryEmail: string | null;
     primaryPhone: string | null;
-    shopifyCustomerId: string | null;
   } | null;
 };
 
@@ -272,7 +302,6 @@ export async function listPendingReviews(
           name: true,
           primaryEmail: true,
           primaryPhone: true,
-          shopifyCustomerId: true,
         },
       },
     },
@@ -294,12 +323,21 @@ export type MatchedCustomerEnrichment = {
 
 export type ReviewWithEnrichment = PendingReviewListItem & {
   matchedCustomerEnrichment: MatchedCustomerEnrichment | null;
+  // True when matchedCustomer was overridden by an existing ShopifyCustomerLink
+  // (i.e. a sibling review was resolved first and established the link).
+  // The UI uses this to label the panel "Already linked" rather than "Email match".
+  linkedCustomerOverride: boolean;
 };
 
 // Detail-page helper. Fetches the review plus enrichment fields about
 // the candidate ERP customer (order count, lifetime revenue, open AR,
 // address count) so the side-by-side compare can render without further
 // round-trips.
+//
+// When a ShopifyCustomerLink already exists for (shopifyStoreId, shopifyCustomerId)
+// and it points to a different customer than matchedCustomerId (which can happen
+// when a sibling review was resolved first and created the link), we override
+// matchedCustomer with the linked customer so the operator sees the correct account.
 export async function getReviewWithEnrichment(
   db: PrismaClient,
   id: string,
@@ -314,33 +352,72 @@ export async function getReviewWithEnrichment(
           name: true,
           primaryEmail: true,
           primaryPhone: true,
-          shopifyCustomerId: true,
         },
       },
     },
   });
   if (!review) return null;
 
+  // Check whether a store-scoped link already exists for this Shopify customer.
+  // If it does and points to a different ERP customer than the stale email match,
+  // prefer the link — it was established by a previous operator action.
+  type CustomerShape = {
+    id: string;
+    name: string;
+    primaryEmail: string | null;
+    primaryPhone: string | null;
+  };
+
+  let effectiveCustomer: CustomerShape | null = review.matchedCustomer;
+  let linkedCustomerOverride = false;
+
+  if (review.shopifyCustomerId) {
+    const existingLink = await db.shopifyCustomerLink.findUnique({
+      where: {
+        shopifyStoreId_shopifyCustomerId: {
+          shopifyStoreId: review.shopifyStoreId,
+          shopifyCustomerId: review.shopifyCustomerId,
+        },
+      },
+      include: {
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            primaryEmail: true,
+            primaryPhone: true,
+          },
+        },
+      },
+    });
+    if (existingLink && existingLink.customerId !== review.matchedCustomerId) {
+      effectiveCustomer = existingLink.customer;
+      linkedCustomerOverride = true;
+    }
+  }
+
+  const effectiveCustomerId = effectiveCustomer?.id ?? null;
+
   let enrichment: MatchedCustomerEnrichment | null = null;
-  if (review.matchedCustomerId) {
+  if (effectiveCustomerId) {
     const [orderCount, revenueAgg, openArAgg, addressCount] = await Promise.all([
       db.salesOrder.count({
-        where: { customerId: review.matchedCustomerId, deletedAt: null },
+        where: { customerId: effectiveCustomerId, deletedAt: null },
       }),
       db.invoice.aggregate({
         _sum: { total: true },
-        where: { customerId: review.matchedCustomerId, deletedAt: null },
+        where: { customerId: effectiveCustomerId, deletedAt: null },
       }),
       db.invoice.aggregate({
         _sum: { total: true, amountPaid: true, amountCredited: true },
         where: {
-          customerId: review.matchedCustomerId,
+          customerId: effectiveCustomerId,
           deletedAt: null,
           status: { in: ['OPEN', 'PARTIAL'] },
         },
       }),
       db.customerAddress.count({
-        where: { customerId: review.matchedCustomerId, deletedAt: null },
+        where: { customerId: effectiveCustomerId, deletedAt: null },
       }),
     ]);
     const ar = new Prisma.Decimal(openArAgg._sum.total ?? 0)
@@ -354,5 +431,10 @@ export async function getReviewWithEnrichment(
     };
   }
 
-  return { ...review, matchedCustomerEnrichment: enrichment };
+  return {
+    ...review,
+    matchedCustomer: effectiveCustomer,
+    matchedCustomerEnrichment: enrichment,
+    linkedCustomerOverride,
+  };
 }

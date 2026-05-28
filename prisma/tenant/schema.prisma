@@ -523,10 +523,11 @@ model ShopifyStore {
   createdBy              String?
   updatedBy              String?
 
-  rules               ShopifyStoreRule[]
-  productVariants     ProductShopifyVariant[]
-  salesOrders         SalesOrder[]
-  pendingOrderReviews PendingOrderReview[]
+  rules                ShopifyStoreRule[]
+  productVariants      ProductShopifyVariant[]
+  salesOrders          SalesOrder[]
+  pendingOrderReviews  PendingOrderReview[]
+  shopifyCustomerLinks ShopifyCustomerLink[]
   defaultWarehouse    Warehouse?              @relation("ShopifyStoreDefaultWarehouse", fields: [defaultWarehouseId], references: [id])
   defaultSalesRep     SalesRep?               @relation("ShopifyStoreDefaultSalesRep", fields: [defaultSalesRepId], references: [id])
   defaultPaymentTerm  PaymentTerm?            @relation("ShopifyStoreDefaultPaymentTerm", fields: [defaultPaymentTermId], references: [id])
@@ -575,6 +576,26 @@ enum ShopifyStoreRuleType {
   EXCLUDE_CATEGORY
   INCLUDE_TAG
   EXCLUDE_TAG
+}
+
+// Store-scoped Shopify customer → ERP customer mapping. Replaces the old
+// global Customer.shopifyCustomerId scalar so the same Shopify customer
+// (or email) can map to different ERP billing accounts per store — the
+// standard pattern for multi-location B2B accounts that share one email.
+// PK is (shopifyStoreId, shopifyCustomerId): one Shopify customer can only
+// map to one ERP customer per store, but the same ERP customer can have
+// links across multiple stores.
+model ShopifyCustomerLink {
+  shopifyStoreId    String
+  shopifyCustomerId String
+  customerId        String
+  createdAt         DateTime @default(now())
+
+  store    ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  customer Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@id([shopifyStoreId, shopifyCustomerId])
+  @@index([customerId])
 }
 
 model ProductVariant {
@@ -1175,7 +1196,6 @@ model Customer {
   // (per docs/03-customers.md). Distinct from CustomerActivity (timeline) and
   // AuditLog (security/compliance ledger).
   internalNotes         String?
-  shopifyCustomerId     String? // Shopify customer.id — set on first import / auto-link
   shipstationCustomerId String? // ShipStation customer id — set when SS integration ships
   // Cost-plus % captured for future resolver branch; not wired in this slice.
   costPlusPercent       Decimal?     @db.Decimal(18, 5)
@@ -1199,12 +1219,12 @@ model Customer {
   payments            Payment[]
   creditMemos         CreditMemo[]
   rmas                Rma[]
-  pendingOrderReviews PendingOrderReview[]         @relation("PendingOrderReviewMatchedCustomer")
+  pendingOrderReviews  PendingOrderReview[]         @relation("PendingOrderReviewMatchedCustomer")
+  shopifyCustomerLinks ShopifyCustomerLink[]
 
   @@index([type])
   @@index([salesRepId])
   @@index([active, deletedAt])
-  @@index([shopifyCustomerId])
   @@index([shipstationCustomerId])
   @@index([primaryEmail])
 }
@@ -3083,6 +3103,11 @@ enum PendingOrderReviewReason {
   // Multiple ERP customers share this email — common for franchise
   // owners with several locations under one contact email.
   MULTIPLE_EMAIL_MATCHES
+  // Email matched exactly one ERP customer but no store-scoped
+  // ShopifyCustomerLink exists yet. Queued for operator review so they
+  // can confirm the match or create a separate billing account — important
+  // for B2B customers with multiple store locations sharing one email.
+  EMAIL_MATCH_NO_STORE_LINK
   // line_item.sku didn't resolve to any active ProductVariant. Operator
   // either maps the SKU to an existing variant (future) or creates the
   // product upstream and re-runs.

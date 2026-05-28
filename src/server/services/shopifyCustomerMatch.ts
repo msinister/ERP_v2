@@ -14,15 +14,18 @@ import type { AuditContext } from '@/lib/audit/audit';
 // Customer matching for Shopify order import.
 //
 // Resolution cascade per the order-sync spec:
-//   1. shopifyCustomerId match → use that customer.
-//   2. Email match (single ERP customer, no shopifyCustomerId yet) →
-//      auto-link the id onto the customer and use it.
-//   3. Email match (single ERP customer, but a DIFFERENT shopifyCustomerId
-//      is already set) → AMBIGUOUS. Queue a PendingOrderReview.
+//   1. ShopifyCustomerLink(storeId, shopifyCustomerId) match → use that customer.
+//      Store-scoped so the same Shopify account can map to different ERP billing
+//      entities on different stores (multi-location B2B with shared email).
+//   2. Email match (single ERP customer, no link for this store yet) →
+//      auto-create the link and use that customer.
+//   3. Email match (single ERP customer, but DIFFERENT shopifyCustomerId already
+//      linked for this store) → AMBIGUOUS. Queue a PendingOrderReview.
 //   4. Email match (multiple ERP customers) → AMBIGUOUS. Queue a
 //      PendingOrderReview.
 //   5. No match anywhere → create a new ERP customer using the store's
-//      defaults (salesRep / paymentTerm / customerType / warehouse).
+//      defaults (salesRep / paymentTerm / customerType / warehouse) and
+//      create the link.
 //
 // Returns either { kind: 'matched', customerId } when the order can
 // proceed straight to importShopifyOrder, or { kind: 'ambiguous',
@@ -36,7 +39,15 @@ export type CustomerMatchResult =
   | { kind: 'matched'; customerId: string }
   | {
       kind: 'ambiguous';
-      reason: 'EMAIL_MATCH_DIFFERENT_ID' | 'MULTIPLE_EMAIL_MATCHES';
+      reason:
+        | 'EMAIL_MATCH_DIFFERENT_ID'
+        | 'MULTIPLE_EMAIL_MATCHES'
+        // Email matched exactly one ERP customer but no store-scoped link
+        // exists yet. Queued for operator review so they can confirm the
+        // match ("use existing") or create a separate billing account
+        // ("create new") — important for B2B customers with multiple
+        // store locations sharing one email address.
+        | 'EMAIL_MATCH_NO_STORE_LINK';
       matchedCustomerId: string | null;
     };
 
@@ -60,34 +71,40 @@ export class StoreNotConfiguredForOrderSyncError extends Error {
 /**
  * Run the matching cascade WITHOUT auto-creating a new customer. Used by
  * the importer when it wants to peek at the match result before deciding
- * to import-or-queue. Email auto-link side effect still fires when a
- * single ERP customer matches by email and has no shopifyCustomerId.
+ * to import-or-queue. The ShopifyCustomerLink auto-create side effect
+ * still fires on an email match when no link exists for this store yet.
  */
 export async function matchCustomerForShopifyOrder(
   db: PrismaClient,
   order: ShopifyOrder,
+  storeId: string,
 ): Promise<CustomerMatchResult | { kind: 'no_match' }> {
-  // Shopify id match — cheap point lookup.
   const shopifyCustomerId = order.customer?.id?.toString();
+
+  // Step 1: store-scoped link lookup — cheapest, most precise.
   if (shopifyCustomerId) {
-    const byId = await db.customer.findFirst({
-      where: { shopifyCustomerId, deletedAt: null },
-      select: { id: true },
+    const link = await db.shopifyCustomerLink.findUnique({
+      where: {
+        shopifyStoreId_shopifyCustomerId: {
+          shopifyStoreId: storeId,
+          shopifyCustomerId,
+        },
+      },
+      select: { customerId: true },
     });
-    if (byId) return { kind: 'matched', customerId: byId.id };
+    if (link) return { kind: 'matched', customerId: link.customerId };
   }
 
-  // Email match — normalize to lowercase for the lookup. Shopify
-  // sometimes lowercases emails, sometimes not; ERP primaryEmail is
-  // case-preserved.
+  // Step 2: email match — normalize to lowercase.
   const email = (order.customer?.email ?? order.email ?? '').trim();
   if (!email) return { kind: 'no_match' };
+
   const byEmail = await db.customer.findMany({
     where: {
       primaryEmail: { equals: email, mode: 'insensitive' },
       deletedAt: null,
     },
-    select: { id: true, shopifyCustomerId: true },
+    select: { id: true },
   });
 
   if (byEmail.length === 0) return { kind: 'no_match' };
@@ -100,28 +117,40 @@ export async function matchCustomerForShopifyOrder(
     };
   }
 
-  // Exactly one email match.
+  // Exactly one email match. Check whether this store already has a link
+  // for a DIFFERENT Shopify customer on this ERP customer.
   const sole = byEmail[0]!;
-  if (sole.shopifyCustomerId == null && shopifyCustomerId) {
-    // Auto-link the missing id and proceed. Side effect of the matching
-    // call — same semantics the spec calls for. Idempotent: a re-run
-    // would find this customer via the shopifyCustomerId branch above.
-    await db.customer.update({
-      where: { id: sole.id },
-      data: { shopifyCustomerId },
-    });
+
+  // Look for any existing link for this store on the matched customer.
+  const existingLinkForStore = await db.shopifyCustomerLink.findFirst({
+    where: {
+      shopifyStoreId: storeId,
+      customerId: sole.id,
+    },
+    select: { shopifyCustomerId: true },
+  });
+
+  if (existingLinkForStore == null) {
+    // No store-scoped link exists yet. For B2B wholesale, an email match
+    // alone is not enough — the same email can represent different billing
+    // accounts at different store locations. Queue a PendingOrderReview so
+    // the operator can confirm the match ("use existing") or create a
+    // separate ERP billing account ("create new"). The link is created only
+    // after the operator resolves the review.
+    return {
+      kind: 'ambiguous',
+      reason: 'EMAIL_MATCH_NO_STORE_LINK',
+      matchedCustomerId: sole.id,
+    };
+  }
+
+  if (existingLinkForStore.shopifyCustomerId === shopifyCustomerId) {
+    // The link already exists and agrees — matched.
     return { kind: 'matched', customerId: sole.id };
   }
-  if (sole.shopifyCustomerId == null && !shopifyCustomerId) {
-    // Email matches, but Shopify gave us no customer id at all
-    // (uncommon — guest checkout sometimes does this). Safe to proceed
-    // under that single customer; no link to record.
-    return { kind: 'matched', customerId: sole.id };
-  }
-  if (sole.shopifyCustomerId === shopifyCustomerId) {
-    return { kind: 'matched', customerId: sole.id };
-  }
-  // Email match + a DIFFERENT shopifyCustomerId already on the customer.
+
+  // Email matches but this store already links a DIFFERENT Shopify
+  // customer to this ERP customer — ambiguous, needs operator review.
   return {
     kind: 'ambiguous',
     reason: 'EMAIL_MATCH_DIFFERENT_ID',
@@ -131,9 +160,9 @@ export async function matchCustomerForShopifyOrder(
 
 /**
  * Auto-create an ERP customer from a Shopify order payload using the
- * store's configured defaults. Throws StoreNotConfiguredForOrderSyncError
- * if the required defaults aren't set. Wraps createCustomer so the
- * standard audit + activity rows happen.
+ * store's configured defaults, then create the ShopifyCustomerLink so
+ * future orders from the same Shopify account short-circuit at step 1.
+ * Throws StoreNotConfiguredForOrderSyncError if required defaults aren't set.
  */
 export async function createCustomerFromShopifyOrder(
   db: PrismaClient,
@@ -159,14 +188,12 @@ export async function createCustomerFromShopifyOrder(
   const email = (c?.email ?? order.email ?? '').trim();
   const company = billing?.company?.trim() ?? '';
 
-  // Display-name priority: company → "First Last" → email → fallback. We
-  // also append a uniqueness suffix when the chosen name collides — the
-  // Customer model has a citext-unique constraint on `name`.
+  // Display-name priority: company → "First Last" → email → fallback.
   const candidate =
     company || fullName || email || `Shopify customer ${c?.id ?? 'unknown'}`;
   const name = await uniqueDisplayName(db, candidate);
 
-  return createCustomer(
+  const customer = await createCustomer(
     db,
     {
       name,
@@ -175,19 +202,34 @@ export async function createCustomerFromShopifyOrder(
       paymentTermId: store.defaultPaymentTermId!,
       primaryPhone: (c?.phone ?? order.phone ?? billing?.phone ?? '').trim() || undefined,
       primaryEmail: email || undefined,
-      shopifyCustomerId: c?.id ? String(c.id) : undefined,
       billingAddress: billing
         ? toBillingAddressInput(billing)
         : undefined,
       defaultShippingAddress: shipping
         ? toShippingAddressInput(shipping, true)
         : undefined,
-      // No additional ship-tos on initial create; subsequent orders to a
-      // different address use the "add as new address" resolve action.
       createdById: ctx?.userId ?? undefined,
     },
     ctx,
   );
+
+  // Create the store-scoped link so future orders from this Shopify
+  // customer go straight to step 1 of the matching cascade.
+  const shopifyCustomerId = c?.id ? String(c.id) : null;
+  if (shopifyCustomerId) {
+    await db.shopifyCustomerLink.upsert({
+      where: {
+        shopifyStoreId_shopifyCustomerId: {
+          shopifyStoreId: store.id,
+          shopifyCustomerId,
+        },
+      },
+      create: { shopifyStoreId: store.id, shopifyCustomerId, customerId: customer.id },
+      update: {}, // already linked — leave it alone
+    });
+  }
+
+  return customer;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,9 +246,6 @@ async function uniqueDisplayName(
     select: { id: true },
   });
   if (!existing) return base;
-  // Collision → append a short numeric suffix until we land on a free
-  // slot. Bounded loop with a generous cap; one or two iterations covers
-  // every realistic case.
   for (let i = 2; i < 50; i++) {
     const next = `${base} (${i})`;
     const hit = await db.customer.findFirst({
@@ -215,9 +254,20 @@ async function uniqueDisplayName(
     });
     if (!hit) return next;
   }
-  // Fall back to a timestamp suffix — practically never hit, but it
-  // guarantees the create won't throw on the unique index.
   return `${base} (${Date.now()})`;
+}
+
+// Normalise a Shopify country value to a 2-letter ISO code.
+// Prefers country_code (already ISO) over the full country name.
+function normalizeCountry(
+  code: string | null | undefined,
+  name: string | null | undefined,
+): string {
+  const c = (code ?? '').trim().toUpperCase().slice(0, 2);
+  if (c.length === 2) return c;
+  // Fallback: first two letters of the country name, or 'US'
+  const n = (name ?? '').trim().toUpperCase().slice(0, 2);
+  return n.length === 2 ? n : 'US';
 }
 
 function toBillingAddressInput(a: ShopifyAddress) {
@@ -230,8 +280,7 @@ function toBillingAddressInput(a: ShopifyAddress) {
     postalCode: (a.zip ?? '').trim() || '00000',
     country: normalizeCountry(a.country_code, a.country),
     attention:
-      [a.first_name, a.last_name].filter(Boolean).join(' ').trim() ||
-      undefined,
+      [a.first_name, a.last_name].filter(Boolean).join(' ').trim() || undefined,
     phone: a.phone?.trim() || undefined,
   };
 }
@@ -248,19 +297,7 @@ function toShippingAddressInput(a: ShopifyAddress, isDefault: boolean) {
     postalCode: (a.zip ?? '').trim() || '00000',
     country: normalizeCountry(a.country_code, a.country),
     attention:
-      [a.first_name, a.last_name].filter(Boolean).join(' ').trim() ||
-      undefined,
+      [a.first_name, a.last_name].filter(Boolean).join(' ').trim() || undefined,
     phone: a.phone?.trim() || undefined,
   };
 }
-
-function normalizeCountry(code: string | null, name: string | null): string {
-  const c = (code ?? '').trim().toUpperCase();
-  if (c.length === 2) return c;
-  // Shopify usually sets country_code; if not, fall back to "US" rather
-  // than try to map full names. The operator can edit the customer
-  // post-import if the country was wrong.
-  if (name && name.toLowerCase().includes('united states')) return 'US';
-  return 'US';
-}
-

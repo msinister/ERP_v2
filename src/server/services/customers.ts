@@ -86,7 +86,6 @@ export async function createCustomer(
         primaryPhone: data.primaryPhone ?? null,
         primaryEmail: data.primaryEmail ?? null,
         internalNotes: data.internalNotes ?? null,
-        shopifyCustomerId: data.shopifyCustomerId ?? null,
         costPlusPercent:
           data.costPlusPercent != null
             ? new Prisma.Decimal(data.costPlusPercent)
@@ -204,7 +203,6 @@ export async function updateCustomer(
     if ('primaryPhone' in data) updateData.primaryPhone = data.primaryPhone ?? null;
     if ('primaryEmail' in data) updateData.primaryEmail = data.primaryEmail ?? null;
     if ('internalNotes' in data) updateData.internalNotes = data.internalNotes ?? null;
-    if ('shopifyCustomerId' in data) updateData.shopifyCustomerId = data.shopifyCustomerId ?? null;
     if ('costPlusPercent' in data) {
       updateData.costPlusPercent =
         data.costPlusPercent != null ? new Prisma.Decimal(data.costPlusPercent) : null;
