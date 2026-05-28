@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   Users,
   ShoppingCart,
+  ClipboardList,
   Package,
   Building2,
   Truck,
@@ -47,6 +48,12 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Sales Orders',
     href: '/sales-orders',
     icon: ShoppingCart,
+    module: 'sales_orders',
+  },
+  {
+    label: 'Pending Orders',
+    href: '/admin/pending-orders',
+    icon: ClipboardList,
     module: 'sales_orders',
   },
   {
@@ -125,13 +132,21 @@ function canSee(
   return permissionMapHasModule(permissions, item.module);
 }
 
+// Per-item count badges. Keyed by NavItem.href so the layout can fetch
+// counts however it wants (server-side query, cache, etc.) and pass
+// them through declaratively. Items with count 0 / absent render no
+// badge — empty queues shouldn't add visual noise.
+export type SidebarBadgeCounts = Record<string, number>;
+
 export function SidebarNav({
   isSuperAdmin,
   permissions,
+  badgeCounts,
   onNavigate,
 }: {
   isSuperAdmin: boolean;
   permissions: PermissionMap;
+  badgeCounts?: SidebarBadgeCounts;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
@@ -141,6 +156,7 @@ export function SidebarNav({
     <nav className="flex flex-col gap-0.5 p-3">
       {items.map((item) => {
         const Icon = item.icon;
+        const badge = badgeCounts?.[item.href] ?? 0;
         // Active when the pathname matches the item exactly or sits
         // beneath it (e.g. /customers/123 highlights the Customers
         // entry). Dashboard requires exact match so deep routes don't
@@ -162,7 +178,15 @@ export function SidebarNav({
             )}
           >
             <Icon className="size-4 shrink-0" />
-            <span>{item.label}</span>
+            <span className="flex-1 truncate">{item.label}</span>
+            {badge > 0 ? (
+              <span
+                aria-label={`${badge} pending`}
+                className="ml-auto inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-destructive px-1.5 text-[10px] font-semibold leading-none text-destructive-foreground tabular-nums"
+              >
+                {badge > 99 ? '99+' : badge}
+              </span>
+            ) : null}
           </Link>
         );
       })}

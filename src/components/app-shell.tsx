@@ -10,7 +10,7 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
-import { SidebarNav } from '@/components/sidebar-nav';
+import { SidebarNav, type SidebarBadgeCounts } from '@/components/sidebar-nav';
 import { UserMenu } from '@/components/user-menu';
 import { Toaster } from '@/components/ui/sonner';
 import type { AuthedUser } from '@/lib/auth/getCurrentUser';
@@ -19,11 +19,14 @@ import type { PermissionMap } from '@/lib/permissions/constants';
 export function AppShell({
   user,
   permissions,
+  badgeCounts,
   children,
 }: {
   user: AuthedUser;
   // The current user's permission grant — drives sidebar visibility.
   permissions: PermissionMap;
+  // Per-href badge counts shown beside the matching nav item.
+  badgeCounts?: SidebarBadgeCounts;
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -41,6 +44,7 @@ export function AppShell({
           <SidebarNav
             isSuperAdmin={user.isSuperAdmin}
             permissions={permissions}
+            badgeCounts={badgeCounts}
           />
         </div>
       </aside>
@@ -71,6 +75,7 @@ export function AppShell({
                   <SidebarNav
                     isSuperAdmin={user.isSuperAdmin}
                     permissions={permissions}
+                    badgeCounts={badgeCounts}
                     onNavigate={() => setMobileOpen(false)}
                   />
                 </div>
