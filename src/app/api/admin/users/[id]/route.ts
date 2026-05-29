@@ -38,6 +38,9 @@ const updateUserSchema = z.object({
   salesRep: z
     .object({
       isSalesRep: z.boolean(),
+      // Explicit rep code for the "create as sales rep" path when the user
+      // isn't linked yet. Ignored once linked (the rep owns its code).
+      code: z.string().min(1).max(64).optional(),
       commissionEnabled: z.boolean().optional(),
       commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
       commissionPercent: decimalString
@@ -154,10 +157,25 @@ export async function PATCH(
     let unlinkWarning: { assignedCustomerCount: number } | null = null;
     if (parsed.data.salesRep) {
       if (parsed.data.salesRep.isSalesRep) {
+        // Creating a brand-new rep with an explicit code? Pre-check it so a
+        // collision returns a clean 409 rather than an opaque unique error.
+        if (parsed.data.salesRep.code && !before.salesRepId) {
+          const existingRep = await db.salesRep.findUnique({
+            where: { code: parsed.data.salesRep.code.trim().toUpperCase() },
+            select: { id: true },
+          });
+          if (existingRep) {
+            return NextResponse.json(
+              { error: 'A sales rep with this code already exists' },
+              { status: 409 },
+            );
+          }
+        }
         await linkUserAsSalesRep(
           db,
           id,
           {
+            code: parsed.data.salesRep.code,
             commissionEnabled: parsed.data.salesRep.commissionEnabled,
             commissionBasis: parsed.data.salesRep.commissionBasis,
             commissionPercent: parsed.data.salesRep.commissionPercent,

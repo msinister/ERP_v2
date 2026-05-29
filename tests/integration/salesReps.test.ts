@@ -3,7 +3,9 @@ import { AuditAction, Prisma } from '@/generated/tenant';
 import type { PrismaClient } from '@/generated/tenant';
 import {
   createSalesRep,
+  findRepByEmail,
   getSalesRep,
+  listLinkableUsers,
   listSalesReps,
   softDeleteSalesRep,
   updateSalesRep,
@@ -13,6 +15,7 @@ import { hasTenantDb, makeClient } from '../helpers/db';
 const suite = hasTenantDb ? describe : describe.skip;
 
 const TEST_PREFIX = 'TEST-SR-';
+const TEST_USER_PREFIX = 'test-sr-user';
 
 suite('SalesRep service', () => {
   let db: PrismaClient;
@@ -113,7 +116,87 @@ suite('SalesRep service', () => {
     const ours = all.filter((r) => r.code.startsWith(TEST_PREFIX));
     expect(ours.map((r) => r.code).sort()).toEqual(['TEST-SR-A']);
   });
+
+  it('createSalesRep with linkUserId points the user at the new rep', async () => {
+    const user = await makeUser(db, 'link1');
+    const rep = await createSalesRep(db, {
+      code: 'TEST-SR-LINK1',
+      name: 'Linked Rep',
+      linkUserId: user.id,
+    });
+    const refreshed = await db.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(refreshed.salesRepId).toBe(rep.id);
+    // User link writes its own UPDATE audit row.
+    const userAudits = await db.auditLog.findMany({
+      where: { entityType: 'User', entityId: user.id, action: AuditAction.UPDATE },
+    });
+    expect(userAudits.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('updateSalesRep linkUserId=null unlinks; a userId links', async () => {
+    const user = await makeUser(db, 'link2');
+    const rep = await createSalesRep(db, { code: 'TEST-SR-LINK2', name: 'Rep2' });
+
+    await updateSalesRep(db, rep.id, { linkUserId: user.id });
+    expect(
+      (await db.user.findUniqueOrThrow({ where: { id: user.id } })).salesRepId,
+    ).toBe(rep.id);
+
+    await updateSalesRep(db, rep.id, { linkUserId: null });
+    expect(
+      (await db.user.findUniqueOrThrow({ where: { id: user.id } })).salesRepId,
+    ).toBeNull();
+  });
+
+  it('updateSalesRep refuses to steal a user linked to another rep', async () => {
+    const user = await makeUser(db, 'link3');
+    const repA = await createSalesRep(db, { code: 'TEST-SR-LINK3A', name: 'A3' });
+    const repB = await createSalesRep(db, { code: 'TEST-SR-LINK3B', name: 'B3' });
+    await updateSalesRep(db, repA.id, { linkUserId: user.id });
+    await expect(
+      updateSalesRep(db, repB.id, { linkUserId: user.id }),
+    ).rejects.toThrow(/already linked to a different sales rep/);
+  });
+
+  it('listLinkableUsers excludes users linked to other reps, includes own', async () => {
+    const free = await makeUser(db, 'free');
+    const taken = await makeUser(db, 'taken');
+    const rep = await createSalesRep(db, { code: 'TEST-SR-OWN', name: 'Own' });
+    const otherRep = await createSalesRep(db, { code: 'TEST-SR-OTHER', name: 'Other' });
+    await updateSalesRep(db, otherRep.id, { linkUserId: taken.id });
+    await updateSalesRep(db, rep.id, { linkUserId: free.id });
+
+    const linkable = await listLinkableUsers(db, { includeRepId: rep.id });
+    const ids = linkable.map((u) => u.id);
+    expect(ids).toContain(free.id); // linked to rep we're editing → still offered
+    expect(ids).not.toContain(taken.id); // linked elsewhere → hidden
+  });
+
+  it('findRepByEmail matches case-insensitively and honors exclude', async () => {
+    const rep = await createSalesRep(db, {
+      code: 'TEST-SR-EMAIL',
+      name: 'Email Rep',
+      email: 'Dup@Example.com',
+    });
+    const hit = await findRepByEmail(db, 'dup@example.com');
+    expect(hit?.id).toBe(rep.id);
+    const excluded = await findRepByEmail(db, 'dup@example.com', rep.id);
+    expect(excluded).toBeNull();
+  });
 });
+
+async function makeUser(
+  db: PrismaClient,
+  slug: string,
+): Promise<{ id: string; email: string }> {
+  return db.user.create({
+    data: {
+      email: `${TEST_USER_PREFIX}-${slug}@example.com`,
+      name: `Test ${slug}`,
+    },
+    select: { id: true, email: true },
+  });
+}
 
 async function wipe(db: PrismaClient): Promise<void> {
   const ourReps = await db.salesRep.findMany({
@@ -126,6 +209,25 @@ async function wipe(db: PrismaClient): Promise<void> {
     where: { code: 'TEST-SR-REFCUST' },
     select: { id: true },
   });
+
+  // Test users that may be linked to our reps — clear the link first so the
+  // SalesRep rows delete cleanly, then remove the users + their audit rows.
+  const ourUsers = await db.user.findMany({
+    where: { email: { startsWith: TEST_USER_PREFIX } },
+    select: { id: true },
+  });
+  const ourUserIds = ourUsers.map((u) => u.id);
+
+  if (ourUserIds.length > 0) {
+    await db.user.updateMany({
+      where: { id: { in: ourUserIds } },
+      data: { salesRepId: null },
+    });
+    await db.auditLog.deleteMany({
+      where: { entityType: 'User', entityId: { in: ourUserIds } },
+    });
+    await db.user.deleteMany({ where: { id: { in: ourUserIds } } });
+  }
 
   if (ourCustomers.length > 0) {
     await db.auditLog.deleteMany({

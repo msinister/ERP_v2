@@ -17,10 +17,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useRepEmailDuplicate } from './use-rep-email-duplicate';
 
 export type SalesRepFormMode =
   | { kind: 'create' }
   | { kind: 'edit'; repId: string };
+
+export type UserOption = { id: string; name: string; email: string };
 
 export type SalesRepFormDefaults = {
   code: string;
@@ -30,6 +33,8 @@ export type SalesRepFormDefaults = {
   commissionEnabled: boolean;
   commissionBasis: 'REVENUE' | 'MARGIN';
   commissionPercent: string;
+  // '' = no linked login. Otherwise the linked User id.
+  linkUserId: string;
 };
 
 const EMPTY: SalesRepFormDefaults = {
@@ -40,7 +45,12 @@ const EMPTY: SalesRepFormDefaults = {
   commissionEnabled: false,
   commissionBasis: 'REVENUE',
   commissionPercent: '',
+  linkUserId: '',
 };
+
+// Select can't hold an empty-string value, so the "no link" option uses a
+// sentinel that maps back to ''.
+const NO_USER = '__none__';
 
 async function readApiError(res: Response): Promise<string> {
   try {
@@ -58,14 +68,20 @@ async function readApiError(res: Response): Promise<string> {
 export function SalesRepForm({
   mode,
   defaults,
+  users = [],
 }: {
   mode: SalesRepFormMode;
   defaults?: Partial<SalesRepFormDefaults>;
+  users?: UserOption[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [v, setV] = useState<SalesRepFormDefaults>({ ...EMPTY, ...defaults });
   const isCreate = mode.kind === 'create';
+  const emailDuplicate = useRepEmailDuplicate(
+    v.email,
+    isCreate ? undefined : (mode as { repId: string }).repId,
+  );
 
   function set<K extends keyof SalesRepFormDefaults>(
     key: K,
@@ -110,6 +126,8 @@ export function SalesRepForm({
               commissionEnabled: v.commissionEnabled,
               commissionBasis: basis,
               commissionPercent: percent,
+              // Only send a link when one is chosen; absent = standalone rep.
+              ...(v.linkUserId !== '' ? { linkUserId: v.linkUserId } : {}),
             }
           : {
               name: v.name.trim(),
@@ -118,6 +136,9 @@ export function SalesRepForm({
               commissionEnabled: v.commissionEnabled,
               commissionBasis: basis,
               commissionPercent: percent,
+              // Always send on edit — the dropdown reflects the intended
+              // state, and null explicitly unlinks.
+              linkUserId: v.linkUserId === '' ? null : v.linkUserId,
             };
 
         const res = await fetch(url, {
@@ -176,6 +197,18 @@ export function SalesRepForm({
               value={v.email}
               onChange={(e) => set('email', e.target.value)}
             />
+            {emailDuplicate ? (
+              <p className="text-xs text-amber-700">
+                A sales rep with this email already exists:{' '}
+                <Link
+                  href={`/admin/sales-reps/${emailDuplicate.id}/edit`}
+                  className="font-medium underline"
+                >
+                  {emailDuplicate.code} — {emailDuplicate.name}
+                </Link>
+                . You can still save, but check this isn’t a duplicate.
+              </p>
+            ) : null}
           </Field>
           <Field orientation="horizontal">
             <Checkbox
@@ -242,6 +275,45 @@ export function SalesRepForm({
               </Field>
             </>
           ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Login link</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Field>
+            <FieldLabel htmlFor="linkUserId">Linked user</FieldLabel>
+            <Select
+              value={v.linkUserId === '' ? NO_USER : v.linkUserId}
+              onValueChange={(val) =>
+                set('linkUserId', val == null || val === NO_USER ? '' : val)
+              }
+            >
+              <SelectTrigger id="linkUserId" className="w-full">
+                <SelectValue placeholder="No linked user">
+                  {(val) => {
+                    if (val === NO_USER) return 'No linked user';
+                    const u = users.find((x) => x.id === val);
+                    return u ? `${u.name} (${u.email})` : val;
+                  }}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_USER}>No linked user</SelectItem>
+                {users.map((u) => (
+                  <SelectItem key={u.id} value={u.id}>
+                    {u.name} ({u.email})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Connects this rep to a login. Only users not already linked to
+              another rep are listed. Clear it to unlink.
+            </p>
+          </Field>
         </CardContent>
       </Card>
 

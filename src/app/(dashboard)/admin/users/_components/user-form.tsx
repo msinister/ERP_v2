@@ -1,12 +1,13 @@
 'use client';
 
-import { useTransition } from 'react';
+import { useEffect, useRef, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { toast } from '@/lib/toast';
+import { useRepEmailDuplicate } from '../../sales-reps/_components/use-rep-email-duplicate';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -60,6 +61,7 @@ const createSchema = z.object({
   forcePasswordReset: z.boolean(),
   roleId: z.string(),
   isSalesRep: z.boolean(),
+  salesRepCode: z.string(),
   commissionEnabled: z.boolean(),
   commissionBasis: z.enum(['REVENUE', 'MARGIN']),
   commissionPercent: z.string(),
@@ -74,6 +76,7 @@ const editSchema = z.object({
   forcePasswordReset: z.boolean(),
   roleId: z.string(),
   isSalesRep: z.boolean(),
+  salesRepCode: z.string(),
   commissionEnabled: z.boolean(),
   commissionBasis: z.enum(['REVENUE', 'MARGIN']),
   commissionPercent: z
@@ -92,6 +95,10 @@ export type UserFormMode =
 
 export type RoleOption = { id: string; name: string };
 
+// The rep this user is already linked to (edit mode only). Drives the
+// "linked → show info + unlink" branch of the sales-rep card.
+export type LinkedRep = { id: string; code: string; name: string };
+
 const DEFAULT_VALUES: UserFormValues = {
   name: '',
   email: '',
@@ -101,10 +108,32 @@ const DEFAULT_VALUES: UserFormValues = {
   forcePasswordReset: false,
   roleId: NO_ROLE,
   isSalesRep: false,
+  salesRepCode: '',
   commissionEnabled: false,
   commissionBasis: 'REVENUE',
   commissionPercent: '',
 };
+
+// Client-side mirror of deriveSalesRepCodeBase (name part only) — keeps the
+// auto-suggested code in sync with what the server would generate.
+function suggestRepCode(name: string): string {
+  const words = name
+    .split(/\s+/)
+    .map((w) => w.replace(/[^A-Za-z0-9]/g, ''))
+    .filter(Boolean);
+  if (words.length >= 2) {
+    const initials = words
+      .map((w) => w.charAt(0))
+      .join('')
+      .toUpperCase()
+      .slice(0, 4);
+    if (initials.length >= 2) return initials;
+  }
+  if (words.length === 1 && words[0].length >= 2) {
+    return words[0].toUpperCase().slice(0, 3);
+  }
+  return '';
+}
 
 type ApiErrorBody = {
   error?: string;
@@ -131,10 +160,12 @@ export function UserForm({
   mode,
   defaultValues,
   roles = [],
+  linkedRep = null,
 }: {
   mode: UserFormMode;
   defaultValues?: Partial<UserFormValues>;
   roles?: RoleOption[];
+  linkedRep?: LinkedRep | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -148,22 +179,56 @@ export function UserForm({
     handleSubmit,
     control,
     watch,
+    setValue,
     formState: { errors },
   } = form;
 
   const isSalesRep = watch('isSalesRep');
+  const name = watch('name');
+  const email = watch('email');
+  // Linked = already bound to a rep (edit). Creating-rep = the toggle is on
+  // and there's no existing link, so a new rep gets created on save.
+  const isLinked = mode.kind === 'edit' && !!linkedRep;
+  const isCreatingRep = isSalesRep && !isLinked;
+
+  // Auto-suggest the rep code from the display name while creating a rep,
+  // until the operator edits the code field themselves.
+  const codeTouched = useRef(false);
+  useEffect(() => {
+    if (isCreatingRep && !codeTouched.current) {
+      setValue('salesRepCode', suggestRepCode(name));
+    }
+  }, [name, isCreatingRep, setValue]);
+
+  // Same email-collision warning the sales-rep form shows — a new rep here
+  // inherits the user's email. Only relevant while creating a rep.
+  const repEmailDuplicate = useRepEmailDuplicate(isCreatingRep ? email : '');
 
   function submit(values: UserFormValues) {
     startTransition(async () => {
       try {
         if (mode.kind === 'create') {
-          const payload = {
+          const payload: Record<string, unknown> = {
             name: values.name.trim(),
             email: values.email!.trim().toLowerCase(),
             password: values.password!,
             isSuperAdmin: values.isSuperAdmin,
             forcePasswordReset: values.forcePasswordReset,
           };
+          // "Also create as sales rep" — bundle the rep into the same call.
+          if (values.isSalesRep) {
+            payload.salesRep = {
+              ...(values.salesRepCode.trim() !== ''
+                ? { code: values.salesRepCode.trim() }
+                : {}),
+              commissionEnabled: values.commissionEnabled,
+              commissionBasis: values.commissionBasis,
+              commissionPercent:
+                values.commissionPercent.trim() === ''
+                  ? null
+                  : values.commissionPercent.trim(),
+            };
+          }
           const res = await fetch('/api/admin/users', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -190,6 +255,11 @@ export function UserForm({
               isSalesRep: values.isSalesRep,
               ...(values.isSalesRep
                 ? {
+                    // Code only matters when creating a new rep (not linked
+                    // yet); the server ignores it once linked.
+                    ...(!isLinked && values.salesRepCode.trim() !== ''
+                      ? { code: values.salesRepCode.trim() }
+                      : {}),
                     commissionEnabled: values.commissionEnabled,
                     commissionBasis: values.commissionBasis,
                     commissionPercent:
@@ -405,42 +475,85 @@ export function UserForm({
         </CardContent>
       </Card>
 
-      {!isCreate ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">Sales rep</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <FieldGroup>
-              <Field orientation="horizontal">
-                <Controller
-                  control={control}
-                  name="isSalesRep"
-                  render={({ field }) => (
-                    <Checkbox
-                      id="isSalesRep"
-                      checked={field.value}
-                      onCheckedChange={(v) => field.onChange(v === true)}
-                    />
-                  )}
-                />
-                <div>
-                  <FieldLabel htmlFor="isSalesRep">
-                    This user is a sales rep
-                  </FieldLabel>
-                  <p className="text-xs text-muted-foreground">
-                    Links the user to a sales-rep record (created on demand).
-                    Customers can then be assigned to them, and “view own”
-                    scoping resolves through this link. Turning it off removes
-                    the assignment — you’ll be warned if customers are still
-                    assigned.
-                  </p>
-                </div>
-              </Field>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">Sales rep</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup>
+            {isLinked ? (
+              <div className="rounded-md border bg-muted/30 p-3 text-sm">
+                Linked to{' '}
+                <Link
+                  href={`/admin/sales-reps/${linkedRep.id}/edit`}
+                  className="font-medium underline"
+                >
+                  {linkedRep.code} — {linkedRep.name}
+                </Link>
+                . Edit the rep there to rename it or change its code.
+              </div>
+            ) : null}
+            <Field orientation="horizontal">
+              <Controller
+                control={control}
+                name="isSalesRep"
+                render={({ field }) => (
+                  <Checkbox
+                    id="isSalesRep"
+                    checked={field.value}
+                    onCheckedChange={(v) => field.onChange(v === true)}
+                  />
+                )}
+              />
+              <div>
+                <FieldLabel htmlFor="isSalesRep">
+                  {isLinked
+                    ? 'Linked as a sales rep'
+                    : 'Also create as sales rep'}
+                </FieldLabel>
+                <p className="text-xs text-muted-foreground">
+                  {isLinked
+                    ? 'Uncheck to unlink this user from their sales-rep record. You’ll be warned if customers are still assigned to the rep.'
+                    : 'Creates a linked sales-rep record alongside the user. Customers can then be assigned to them, and “view own” scoping resolves through this link.'}
+                </p>
+              </div>
+            </Field>
 
-              {isSalesRep ? (
-                <>
-                  <Field orientation="horizontal">
+            {isSalesRep ? (
+              <>
+                {isCreatingRep ? (
+                  <Field>
+                    <FieldLabel htmlFor="salesRepCode">
+                      Sales rep code
+                    </FieldLabel>
+                    <Input
+                      id="salesRepCode"
+                      placeholder="e.g. JDOE"
+                      {...register('salesRepCode', {
+                        onChange: () => {
+                          codeTouched.current = true;
+                        },
+                      })}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Auto-suggested from the name; edit if you prefer another.
+                      Must be unique across all reps.
+                    </p>
+                    {repEmailDuplicate ? (
+                      <p className="text-xs text-amber-700">
+                        A sales rep with this email already exists:{' '}
+                        <Link
+                          href={`/admin/sales-reps/${repEmailDuplicate.id}/edit`}
+                          className="font-medium underline"
+                        >
+                          {repEmailDuplicate.code} — {repEmailDuplicate.name}
+                        </Link>
+                        . You can still save, but check this isn’t a duplicate.
+                      </p>
+                    ) : null}
+                  </Field>
+                ) : null}
+                <Field orientation="horizontal">
                     <Controller
                       control={control}
                       name="commissionEnabled"
@@ -507,10 +620,9 @@ export function UserForm({
                   </Field>
                 </>
               ) : null}
-            </FieldGroup>
-          </CardContent>
-        </Card>
-      ) : null}
+          </FieldGroup>
+        </CardContent>
+      </Card>
 
       <div className="flex items-center justify-end gap-2">
         <Button

@@ -1,12 +1,16 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
+import { db } from '@/lib/db';
 import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
+import { listLinkableUsers } from '@/server/services/salesReps';
 import { SalesRepForm } from '../_components/sales-rep-form';
 
 export const revalidate = 0;
 
 export default async function NewSalesRepPage() {
   await requirePagePermission('admin.edit_users');
+
+  const users = await listLinkableUsers(db);
 
   return (
     <div className="space-y-6">
@@ -23,13 +27,13 @@ export default async function NewSalesRepPage() {
             New sales rep
           </h1>
           <p className="text-sm text-muted-foreground">
-            Creates a standalone rep record. To give them a login, link an
-            existing user from the user’s edit page.
+            Creates a rep record. Link an existing login below, or leave it
+            standalone and link a user later.
           </p>
         </div>
       </div>
 
-      <SalesRepForm mode={{ kind: 'create' }} />
+      <SalesRepForm mode={{ kind: 'create' }} users={users} />
     </div>
   );
 }

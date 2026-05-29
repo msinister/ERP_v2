@@ -3,7 +3,11 @@ import { db } from '@/lib/db';
 import { requireSuperAdmin } from '@/lib/auth/requireAuth';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
-import { createSalesRep, listSalesRepsForAdmin } from '@/server/services/salesReps';
+import {
+  createSalesRep,
+  findRepByEmail,
+  listSalesRepsForAdmin,
+} from '@/server/services/salesReps';
 import { createSalesRepInputSchema } from '@/lib/validation/salesReps';
 
 // Sales reps are People-admin master data (docs/09-admin.md). Managed by
@@ -13,6 +17,15 @@ import { createSalesRepInputSchema } from '@/lib/validation/salesReps';
 export async function GET(req: Request) {
   try {
     await requireSuperAdmin(req);
+    const url = new URL(req.url);
+    // Duplicate-email check used by the create/edit forms (warn, don't
+    // block). Returns just the matching rep when `email` is supplied.
+    const email = url.searchParams.get('email');
+    if (email !== null) {
+      const exclude = url.searchParams.get('exclude') ?? undefined;
+      const duplicate = await findRepByEmail(db, email, exclude);
+      return NextResponse.json({ duplicate });
+    }
     const rows = await listSalesRepsForAdmin(db);
     return NextResponse.json({ rows });
   } catch (e) {

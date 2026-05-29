@@ -21,6 +21,9 @@ export const createSalesRepInputSchema = z.object({
   commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
   commissionPercent: nonNegativeDecimal.nullable().optional(),
   groupId: z.string().min(1).nullable().optional(),
+  // Optional login link — points an existing User at this rep on create.
+  // The link lives on User.salesRepId; see applyRepUserLinkTx.
+  linkUserId: z.string().min(1).nullable().optional(),
 });
 
 export const updateSalesRepInputSchema = z.object({
@@ -31,6 +34,9 @@ export const updateSalesRepInputSchema = z.object({
   commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
   commissionPercent: nonNegativeDecimal.nullable().optional(),
   groupId: z.string().min(1).nullable().optional(),
+  // Present = set the login link explicitly (userId links, null unlinks).
+  // Absent = leave the existing link untouched.
+  linkUserId: z.string().min(1).nullable().optional(),
 });
 
 export type CreateSalesRepInput = z.infer<typeof createSalesRepInputSchema>;

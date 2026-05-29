@@ -31,6 +31,9 @@ export default async function EditUserPage({
         roleId: true,
         salesRep: {
           select: {
+            id: true,
+            code: true,
+            name: true,
             commissionEnabled: true,
             commissionBasis: true,
             commissionPercent: true,
@@ -59,11 +62,19 @@ export default async function EditUserPage({
   if (user.roleId) defaults.roleId = user.roleId;
   if (user.salesRep) {
     defaults.isSalesRep = true;
+    defaults.salesRepCode = user.salesRep.code;
     defaults.commissionEnabled = user.salesRep.commissionEnabled;
     defaults.commissionBasis = user.salesRep.commissionBasis ?? 'REVENUE';
     defaults.commissionPercent =
       user.salesRep.commissionPercent?.toString() ?? '';
   }
+  const linkedRep = user.salesRep
+    ? {
+        id: user.salesRep.id,
+        code: user.salesRep.code,
+        name: user.salesRep.name,
+      }
+    : null;
 
   return (
     <div className="space-y-6">
@@ -87,6 +98,7 @@ export default async function EditUserPage({
         mode={{ kind: 'edit', userId: user.id, isSelf: me.id === user.id }}
         defaultValues={defaults}
         roles={roles}
+        linkedRep={linkedRep}
       />
     </div>
   );

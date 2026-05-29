@@ -7,6 +7,8 @@ import { audit } from '@/lib/audit/audit';
 import { requireSuperAdmin } from '@/lib/auth/requireAuth';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
+import { decimalString } from '@/lib/validation/common';
+import { linkUserAsSalesRep } from '@/server/services/salesReps';
 
 // Password policy mirrors scripts/create-first-super-admin.ts. Spec
 // (docs/09-admin.md): 8+ chars, upper + lower + digit + special.
@@ -33,6 +35,20 @@ const createUserSchema = z.object({
   name: z.string().min(1).max(255),
   isSuperAdmin: z.boolean().optional(),
   forcePasswordReset: z.boolean().optional(),
+  // "Also create as sales rep" — when present, a linked SalesRep is created
+  // in the same operation. Code is auto-suggested client-side but editable;
+  // omitted code falls back to a server-generated one.
+  salesRep: z
+    .object({
+      code: z.string().min(1).max(64).optional(),
+      commissionEnabled: z.boolean().optional(),
+      commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
+      commissionPercent: decimalString
+        .refine((v) => Number(v) >= 0, 'Must be >= 0')
+        .nullable()
+        .optional(),
+    })
+    .optional(),
 });
 
 export async function GET(req: Request) {
@@ -115,7 +131,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
-    const { email, password, name, isSuperAdmin, forcePasswordReset } =
+    const { email, password, name, isSuperAdmin, forcePasswordReset, salesRep } =
       parsed.data;
 
     const policy = validatePassword(password);
@@ -124,6 +140,22 @@ export async function POST(req: Request) {
         { error: `password ${policy}` },
         { status: 400 },
       );
+    }
+
+    // Pre-check the explicit rep code BEFORE creating the auth account, so a
+    // collision doesn't leave a user behind with no rep. Auto-generated
+    // codes (no code supplied) can't collide.
+    if (salesRep?.code) {
+      const existingRep = await db.salesRep.findUnique({
+        where: { code: salesRep.code.trim().toUpperCase() },
+        select: { id: true },
+      });
+      if (existingRep) {
+        return NextResponse.json(
+          { error: 'A sales rep with this code already exists' },
+          { status: 409 },
+        );
+      }
     }
 
     // BetterAuth's signUpEmail is the canonical way to create a
@@ -178,6 +210,22 @@ export async function POST(req: Request) {
       },
       ctx: auditCtx,
     });
+
+    // Create + link the SalesRep in the same operation when requested. Its
+    // own tx writes the SalesRep CREATE + User link audit rows.
+    if (salesRep) {
+      await linkUserAsSalesRep(
+        db,
+        userId,
+        {
+          code: salesRep.code,
+          commissionEnabled: salesRep.commissionEnabled,
+          commissionBasis: salesRep.commissionBasis,
+          commissionPercent: salesRep.commissionPercent,
+        },
+        auditCtx,
+      );
+    }
 
     return NextResponse.json(after, { status: 201 });
   } catch (e) {

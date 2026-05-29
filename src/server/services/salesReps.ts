@@ -45,6 +45,11 @@ export async function createSalesRep(
       after: rep,
       ctx,
     });
+    // Optional "Link to user" from the create form — points an existing
+    // login at this fresh rep (User.salesRepId owns the link).
+    if (data.linkUserId) {
+      await applyRepUserLinkTx(tx, rep.id, data.linkUserId, ctx);
+    }
     return rep;
   });
 }
@@ -85,6 +90,12 @@ export async function updateSalesRep(
       after,
       ctx,
     });
+    // "Link to user" dropdown from the edit form. Present in the payload =
+    // caller wants to set the link explicitly: a userId links it, null
+    // clears it. Absent = leave the existing link untouched.
+    if ('linkUserId' in data) {
+      await applyRepUserLinkTx(tx, id, data.linkUserId ?? null, ctx);
+    }
     return after;
   });
 }
@@ -206,6 +217,116 @@ export async function listSalesRepsForAdmin(
   }));
 }
 
+/**
+ * Users selectable in the "Link to user" dropdown on the sales-rep form.
+ * A user can link to AT MOST one rep (User.salesRepId is unique), so the
+ * pool is the unlinked users PLUS the user already linked to `includeRepId`
+ * (so the edit form can show its current selection). Excludes soft-deleted.
+ */
+export async function listLinkableUsers(
+  db: PrismaClient,
+  opts: { includeRepId?: string } = {},
+): Promise<Array<{ id: string; name: string; email: string }>> {
+  return db.user.findMany({
+    where: {
+      deletedAt: null,
+      OR: [
+        { salesRepId: null },
+        ...(opts.includeRepId ? [{ salesRepId: opts.includeRepId }] : []),
+      ],
+    },
+    select: { id: true, name: true, email: true },
+    orderBy: { name: 'asc' },
+  });
+}
+
+/**
+ * Duplicate-detection helper for the "warn on same email" rule. Returns the
+ * first non-deleted rep sharing `email` (case-insensitive), excluding
+ * `excludeRepId` (the rep being edited). Null when no collision.
+ */
+export async function findRepByEmail(
+  db: PrismaClient,
+  email: string,
+  excludeRepId?: string,
+): Promise<{ id: string; code: string; name: string } | null> {
+  const trimmed = email.trim();
+  if (trimmed === '') return null;
+  return db.salesRep.findFirst({
+    where: {
+      deletedAt: null,
+      email: { equals: trimmed, mode: 'insensitive' },
+      ...(excludeRepId ? { id: { not: excludeRepId } } : {}),
+    },
+    select: { id: true, code: true, name: true },
+  });
+}
+
+/**
+ * Point a rep's login link at `desiredUserId` (or clear it with null),
+ * inside an existing transaction. The link is owned by User.salesRepId,
+ * which is unique — so at most one user references a given rep. Moving the
+ * link unlinks whoever currently holds it. Refuses to steal a user already
+ * bound to a DIFFERENT rep (the UI hides those, this is defense in depth).
+ */
+async function applyRepUserLinkTx(
+  tx: Prisma.TransactionClient,
+  repId: string,
+  desiredUserId: string | null,
+  ctx?: AuditContext,
+): Promise<void> {
+  const current = await tx.user.findFirst({
+    where: { salesRepId: repId },
+    select: { id: true },
+  });
+  const currentUserId = current?.id ?? null;
+  if (desiredUserId === currentUserId) return; // no-op
+
+  // Validate the target before mutating anything so a bad request rolls
+  // back cleanly with a useful message.
+  if (desiredUserId) {
+    const target = await tx.user.findUnique({
+      where: { id: desiredUserId },
+      select: { id: true, salesRepId: true, deletedAt: true },
+    });
+    if (!target) throw new Error(`User not found: ${desiredUserId}`);
+    if (target.deletedAt) throw new Error('User is soft-deleted');
+    if (target.salesRepId && target.salesRepId !== repId) {
+      throw new Error('That user is already linked to a different sales rep');
+    }
+  }
+
+  if (currentUserId) {
+    await tx.user.update({
+      where: { id: currentUserId },
+      data: { salesRepId: null },
+    });
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'User',
+      entityId: currentUserId,
+      before: { salesRepId: repId },
+      after: { salesRepId: null },
+      ctx,
+    });
+  }
+
+  if (desiredUserId) {
+    await tx.user.update({
+      where: { id: desiredUserId },
+      data: { salesRepId: repId },
+    });
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'User',
+      entityId: desiredUserId,
+      before: { salesRepId: null },
+      after: { salesRepId: repId },
+      ctx,
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // User ↔ SalesRep link. The "Sales rep" toggle on the user edit form drives
 // these. A user links to AT MOST one SalesRep (User.salesRepId is unique);
@@ -214,6 +335,10 @@ export async function listSalesRepsForAdmin(
 // ---------------------------------------------------------------------------
 
 export type SalesRepCommissionFields = {
+  // Explicit code for the rep created on first link (user → rep direction).
+  // Ignored when the user is already linked. Falls back to an auto-generated
+  // code when omitted.
+  code?: string;
   commissionEnabled?: boolean;
   commissionBasis?: CommissionBasis | null;
   commissionPercent?: string | number | null;
@@ -332,9 +457,12 @@ export async function linkUserAsSalesRep(
       return after;
     }
 
+    const explicitCode = fields.code?.trim();
     const rep = await tx.salesRep.create({
       data: {
-        code: await generateSalesRepCode(tx, user.name, user.email),
+        code: explicitCode
+          ? explicitCode.toUpperCase()
+          : await generateSalesRepCode(tx, user.name, user.email),
         name: user.name,
         email: user.email,
         active: true,

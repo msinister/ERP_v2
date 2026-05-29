@@ -28,7 +28,7 @@ export default async function SalesRepsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Sales reps</h1>
           <p className="text-sm text-muted-foreground">
             Commission rate + basis live here; link a rep to a login from the
-            user’s edit page.
+            rep’s edit page or the user’s edit page.
           </p>
         </div>
         <Button render={<Link href="/admin/sales-reps/new" />}>
@@ -83,8 +83,16 @@ export default async function SalesRepsPage() {
                         : 'Revenue'
                       : '—'}
                   </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {r.linkedUser ? r.linkedUser.email : '—'}
+                  <TableCell>
+                    {r.linkedUser ? (
+                      <span className="text-muted-foreground">
+                        {r.linkedUser.email}
+                      </span>
+                    ) : (
+                      <Badge variant="outline" className="text-muted-foreground">
+                        No login
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {r.assignedCustomerCount}

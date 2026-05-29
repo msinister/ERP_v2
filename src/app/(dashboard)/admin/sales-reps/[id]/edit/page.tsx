@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
-import { getSalesRep } from '@/server/services/salesReps';
+import { getSalesRep, listLinkableUsers } from '@/server/services/salesReps';
 import { SalesRepForm } from '../../_components/sales-rep-form';
 
 export const revalidate = 0;
@@ -18,6 +18,14 @@ export default async function EditSalesRepPage({
   const { id } = await params;
   const rep = await getSalesRep(db, id);
   if (!rep) notFound();
+
+  const [users, linkedUser] = await Promise.all([
+    listLinkableUsers(db, { includeRepId: rep.id }),
+    db.user.findFirst({
+      where: { salesRepId: rep.id },
+      select: { id: true },
+    }),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -41,6 +49,7 @@ export default async function EditSalesRepPage({
 
       <SalesRepForm
         mode={{ kind: 'edit', repId: rep.id }}
+        users={users}
         defaults={{
           code: rep.code,
           name: rep.name,
@@ -49,6 +58,7 @@ export default async function EditSalesRepPage({
           commissionEnabled: rep.commissionEnabled,
           commissionBasis: rep.commissionBasis ?? 'REVENUE',
           commissionPercent: rep.commissionPercent?.toString() ?? '',
+          linkUserId: linkedUser?.id ?? '',
         }}
       />
     </div>
