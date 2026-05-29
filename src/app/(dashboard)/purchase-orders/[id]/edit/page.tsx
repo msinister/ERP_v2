@@ -28,7 +28,11 @@ export default async function EditPurchaseOrderPage({
   const [po, vendors, warehouses, variants, catalogRows, paymentTerms] =
     await Promise.all([
     getPurchaseOrder(db, id),
-    listVendors(db, { active: true, take: 1000 }),
+    // Same productVendorsOnly filter as the new-PO page. The vendor is
+    // disabled on edit anyway, and the existing-vendor injection below
+    // ensures the PO's current vendor still shows up if it doesn't pass
+    // the filter (e.g. retroactively retyped to SERVICE).
+    listVendors(db, { active: true, productVendorsOnly: true, take: 1000 }),
     listWarehouses(db),
     db.productVariant.findMany({
       where: {

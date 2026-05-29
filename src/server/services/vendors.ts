@@ -220,6 +220,14 @@ export type VendorListFilters = {
   active?: boolean;
   type?: VendorTypeEnum;
   q?: string;
+  // PO vendor picker only: exclude SERVICE-only utility vendors (HEB Gas,
+  // etc.) so the dropdown stays focused on vendors that actually supply
+  // product. Includes any vendor whose type is STOCK / DROP_SHIP, OR
+  // any vendor with at least one non-deleted VendorProduct row (covers
+  // mis-typed vendors that nonetheless have catalog rows). SERVICE
+  // vendors can't have catalog rows (see vendorProducts.ts), so in
+  // practice this matches "type ∈ {STOCK, DROP_SHIP}".
+  productVendorsOnly?: boolean;
   skip?: number;
   take?: number;
 };
@@ -227,21 +235,34 @@ export type VendorListFilters = {
 function vendorWhere(
   filters: Omit<VendorListFilters, 'skip' | 'take'>,
 ): Prisma.VendorWhereInput {
-  const { active, type, q } = filters;
+  const { active, type, q, productVendorsOnly } = filters;
+  // Build the extra OR'd predicates as AND'd children so two
+  // independent ORs (product-vendor filter + q search) don't clobber
+  // each other when both are set.
+  const and: Prisma.VendorWhereInput[] = [];
+  if (productVendorsOnly) {
+    and.push({
+      OR: [
+        { type: { in: ['STOCK', 'DROP_SHIP'] as VendorTypeEnum[] } },
+        { products: { some: { deletedAt: null } } },
+      ],
+    });
+  }
+  // q matches against either the display name or the auto-issued code
+  // (e.g. "VEND-2026-00012") so operators can paste either into search.
+  if (q) {
+    and.push({
+      OR: [
+        { name: { contains: q, mode: 'insensitive' as const } },
+        { code: { contains: q, mode: 'insensitive' as const } },
+      ],
+    });
+  }
   return {
     deletedAt: null,
     ...(active !== undefined ? { active } : {}),
     ...(type ? { type } : {}),
-    // q matches against either the display name or the auto-issued code
-    // (e.g. "VEND-2026-00012") so operators can paste either into search.
-    ...(q
-      ? {
-          OR: [
-            { name: { contains: q, mode: 'insensitive' as const } },
-            { code: { contains: q, mode: 'insensitive' as const } },
-          ],
-        }
-      : {}),
+    ...(and.length ? { AND: and } : {}),
   };
 }
 

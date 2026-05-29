@@ -23,7 +23,10 @@ export default async function NewPurchaseOrderPage() {
   // catalog rows max. One fetch each — no per-line API search.
   const [vendors, warehouses, variants, catalogRows, paymentTerms] =
     await Promise.all([
-    listVendors(db, { active: true, take: 1000 }),
+    // productVendorsOnly: PO picker hides SERVICE-only utility vendors
+    // (HEB Gas, etc.). Surface only vendors that actually supply product
+    // — type ∈ {STOCK, DROP_SHIP} OR has at least one catalog row.
+    listVendors(db, { active: true, productVendorsOnly: true, take: 1000 }),
     listWarehouses(db),
     db.productVariant.findMany({
       where: {
