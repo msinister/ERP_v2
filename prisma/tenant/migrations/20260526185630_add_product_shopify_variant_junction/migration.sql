@@ -44,30 +44,34 @@ ALTER TABLE "ProductShopifyVariant"
     FOREIGN KEY ("productId") REFERENCES "Product"("id")
     ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- 2. Populate from existing Product rows.
---    Every row that has a shopifyVariantId becomes a primary junction row.
---    shopifySyncedAt is used as syncedAt when available; falls back to now().
-INSERT INTO "ProductShopifyVariant"
-    ("id", "productId", "shopifyProductId", "shopifyVariantId",
-     "isPrimary", "syncedAt", "createdAt", "updatedAt")
-SELECT
-    -- generate a cuid-style id via md5 (no extension required)
-    'mig_' || md5(random()::text || clock_timestamp()::text || "id"),
-    "id",
-    "shopifyProductId",
-    "shopifyVariantId",
-    true,
-    COALESCE("shopifySyncedAt", NOW()),
-    NOW(),
-    NOW()
-FROM "Product"
-WHERE "shopifyVariantId" IS NOT NULL
-  AND "shopifyProductId" IS NOT NULL;
+-- 2. Populate from existing Product rows (if they had shopifyVariantId).
+--    Guard: on fresh installs the column never existed on Product, so skip.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name   = 'Product'
+      AND column_name  = 'shopifyVariantId'
+  ) THEN
+    INSERT INTO "ProductShopifyVariant"
+        ("id", "productId", "shopifyProductId", "shopifyVariantId",
+         "isPrimary", "syncedAt", "createdAt", "updatedAt")
+    SELECT
+        'mig_' || md5(random()::text || clock_timestamp()::text || "id"),
+        "id",
+        "shopifyProductId",
+        "shopifyVariantId",
+        true,
+        COALESCE("shopifySyncedAt", NOW()),
+        NOW(),
+        NOW()
+    FROM "Product"
+    WHERE "shopifyVariantId" IS NOT NULL
+      AND "shopifyProductId" IS NOT NULL;
+  END IF;
+END $$;
 
 -- 3. Drop the redundant columns from Product.
 DROP INDEX IF EXISTS "Product_shopifyVariantId_key";
-DROP INDEX IF EXISTS "Product_shopifyProductId_idx";
-
-ALTER TABLE "Product"
-    DROP COLUMN IF EXISTS "shopifyProductId",
-    DROP COLUMN IF EXISTS "shopifyVariantId";
+DROP IND
