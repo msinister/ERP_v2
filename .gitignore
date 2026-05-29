@@ -30,3 +30,9 @@ Thumbs.db
 # Git via .gitkeep files, ignore the actual uploads.
 public/uploads/*
 !public/uploads/.gitkeep
+
+# Local dev tunnel + scratch tooling — not part of the app.
+cloudflared.exe
+start-tunnel.bat
+check-bundle.mjs
+SHOPIFY_JUNCTION_PROMPT.md

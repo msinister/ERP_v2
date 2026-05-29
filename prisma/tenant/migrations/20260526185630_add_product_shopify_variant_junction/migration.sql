@@ -74,4 +74,8 @@ END $$;
 
 -- 3. Drop the redundant columns from Product.
 DROP INDEX IF EXISTS "Product_shopifyVariantId_key";
-DROP IND
+DROP INDEX IF EXISTS "Product_shopifyProductId_idx";
+
+ALTER TABLE "Product"
+    DROP COLUMN IF EXISTS "shopifyProductId",
+    DROP COLUMN IF EXISTS "shopifyVariantId";
