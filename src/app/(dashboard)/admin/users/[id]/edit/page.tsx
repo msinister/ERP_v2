@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import { db } from '@/lib/db';
 import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
+import { listUnlinkedReps } from '@/server/services/salesReps';
 import {
   UserForm,
   type UserFormValues,
@@ -18,7 +19,7 @@ export default async function EditUserPage({
   const me = await requirePagePermission('admin.edit_users');
 
   const { id } = await params;
-  const [user, roles] = await Promise.all([
+  const [user, roles, unlinkedReps] = await Promise.all([
     db.user.findFirst({
       where: { id, deletedAt: null },
       select: {
@@ -46,6 +47,7 @@ export default async function EditUserPage({
       select: { id: true, name: true },
       orderBy: { name: 'asc' },
     }),
+    listUnlinkedReps(db),
   ]);
   if (!user) notFound();
 
@@ -61,7 +63,9 @@ export default async function EditUserPage({
   };
   if (user.roleId) defaults.roleId = user.roleId;
   if (user.salesRep) {
-    defaults.isSalesRep = true;
+    // Already linked → the selector defaults to "keep" with the rep's
+    // commission prefilled.
+    defaults.salesRepMode = 'keep';
     defaults.salesRepCode = user.salesRep.code;
     defaults.commissionEnabled = user.salesRep.commissionEnabled;
     defaults.commissionBasis = user.salesRep.commissionBasis ?? 'REVENUE';
@@ -99,6 +103,7 @@ export default async function EditUserPage({
         defaultValues={defaults}
         roles={roles}
         linkedRep={linkedRep}
+        unlinkedReps={unlinkedReps}
       />
     </div>
   );

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Controller, useForm } from 'react-hook-form';
@@ -52,6 +52,12 @@ const NO_ROLE = '__none__';
 // create mode; in edit mode email is read-only and password is carrier-
 // only — both get stripped from the PATCH payload. Role + sales-rep fields
 // are edit-only (the create endpoint ignores them).
+// salesRepMode drives the three-way sales-rep selector:
+//   not-linked: 'none' | 'link' | 'create'
+//   linked:     'keep' | 'link' (switch) | 'none' (unlink)
+// salesRepId holds the chosen rep for the 'link' path.
+const salesRepModeEnum = z.enum(['none', 'link', 'create', 'keep']);
+
 const createSchema = z.object({
   name: z.string().min(1, 'Required').max(255),
   email: z.string().email().max(255),
@@ -60,7 +66,8 @@ const createSchema = z.object({
   isSuperAdmin: z.boolean(),
   forcePasswordReset: z.boolean(),
   roleId: z.string(),
-  isSalesRep: z.boolean(),
+  salesRepMode: salesRepModeEnum,
+  salesRepId: z.string(),
   salesRepCode: z.string(),
   commissionEnabled: z.boolean(),
   commissionBasis: z.enum(['REVENUE', 'MARGIN']),
@@ -75,7 +82,8 @@ const editSchema = z.object({
   isSuperAdmin: z.boolean(),
   forcePasswordReset: z.boolean(),
   roleId: z.string(),
-  isSalesRep: z.boolean(),
+  salesRepMode: salesRepModeEnum,
+  salesRepId: z.string(),
   salesRepCode: z.string(),
   commissionEnabled: z.boolean(),
   commissionBasis: z.enum(['REVENUE', 'MARGIN']),
@@ -96,8 +104,17 @@ export type UserFormMode =
 export type RoleOption = { id: string; name: string };
 
 // The rep this user is already linked to (edit mode only). Drives the
-// "linked → show info + unlink" branch of the sales-rep card.
+// "linked → keep / switch / unlink" branch of the sales-rep card.
 export type LinkedRep = { id: string; code: string; name: string };
+
+// Unlinked reps offered in the "Link to existing" / "Switch" dropdown, with
+// email so the form can auto-detect a same-email match.
+export type UnlinkedRep = {
+  id: string;
+  code: string;
+  name: string;
+  email: string | null;
+};
 
 const DEFAULT_VALUES: UserFormValues = {
   name: '',
@@ -107,12 +124,16 @@ const DEFAULT_VALUES: UserFormValues = {
   isSuperAdmin: false,
   forcePasswordReset: false,
   roleId: NO_ROLE,
-  isSalesRep: false,
+  salesRepMode: 'none',
+  salesRepId: '',
   salesRepCode: '',
   commissionEnabled: false,
   commissionBasis: 'REVENUE',
   commissionPercent: '',
 };
+
+// Sentinel for the "pick a rep" placeholder in the link dropdown.
+const NO_REP = '__none__';
 
 // Client-side mirror of deriveSalesRepCodeBase (name part only) — keeps the
 // auto-suggested code in sync with what the server would generate.
@@ -161,11 +182,13 @@ export function UserForm({
   defaultValues,
   roles = [],
   linkedRep = null,
+  unlinkedReps = [],
 }: {
   mode: UserFormMode;
   defaultValues?: Partial<UserFormValues>;
   roles?: RoleOption[];
   linkedRep?: LinkedRep | null;
+  unlinkedReps?: UnlinkedRep[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -183,13 +206,13 @@ export function UserForm({
     formState: { errors },
   } = form;
 
-  const isSalesRep = watch('isSalesRep');
+  const salesRepMode = watch('salesRepMode');
+  const salesRepId = watch('salesRepId');
   const name = watch('name');
   const email = watch('email');
-  // Linked = already bound to a rep (edit). Creating-rep = the toggle is on
-  // and there's no existing link, so a new rep gets created on save.
+  // Linked = already bound to a rep (edit).
   const isLinked = mode.kind === 'edit' && !!linkedRep;
-  const isCreatingRep = isSalesRep && !isLinked;
+  const isCreatingRep = salesRepMode === 'create';
 
   // Auto-suggest the rep code from the display name while creating a rep,
   // until the operator edits the code field themselves.
@@ -200,11 +223,64 @@ export function UserForm({
     }
   }, [name, isCreatingRep, setValue]);
 
+  // Auto-detect: an unlinked rep whose email matches the typed/loaded email.
+  // This is the duplicate-prevention guard — surface the existing rep so the
+  // operator links instead of creating a second one (CREED vs CR).
+  const matchingRep = useMemo(() => {
+    const e = email.trim().toLowerCase();
+    if (e === '') return null;
+    return (
+      unlinkedReps.find((r) => (r.email ?? '').toLowerCase() === e) ?? null
+    );
+  }, [email, unlinkedReps]);
+
+  // While the operator hasn't manually picked a mode, mirror the auto-detect:
+  // match → preselect "link" + that rep; no match → fall back to "none".
+  // Once they touch the selector we stop steering. Skipped entirely when the
+  // user is already linked (the "keep" default owns that case).
+  const modeTouched = useRef(false);
+  useEffect(() => {
+    if (isLinked || modeTouched.current) return;
+    if (matchingRep) {
+      setValue('salesRepMode', 'link');
+      setValue('salesRepId', matchingRep.id);
+    } else {
+      setValue('salesRepMode', 'none');
+      setValue('salesRepId', '');
+    }
+  }, [matchingRep, isLinked, setValue]);
+
   // Same email-collision warning the sales-rep form shows — a new rep here
   // inherits the user's email. Only relevant while creating a rep.
   const repEmailDuplicate = useRepEmailDuplicate(isCreatingRep ? email : '');
 
+  // Whether the preselected link is the auto-detected email match (drives the
+  // "Found existing sales rep …" hint).
+  const showAutoDetectHint =
+    !isLinked &&
+    salesRepMode === 'link' &&
+    !!matchingRep &&
+    salesRepId === matchingRep.id;
+
   function submit(values: UserFormValues) {
+    // The "link"/"switch" path needs a chosen rep.
+    if (values.salesRepMode === 'link' && values.salesRepId === '') {
+      toast.error('Select a sales rep to link');
+      return;
+    }
+    // Commission payload shared by the 'create' and 'keep' actions.
+    const commission = {
+      commissionEnabled: values.commissionEnabled,
+      commissionBasis: values.commissionBasis,
+      commissionPercent:
+        values.commissionPercent.trim() === ''
+          ? null
+          : values.commissionPercent.trim(),
+    };
+    const codeField =
+      values.salesRepCode.trim() !== ''
+        ? { code: values.salesRepCode.trim() }
+        : {};
     startTransition(async () => {
       try {
         if (mode.kind === 'create') {
@@ -215,19 +291,11 @@ export function UserForm({
             isSuperAdmin: values.isSuperAdmin,
             forcePasswordReset: values.forcePasswordReset,
           };
-          // "Also create as sales rep" — bundle the rep into the same call.
-          if (values.isSalesRep) {
-            payload.salesRep = {
-              ...(values.salesRepCode.trim() !== ''
-                ? { code: values.salesRepCode.trim() }
-                : {}),
-              commissionEnabled: values.commissionEnabled,
-              commissionBasis: values.commissionBasis,
-              commissionPercent:
-                values.commissionPercent.trim() === ''
-                  ? null
-                  : values.commissionPercent.trim(),
-            };
+          // Three-way selector: link an existing rep, or create a new one.
+          if (values.salesRepMode === 'link') {
+            payload.salesRep = { action: 'link', repId: values.salesRepId };
+          } else if (values.salesRepMode === 'create') {
+            payload.salesRep = { action: 'create', ...codeField, ...commission };
           }
           const res = await fetch('/api/admin/users', {
             method: 'POST',
@@ -246,29 +314,21 @@ export function UserForm({
           // the destructive toggles, but defense in depth: even if the
           // form bypassed that, the server rejects self-disable /
           // self-demote.
+          const m = values.salesRepMode;
+          const salesRep =
+            m === 'link'
+              ? { action: 'link' as const, repId: values.salesRepId }
+              : m === 'create'
+                ? { action: 'create' as const, ...codeField, ...commission }
+                : m === 'keep'
+                  ? { action: 'keep' as const, ...commission }
+                  : { action: 'none' as const };
           const payload: Record<string, unknown> = {
             name: values.name.trim(),
             isSuperAdmin: values.isSuperAdmin,
             forcePasswordReset: values.forcePasswordReset,
             roleId: values.roleId === NO_ROLE ? null : values.roleId,
-            salesRep: {
-              isSalesRep: values.isSalesRep,
-              ...(values.isSalesRep
-                ? {
-                    // Code only matters when creating a new rep (not linked
-                    // yet); the server ignores it once linked.
-                    ...(!isLinked && values.salesRepCode.trim() !== ''
-                      ? { code: values.salesRepCode.trim() }
-                      : {}),
-                    commissionEnabled: values.commissionEnabled,
-                    commissionBasis: values.commissionBasis,
-                    commissionPercent:
-                      values.commissionPercent.trim() === ''
-                        ? null
-                        : values.commissionPercent.trim(),
-                  }
-                : {}),
-            },
+            salesRep,
           };
           if (!mode.isSelf) {
             payload.enabled = values.enabled;
@@ -301,6 +361,77 @@ export function UserForm({
 
   const isCreate = mode.kind === 'create';
   const isSelf = mode.kind === 'edit' && mode.isSelf;
+
+  // Options differ by linked state: a linked user keeps/switches/unlinks; an
+  // unlinked one has no rep, links an existing one, or creates a new one.
+  const modeOptions: Array<{ value: string; label: string }> = isLinked
+    ? [
+        { value: 'keep', label: `Keep linked to ${linkedRep?.code ?? ''}` },
+        { value: 'link', label: 'Switch to a different rep' },
+        { value: 'none', label: 'Unlink' },
+      ]
+    : [
+        { value: 'none', label: 'No sales rep' },
+        { value: 'link', label: 'Link to existing sales rep' },
+        { value: 'create', label: 'Create new sales rep' },
+      ];
+  const modeLabel = (val: string) =>
+    modeOptions.find((o) => o.value === val)?.label ?? val;
+
+  // Commission inputs reused by the 'create' (new rep) and 'keep' (edit the
+  // linked rep) branches.
+  const commissionFields = (
+    <>
+      <Field orientation="horizontal">
+        <Controller
+          control={control}
+          name="commissionEnabled"
+          render={({ field }) => (
+            <Checkbox
+              id="commissionEnabled"
+              checked={field.value}
+              onCheckedChange={(v) => field.onChange(v === true)}
+            />
+          )}
+        />
+        <div>
+          <FieldLabel htmlFor="commissionEnabled">Earns commission</FieldLabel>
+          <p className="text-xs text-muted-foreground">
+            Off for salaried reps — the commission engine skips them.
+          </p>
+        </div>
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="commissionBasis">Commission basis</FieldLabel>
+        <Controller
+          control={control}
+          name="commissionBasis"
+          render={({ field }) => (
+            <Select value={field.value} onValueChange={field.onChange}>
+              <SelectTrigger id="commissionBasis" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="REVENUE">Revenue</SelectItem>
+                <SelectItem value="MARGIN">Margin (revenue − COGS)</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        />
+      </Field>
+      <Field>
+        <FieldLabel htmlFor="commissionPercent">Commission rate (%)</FieldLabel>
+        <Input
+          id="commissionPercent"
+          inputMode="decimal"
+          placeholder="e.g. 5"
+          aria-invalid={!!errors.commissionPercent}
+          {...register('commissionPercent')}
+        />
+        <FieldError errors={[errors.commissionPercent]} />
+      </Field>
+    </>
+  );
 
   return (
     <form onSubmit={handleSubmit(submit)} className="space-y-6">
@@ -483,7 +614,7 @@ export function UserForm({
           <FieldGroup>
             {isLinked ? (
               <div className="rounded-md border bg-muted/30 p-3 text-sm">
-                Linked to{' '}
+                Currently linked to{' '}
                 <Link
                   href={`/admin/sales-reps/${linkedRep.id}/edit`}
                   className="font-medium underline"
@@ -493,133 +624,128 @@ export function UserForm({
                 . Edit the rep there to rename it or change its code.
               </div>
             ) : null}
-            <Field orientation="horizontal">
+
+            <Field>
+              <FieldLabel htmlFor="salesRepMode">
+                {isLinked ? 'Sales-rep link' : 'Sales rep'}
+              </FieldLabel>
               <Controller
                 control={control}
-                name="isSalesRep"
+                name="salesRepMode"
                 render={({ field }) => (
-                  <Checkbox
-                    id="isSalesRep"
-                    checked={field.value}
-                    onCheckedChange={(v) => field.onChange(v === true)}
-                  />
+                  <Select
+                    value={field.value}
+                    onValueChange={(v) => {
+                      modeTouched.current = true;
+                      field.onChange(v);
+                    }}
+                  >
+                    <SelectTrigger id="salesRepMode" className="w-full">
+                      <SelectValue>{(v) => modeLabel(v ?? '')}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {modeOptions.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 )}
               />
-              <div>
-                <FieldLabel htmlFor="isSalesRep">
-                  {isLinked
-                    ? 'Linked as a sales rep'
-                    : 'Also create as sales rep'}
-                </FieldLabel>
-                <p className="text-xs text-muted-foreground">
-                  {isLinked
-                    ? 'Uncheck to unlink this user from their sales-rep record. You’ll be warned if customers are still assigned to the rep.'
-                    : 'Creates a linked sales-rep record alongside the user. Customers can then be assigned to them, and “view own” scoping resolves through this link.'}
-                </p>
-              </div>
             </Field>
 
-            {isSalesRep ? (
-              <>
-                {isCreatingRep ? (
-                  <Field>
-                    <FieldLabel htmlFor="salesRepCode">
-                      Sales rep code
-                    </FieldLabel>
-                    <Input
-                      id="salesRepCode"
-                      placeholder="e.g. JDOE"
-                      {...register('salesRepCode', {
-                        onChange: () => {
-                          codeTouched.current = true;
-                        },
-                      })}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Auto-suggested from the name; edit if you prefer another.
-                      Must be unique across all reps.
-                    </p>
-                    {repEmailDuplicate ? (
-                      <p className="text-xs text-amber-700">
-                        A sales rep with this email already exists:{' '}
-                        <Link
-                          href={`/admin/sales-reps/${repEmailDuplicate.id}/edit`}
-                          className="font-medium underline"
-                        >
-                          {repEmailDuplicate.code} — {repEmailDuplicate.name}
-                        </Link>
-                        . You can still save, but check this isn’t a duplicate.
-                      </p>
-                    ) : null}
-                  </Field>
-                ) : null}
-                <Field orientation="horizontal">
-                    <Controller
-                      control={control}
-                      name="commissionEnabled"
-                      render={({ field }) => (
-                        <Checkbox
-                          id="commissionEnabled"
-                          checked={field.value}
-                          onCheckedChange={(v) => field.onChange(v === true)}
-                        />
-                      )}
-                    />
-                    <div>
-                      <FieldLabel htmlFor="commissionEnabled">
-                        Earns commission
-                      </FieldLabel>
-                      <p className="text-xs text-muted-foreground">
-                        Off for salaried reps — the commission engine skips
-                        them.
-                      </p>
-                    </div>
-                  </Field>
-
-                  <Field>
-                    <FieldLabel htmlFor="commissionBasis">
-                      Commission basis
-                    </FieldLabel>
-                    <Controller
-                      control={control}
-                      name="commissionBasis"
-                      render={({ field }) => (
-                        <Select
-                          value={field.value}
-                          onValueChange={field.onChange}
-                        >
-                          <SelectTrigger
-                            id="commissionBasis"
-                            className="w-full"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="REVENUE">Revenue</SelectItem>
-                            <SelectItem value="MARGIN">
-                              Margin (revenue − COGS)
+            {salesRepMode === 'link' ? (
+              <Field>
+                <FieldLabel htmlFor="salesRepId">
+                  {isLinked ? 'New sales rep' : 'Existing sales rep'}
+                </FieldLabel>
+                {unlinkedReps.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No unlinked sales reps available. Create a new one instead,
+                    or unlink another user first.
+                  </p>
+                ) : (
+                  <Controller
+                    control={control}
+                    name="salesRepId"
+                    render={({ field }) => (
+                      <Select
+                        value={field.value === '' ? NO_REP : field.value}
+                        onValueChange={(v) =>
+                          field.onChange(v === NO_REP ? '' : v)
+                        }
+                      >
+                        <SelectTrigger id="salesRepId" className="w-full">
+                          <SelectValue placeholder="Select a sales rep">
+                            {(v) => {
+                              if (v === NO_REP || v == null)
+                                return 'Select a sales rep';
+                              const r = unlinkedReps.find((x) => x.id === v);
+                              return r ? `${r.code} — ${r.name}` : v;
+                            }}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={NO_REP}>
+                            Select a sales rep
+                          </SelectItem>
+                          {unlinkedReps.map((r) => (
+                            <SelectItem key={r.id} value={r.id}>
+                              {r.code} — {r.name}
+                              {r.email ? ` (${r.email})` : ''}
                             </SelectItem>
-                          </SelectContent>
-                        </Select>
-                      )}
-                    />
-                  </Field>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                )}
+                {showAutoDetectHint && matchingRep ? (
+                  <p className="text-xs text-emerald-700">
+                    Found existing sales rep {matchingRep.code} (
+                    {matchingRep.name}) with matching email — linking to it
+                    instead of creating a duplicate.
+                  </p>
+                ) : null}
+              </Field>
+            ) : null}
 
-                  <Field>
-                    <FieldLabel htmlFor="commissionPercent">
-                      Commission rate (%)
-                    </FieldLabel>
-                    <Input
-                      id="commissionPercent"
-                      inputMode="decimal"
-                      placeholder="e.g. 5"
-                      aria-invalid={!!errors.commissionPercent}
-                      {...register('commissionPercent')}
-                    />
-                    <FieldError errors={[errors.commissionPercent]} />
-                  </Field>
-                </>
-              ) : null}
+            {salesRepMode === 'create' ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="salesRepCode">Sales rep code</FieldLabel>
+                  <Input
+                    id="salesRepCode"
+                    placeholder="e.g. JDOE"
+                    {...register('salesRepCode', {
+                      onChange: () => {
+                        codeTouched.current = true;
+                      },
+                    })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Auto-suggested from the name; edit if you prefer another.
+                    Must be unique across all reps.
+                  </p>
+                  {repEmailDuplicate ? (
+                    <p className="text-xs text-amber-700">
+                      A sales rep with this email already exists:{' '}
+                      <Link
+                        href={`/admin/sales-reps/${repEmailDuplicate.id}/edit`}
+                        className="font-medium underline"
+                      >
+                        {repEmailDuplicate.code} — {repEmailDuplicate.name}
+                      </Link>
+                      . Consider linking to it instead of creating a duplicate.
+                    </p>
+                  ) : null}
+                </Field>
+                {commissionFields}
+              </>
+            ) : null}
+
+            {salesRepMode === 'keep' ? commissionFields : null}
           </FieldGroup>
         </CardContent>
       </Card>

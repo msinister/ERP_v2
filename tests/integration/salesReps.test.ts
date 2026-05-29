@@ -5,9 +5,12 @@ import {
   createSalesRep,
   findRepByEmail,
   getSalesRep,
+  linkUserToExistingRep,
   listLinkableUsers,
   listSalesReps,
+  listUnlinkedReps,
   softDeleteSalesRep,
+  unlinkUserSalesRep,
   updateSalesRep,
 } from '@/server/services/salesReps';
 import { hasTenantDb, makeClient } from '../helpers/db';
@@ -170,6 +173,64 @@ suite('SalesRep service', () => {
     const ids = linkable.map((u) => u.id);
     expect(ids).toContain(free.id); // linked to rep we're editing → still offered
     expect(ids).not.toContain(taken.id); // linked elsewhere → hidden
+  });
+
+  it('linkUserToExistingRep links a user to an existing rep + audits', async () => {
+    const user = await makeUser(db, 'existing1');
+    const rep = await createSalesRep(db, { code: 'TEST-SR-EXIST1', name: 'Exist1' });
+    const linked = await linkUserToExistingRep(db, user.id, rep.id);
+    expect(linked.id).toBe(rep.id);
+    expect(
+      (await db.user.findUniqueOrThrow({ where: { id: user.id } })).salesRepId,
+    ).toBe(rep.id);
+    const audits = await db.auditLog.findMany({
+      where: { entityType: 'User', entityId: user.id, action: AuditAction.UPDATE },
+    });
+    expect(audits.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('linkUserToExistingRep switches a user from one rep to another', async () => {
+    const user = await makeUser(db, 'existing2');
+    const repA = await createSalesRep(db, { code: 'TEST-SR-EXIST2A', name: 'A2' });
+    const repB = await createSalesRep(db, { code: 'TEST-SR-EXIST2B', name: 'B2' });
+    await linkUserToExistingRep(db, user.id, repA.id);
+    await linkUserToExistingRep(db, user.id, repB.id);
+    expect(
+      (await db.user.findUniqueOrThrow({ where: { id: user.id } })).salesRepId,
+    ).toBe(repB.id);
+    // repA is left in place, now unlinked.
+    expect(
+      await db.user.findFirst({ where: { salesRepId: repA.id } }),
+    ).toBeNull();
+  });
+
+  it('linkUserToExistingRep refuses a rep already linked to another user', async () => {
+    const userA = await makeUser(db, 'existing3a');
+    const userB = await makeUser(db, 'existing3b');
+    const rep = await createSalesRep(db, { code: 'TEST-SR-EXIST3', name: 'Exist3' });
+    await linkUserToExistingRep(db, userA.id, rep.id);
+    await expect(
+      linkUserToExistingRep(db, userB.id, rep.id),
+    ).rejects.toThrow(/already linked to another user/);
+  });
+
+  it('listUnlinkedReps excludes linked reps', async () => {
+    const user = await makeUser(db, 'unlinked1');
+    const free = await createSalesRep(db, { code: 'TEST-SR-FREE', name: 'Free' });
+    const taken = await createSalesRep(db, { code: 'TEST-SR-TAKEN', name: 'Taken' });
+    await linkUserToExistingRep(db, user.id, taken.id);
+
+    const unlinked = await listUnlinkedReps(db);
+    const ourCodes = unlinked
+      .filter((r) => r.code.startsWith(TEST_PREFIX))
+      .map((r) => r.code);
+    expect(ourCodes).toContain(free.code);
+    expect(ourCodes).not.toContain(taken.code);
+
+    // After unlinking, the rep reappears.
+    await unlinkUserSalesRep(db, user.id);
+    const after = await listUnlinkedReps(db);
+    expect(after.map((r) => r.code)).toContain(taken.code);
   });
 
   it('findRepByEmail matches case-insensitively and honors exclude', async () => {

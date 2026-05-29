@@ -9,6 +9,7 @@ import { authErrorResponse } from '@/lib/auth/errors';
 import { decimalString } from '@/lib/validation/common';
 import {
   linkUserAsSalesRep,
+  linkUserToExistingRep,
   unlinkUserSalesRep,
 } from '@/server/services/salesReps';
 
@@ -35,11 +36,16 @@ const updateUserSchema = z.object({
   forcePasswordReset: z.boolean().optional(),
   // null = unassign role. Absent = leave unchanged.
   roleId: z.string().min(1).nullable().optional(),
+  // Sales-rep linkage. action discriminates the four paths:
+  //   'none'   → unlink (or no-op if not linked)
+  //   'link'   → attach to / switch to an existing unlinked rep (repId)
+  //   'create' → create a new rep (code + commission) and link it
+  //   'keep'   → keep the current link, updating its commission fields
   salesRep: z
     .object({
-      isSalesRep: z.boolean(),
-      // Explicit rep code for the "create as sales rep" path when the user
-      // isn't linked yet. Ignored once linked (the rep owns its code).
+      action: z.enum(['none', 'link', 'create', 'keep']),
+      repId: z.string().min(1).optional(),
+      // Explicit rep code for the 'create' path. Ignored on link/keep.
       code: z.string().min(1).max(64).optional(),
       commissionEnabled: z.boolean().optional(),
       commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
@@ -47,6 +53,10 @@ const updateUserSchema = z.object({
         .refine((v) => Number(v) >= 0, 'Must be >= 0')
         .nullable()
         .optional(),
+    })
+    .refine((d) => d.action !== 'link' || !!d.repId, {
+      message: 'repId is required to link an existing sales rep',
+      path: ['repId'],
     })
     .optional(),
 });
@@ -128,6 +138,27 @@ export async function PATCH(
       }
     }
 
+    // Validate a sales-rep link target up front too — the link runs after the
+    // core update, so catching a bad target here avoids a partial commit.
+    if (parsed.data.salesRep?.action === 'link') {
+      const rep = await db.salesRep.findFirst({
+        where: { id: parsed.data.salesRep.repId, deletedAt: null },
+        select: { id: true, user: { select: { id: true } } },
+      });
+      if (!rep) {
+        return NextResponse.json(
+          { error: 'Sales rep not found' },
+          { status: 400 },
+        );
+      }
+      if (rep.user && rep.user.id !== id) {
+        return NextResponse.json(
+          { error: 'That sales rep is already linked to another user' },
+          { status: 409 },
+        );
+      }
+    }
+
     const data: Prisma.UserUpdateInput = {};
     if (parsed.data.name !== undefined) data.name = parsed.data.name;
     if (parsed.data.enabled !== undefined) data.enabled = parsed.data.enabled;
@@ -156,12 +187,20 @@ export async function PATCH(
     // Unlink warns-not-blocks when the rep still owns customers.
     let unlinkWarning: { assignedCustomerCount: number } | null = null;
     if (parsed.data.salesRep) {
-      if (parsed.data.salesRep.isSalesRep) {
+      const sr = parsed.data.salesRep;
+      if (sr.action === 'none') {
+        const res = await unlinkUserSalesRep(db, id, auditCtx);
+        if (res.assignedCustomerCount > 0) {
+          unlinkWarning = { assignedCustomerCount: res.assignedCustomerCount };
+        }
+      } else if (sr.action === 'link') {
+        await linkUserToExistingRep(db, id, sr.repId!, auditCtx);
+      } else if (sr.action === 'create') {
         // Creating a brand-new rep with an explicit code? Pre-check it so a
         // collision returns a clean 409 rather than an opaque unique error.
-        if (parsed.data.salesRep.code && !before.salesRepId) {
+        if (sr.code && !before.salesRepId) {
           const existingRep = await db.salesRep.findUnique({
-            where: { code: parsed.data.salesRep.code.trim().toUpperCase() },
+            where: { code: sr.code.trim().toUpperCase() },
             select: { id: true },
           });
           if (existingRep) {
@@ -175,18 +214,25 @@ export async function PATCH(
           db,
           id,
           {
-            code: parsed.data.salesRep.code,
-            commissionEnabled: parsed.data.salesRep.commissionEnabled,
-            commissionBasis: parsed.data.salesRep.commissionBasis,
-            commissionPercent: parsed.data.salesRep.commissionPercent,
+            code: sr.code,
+            commissionEnabled: sr.commissionEnabled,
+            commissionBasis: sr.commissionBasis,
+            commissionPercent: sr.commissionPercent,
           },
           auditCtx,
         );
       } else {
-        const res = await unlinkUserSalesRep(db, id, auditCtx);
-        if (res.assignedCustomerCount > 0) {
-          unlinkWarning = { assignedCustomerCount: res.assignedCustomerCount };
-        }
+        // 'keep' — leave the link, update the linked rep's commission fields.
+        await linkUserAsSalesRep(
+          db,
+          id,
+          {
+            commissionEnabled: sr.commissionEnabled,
+            commissionBasis: sr.commissionBasis,
+            commissionPercent: sr.commissionPercent,
+          },
+          auditCtx,
+        );
       }
     }
 

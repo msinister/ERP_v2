@@ -1,12 +1,16 @@
 import Link from 'next/link';
 import { ChevronLeft } from 'lucide-react';
+import { db } from '@/lib/db';
 import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
+import { listUnlinkedReps } from '@/server/services/salesReps';
 import { UserForm } from '../_components/user-form';
 
 export const revalidate = 0;
 
 export default async function NewUserPage() {
   await requirePagePermission('admin.edit_users');
+
+  const unlinkedReps = await listUnlinkedReps(db);
 
   return (
     <div className="space-y-6">
@@ -27,7 +31,7 @@ export default async function NewUserPage() {
         </div>
       </div>
 
-      <UserForm mode={{ kind: 'create' }} />
+      <UserForm mode={{ kind: 'create' }} unlinkedReps={unlinkedReps} />
     </div>
   );
 }

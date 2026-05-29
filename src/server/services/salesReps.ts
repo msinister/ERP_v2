@@ -241,6 +241,23 @@ export async function listLinkableUsers(
 }
 
 /**
+ * Reps available to link FROM the user side — non-deleted reps that have no
+ * linked user yet. Powers the "Link to existing sales rep" / "Switch to a
+ * different rep" dropdown on the user form, and the email-match auto-detect
+ * (so we include `email`). A rep already linked to a user is excluded; the
+ * user editing their own linked rep keeps it via the "keep" path, not here.
+ */
+export async function listUnlinkedReps(
+  db: PrismaClient,
+): Promise<Array<{ id: string; code: string; name: string; email: string | null }>> {
+  return db.salesRep.findMany({
+    where: { deletedAt: null, user: { is: null } },
+    select: { id: true, code: true, name: true, email: true },
+    orderBy: { code: 'asc' },
+  });
+}
+
+/**
  * Duplicate-detection helper for the "warn on same email" rule. Returns the
  * first non-deleted rep sharing `email` (case-insensitive), excluding
  * `excludeRepId` (the rep being edited). Null when no collision.
@@ -485,6 +502,56 @@ export async function linkUserAsSalesRep(
       entityId: userId,
       before: { salesRepId: null },
       after: { salesRepId: rep.id },
+      ctx,
+    });
+    return rep;
+  });
+}
+
+/**
+ * Link a user to an EXISTING sales rep (set User.salesRepId = repId). Used by
+ * the "Link to existing sales rep" / "Switch to a different rep" paths on the
+ * user form — the fix for duplicate reps (e.g. CREED vs CR for one person).
+ * Refuses to attach to a rep that already has a different user (User.salesRepId
+ * is unique anyway; this surfaces a friendly message first). Switching from a
+ * prior rep leaves that rep in place, now unlinked. No-op if already linked
+ * to this rep.
+ */
+export async function linkUserToExistingRep(
+  db: PrismaClient,
+  userId: string,
+  repId: string,
+  ctx?: AuditContext,
+): Promise<SalesRep> {
+  return db.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { id: userId },
+      select: { id: true, salesRepId: true, deletedAt: true },
+    });
+    if (!user) throw new Error(`User not found: ${userId}`);
+    if (user.deletedAt) throw new Error('User is soft-deleted');
+
+    const rep = await tx.salesRep.findUnique({ where: { id: repId } });
+    if (!rep) throw new Error(`SalesRep not found: ${repId}`);
+    if (rep.deletedAt) throw new Error('SalesRep is soft-deleted');
+
+    if (user.salesRepId === repId) return rep; // already linked here
+
+    const other = await tx.user.findFirst({
+      where: { salesRepId: repId, id: { not: userId } },
+      select: { id: true },
+    });
+    if (other) {
+      throw new Error('That sales rep is already linked to another user');
+    }
+
+    await tx.user.update({ where: { id: userId }, data: { salesRepId: repId } });
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'User',
+      entityId: userId,
+      before: { salesRepId: user.salesRepId },
+      after: { salesRepId: repId },
       ctx,
     });
     return rep;

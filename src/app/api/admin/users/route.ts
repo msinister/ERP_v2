@@ -8,7 +8,10 @@ import { requireSuperAdmin } from '@/lib/auth/requireAuth';
 import { auditCtxFromRequest } from '@/lib/auth/auditCtxFromRequest';
 import { authErrorResponse } from '@/lib/auth/errors';
 import { decimalString } from '@/lib/validation/common';
-import { linkUserAsSalesRep } from '@/server/services/salesReps';
+import {
+  linkUserAsSalesRep,
+  linkUserToExistingRep,
+} from '@/server/services/salesReps';
 
 // Password policy mirrors scripts/create-first-super-admin.ts. Spec
 // (docs/09-admin.md): 8+ chars, upper + lower + digit + special.
@@ -35,11 +38,15 @@ const createUserSchema = z.object({
   name: z.string().min(1).max(255),
   isSuperAdmin: z.boolean().optional(),
   forcePasswordReset: z.boolean().optional(),
-  // "Also create as sales rep" — when present, a linked SalesRep is created
-  // in the same operation. Code is auto-suggested client-side but editable;
-  // omitted code falls back to a server-generated one.
+  // Sales-rep linkage, when present:
+  //   action 'link'   → attach to an existing unlinked rep (repId)
+  //   action 'create' → create a new rep (code + commission) and link it
+  // Absent = not a sales rep. (No 'none'/'keep' here — nothing to keep on a
+  // brand-new user.)
   salesRep: z
     .object({
+      action: z.enum(['link', 'create']),
+      repId: z.string().min(1).optional(),
       code: z.string().min(1).max(64).optional(),
       commissionEnabled: z.boolean().optional(),
       commissionBasis: z.enum(['REVENUE', 'MARGIN']).nullable().optional(),
@@ -47,6 +54,10 @@ const createUserSchema = z.object({
         .refine((v) => Number(v) >= 0, 'Must be >= 0')
         .nullable()
         .optional(),
+    })
+    .refine((d) => d.action !== 'link' || !!d.repId, {
+      message: 'repId is required to link an existing sales rep',
+      path: ['repId'],
     })
     .optional(),
 });
@@ -142,10 +153,10 @@ export async function POST(req: Request) {
       );
     }
 
-    // Pre-check the explicit rep code BEFORE creating the auth account, so a
-    // collision doesn't leave a user behind with no rep. Auto-generated
-    // codes (no code supplied) can't collide.
-    if (salesRep?.code) {
+    // Pre-validate the sales-rep request BEFORE creating the auth account, so
+    // a bad request doesn't leave a user behind with no/partial rep.
+    if (salesRep?.action === 'create' && salesRep.code) {
+      // Auto-generated codes (no code supplied) can't collide.
       const existingRep = await db.salesRep.findUnique({
         where: { code: salesRep.code.trim().toUpperCase() },
         select: { id: true },
@@ -153,6 +164,24 @@ export async function POST(req: Request) {
       if (existingRep) {
         return NextResponse.json(
           { error: 'A sales rep with this code already exists' },
+          { status: 409 },
+        );
+      }
+    }
+    if (salesRep?.action === 'link') {
+      const rep = await db.salesRep.findFirst({
+        where: { id: salesRep.repId, deletedAt: null },
+        select: { id: true, user: { select: { id: true } } },
+      });
+      if (!rep) {
+        return NextResponse.json(
+          { error: 'Sales rep not found' },
+          { status: 400 },
+        );
+      }
+      if (rep.user) {
+        return NextResponse.json(
+          { error: 'That sales rep is already linked to another user' },
           { status: 409 },
         );
       }
@@ -211,9 +240,11 @@ export async function POST(req: Request) {
       ctx: auditCtx,
     });
 
-    // Create + link the SalesRep in the same operation when requested. Its
-    // own tx writes the SalesRep CREATE + User link audit rows.
-    if (salesRep) {
+    // Link/create the SalesRep in the same operation when requested. Each
+    // path runs its own tx and writes the relevant audit rows.
+    if (salesRep?.action === 'link' && salesRep.repId) {
+      await linkUserToExistingRep(db, userId, salesRep.repId, auditCtx);
+    } else if (salesRep?.action === 'create') {
       await linkUserAsSalesRep(
         db,
         userId,
