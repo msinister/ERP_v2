@@ -43,7 +43,13 @@ const ALWAYS_DENY_PREFIXES = ['/api/auth/sign-up'];
 // prefix is "better-auth"; we don't override `cookiePrefix` so this is
 // the literal cookie name we look for. If the prefix changes in
 // auth.ts, update this constant in lockstep.
+//
+// IMPORTANT: BetterAuth automatically adds the "__Secure-" prefix when
+// the baseURL starts with https:// (production). The edge middleware must
+// check both the plain name (local dev, http) and the __Secure- prefixed
+// name (staging/production, https) so the same code works everywhere.
 const SESSION_COOKIE_NAME = 'better-auth.session_token';
+const SESSION_COOKIE_NAME_SECURE = '__Secure-better-auth.session_token';
 
 function isPublicPath(pathname: string): boolean {
   if (pathname === '/') return true;
@@ -67,7 +73,10 @@ export function middleware(req: NextRequest) {
 
   // A presence check is sufficient at the edge — the cookie is signed
   // and validated by BetterAuth at the route handler. If absent, gate.
-  const hasSession = req.cookies.has(SESSION_COOKIE_NAME);
+  // Check both the plain name (http/dev) and __Secure- prefixed name (https/prod).
+  const hasSession =
+    req.cookies.has(SESSION_COOKIE_NAME) ||
+    req.cookies.has(SESSION_COOKIE_NAME_SECURE);
   if (hasSession) {
     return NextResponse.next();
   }
