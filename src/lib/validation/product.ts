@@ -62,6 +62,7 @@ export const warehouseCreateSchema = z.object({
   code: z.string().min(1).max(32),
   name: z.string().min(1).max(120),
   active: z.boolean().default(true),
+  inventoryAccountId: z.string().nullable().optional(),
 });
 
 export const warehouseUpdateSchema = warehouseCreateSchema.partial();

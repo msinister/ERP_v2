@@ -10,6 +10,7 @@ import {
   BadgeDollarSign,
   ShoppingBag,
   Newspaper,
+  Warehouse,
   type LucideIcon,
 } from 'lucide-react';
 import { requirePageAnyPermissionInModule } from '@/lib/permissions/requirePagePermission';
@@ -91,6 +92,12 @@ const TILES: AdminTile[] = [
     description:
       'Store URL, access token, webhook secret. Manual full sync + register webhooks.',
     icon: ShoppingBag,
+  },
+  {
+    href: '/admin/warehouses',
+    title: 'Warehouses',
+    description: 'Physical stock locations. Set the Inventory GL Account required for COGS posting.',
+    icon: Warehouse,
   },
   {
     href: '/admin/changelog',
