@@ -349,11 +349,15 @@ export async function listCustomers(
  * Paginated variant. Returns the page of rows plus the unfiltered-by-
  * pagination total so callers can render "X of Y" + page links without
  * a second round-trip. Same filter semantics as listCustomers.
+ *
+ * Each row includes the most recent SO that carries an explicit rep
+ * override so the list page can display the effective rep (SO-level
+ * override beats account-level default).
  */
 export async function listCustomersPaged(
   db: PrismaClient,
   filters: CustomerListFilters = {},
-): Promise<{ rows: Customer[]; total: number }> {
+) {
   const { skip = 0, take = 100, ...rest } = filters;
   const where = customerWhere(rest);
   const [rows, total] = await Promise.all([
@@ -362,6 +366,14 @@ export async function listCustomersPaged(
       orderBy: { createdAt: 'desc' },
       skip,
       take,
+      include: {
+        salesOrders: {
+          where: { salesRepId: { not: null }, deletedAt: null },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { salesRepId: true },
+        },
+      },
     }),
     db.customer.count({ where }),
   ]);

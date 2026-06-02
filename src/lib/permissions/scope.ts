@@ -43,17 +43,24 @@ export function customerScopeWhere(actor: Actor): Prisma.CustomerWhereInput {
   const mode = resolveScope(actor, SCOPE_PAIRS.customers.all, SCOPE_PAIRS.customers.own);
   if (mode === 'all') return {};
   if (mode === 'own') {
-    return actor.salesRepId
-      ? { salesRepId: actor.salesRepId }
-      : { id: MATCH_NONE };
+    if (!actor.salesRepId) return { id: MATCH_NONE };
+    // Effective rep: customers assigned to me at the account level, OR
+    // customers where I have at least one active SO override — mirrors the
+    // salesOrderScopeWhere pattern so a rep sees all their assigned work.
+    return {
+      OR: [
+        { salesRepId: actor.salesRepId },
+        { salesOrders: { some: { salesRepId: actor.salesRepId, deletedAt: null } } },
+      ],
+    };
   }
   return { id: MATCH_NONE };
 }
 
 // Shared shape for the customer-relation scopers below (Credit Memo, RMA,
 // Payment) — each links to a customer directly, so "own" filters through
-// `customer.salesRepId`. (Unlike SalesOrder, these carry no per-order rep
-// override, so there's no OR branch.)
+// the customer. Mirrors customerScopeWhere: account-level rep OR active SO
+// override on the customer.
 function customerRelationScope<W extends { customer?: unknown; id?: unknown }>(
   actor: Actor,
   allKey: PermissionKey,
@@ -64,7 +71,14 @@ function customerRelationScope<W extends { customer?: unknown; id?: unknown }>(
   if (mode === 'own') {
     return (
       actor.salesRepId
-        ? { customer: { salesRepId: actor.salesRepId } }
+        ? {
+            customer: {
+              OR: [
+                { salesRepId: actor.salesRepId },
+                { salesOrders: { some: { salesRepId: actor.salesRepId, deletedAt: null } } },
+              ],
+            },
+          }
         : { id: MATCH_NONE }
     ) as W;
   }

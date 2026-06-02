@@ -7,7 +7,8 @@ import { listSalesReps } from '@/server/services/salesReps';
 import { arBalanceForCustomer } from '@/server/services/ar';
 import { getTableViewPref } from '@/server/services/userPreferences';
 import { requirePagePermission } from '@/lib/permissions/requirePagePermission';
-import { customerScopeWhere } from '@/lib/permissions/scope';
+import { customerScopeWhere, resolveScope } from '@/lib/permissions/scope';
+import { SCOPE_PAIRS } from '@/lib/permissions/constants';
 import { Button } from '@/components/ui/button';
 import { CustomersFilters, type SalesRepOption } from './_components/filters';
 import { CustomersTable, type CustomerRowData } from './_components/table';
@@ -58,6 +59,7 @@ export default async function CustomersPage({
     'customers.view_own',
   ]);
   const scope = customerScopeWhere(actor);
+  const scopeMode = resolveScope(actor, SCOPE_PAIRS.customers.all, SCOPE_PAIRS.customers.own);
 
   const [salesReps, page, viewPref] = await Promise.all([
     listSalesReps(db, { active: true }),
@@ -81,18 +83,27 @@ export default async function CustomersPage({
     page.rows.map((c) => arBalanceForCustomer(db, c.id)),
   );
 
-  const tableRows: CustomerRowData[] = page.rows.map((c, i) => ({
-    id: c.id,
-    code: c.code,
-    name: c.name,
-    type: c.type,
-    salesRepName: repName.get(c.salesRepId) ?? '—',
-    primaryPhone: c.primaryPhone,
-    primaryEmail: c.primaryEmail,
-    // Decimal → number across the Server→Client boundary.
-    arBalance: balances[i].arBalance.toNumber(),
-    active: c.active,
-  }));
+  const tableRows: CustomerRowData[] = page.rows.map((c, i) => {
+    // Effective rep: latest SO-level override beats the account default.
+    const effectiveRepId = c.salesOrders[0]?.salesRepId ?? c.salesRepId;
+    // Privacy: 'own' actors must not see the names of other reps.
+    const salesRepName =
+      scopeMode === 'own' && effectiveRepId !== actor.salesRepId
+        ? '—'
+        : repName.get(effectiveRepId) ?? '—';
+    return {
+      id: c.id,
+      code: c.code,
+      name: c.name,
+      type: c.type,
+      salesRepName,
+      primaryPhone: c.primaryPhone,
+      primaryEmail: c.primaryEmail,
+      // Decimal → number across the Server→Client boundary.
+      arBalance: balances[i].arBalance.toNumber(),
+      active: c.active,
+    };
+  });
 
   return (
     <div className="space-y-6">
