@@ -192,6 +192,17 @@ export const PERMISSION_GROUPS = [
       { key: 'inventory_adjustments.void', label: 'Void' },
     ],
   },
+  {
+    id: 'commissions',
+    module: 'Commissions',
+    permissions: [
+      {
+        key: 'commissions.view_own',
+        label: 'View own commissions',
+        hint: 'See the Commission Summary card on My Account (own rep commissions only).',
+      },
+    ],
+  },
 ] as const satisfies readonly PermissionGroup[];
 
 // Derive the PermissionKey union from the literal keys above. Adding a

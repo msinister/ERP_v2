@@ -63,6 +63,7 @@ export async function requireAuth(req: Request): Promise<AuthedUser> {
     id: u.id,
     email: u.email,
     name: u.name,
+    image: (u as { image?: string | null }).image ?? null,
     isSuperAdmin: u.isSuperAdmin === true,
     enabled: true,
   };

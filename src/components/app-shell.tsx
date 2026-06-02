@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { Menu } from 'lucide-react';
 import {
@@ -11,10 +12,57 @@ import {
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { SidebarNav, type SidebarBadgeCounts } from '@/components/sidebar-nav';
-import { UserMenu } from '@/components/user-menu';
+import { UserMenu, UserAvatar } from '@/components/user-menu';
 import { Toaster } from '@/components/ui/sonner';
 import type { AuthedUser } from '@/lib/auth/getCurrentUser';
 import type { PermissionMap } from '@/lib/permissions/constants';
+import { cn } from '@/lib/utils';
+import { usePathname } from 'next/navigation';
+
+function getInitials(name: string, email: string): string {
+  const trimmed = name?.trim();
+  if (!trimmed) return (email?.[0] ?? '?').toUpperCase();
+  return trimmed
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? '')
+    .join('');
+}
+
+function SidebarUserSection({
+  user,
+  onNavigate,
+}: {
+  user: AuthedUser;
+  onNavigate?: () => void;
+}) {
+  const pathname = usePathname();
+  const display = user.name?.trim() ? user.name : user.email;
+  const initials = getInitials(user.name ?? '', user.email);
+  const active = pathname === '/account' || pathname.startsWith('/account/');
+
+  return (
+    <div className="border-t border-sidebar-border p-3">
+      <Link
+        href="/account"
+        onClick={onNavigate}
+        className={cn(
+          'flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium text-sidebar-foreground/80 transition-colors',
+          'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+          active && 'bg-sidebar-accent text-sidebar-accent-foreground',
+        )}
+      >
+        <UserAvatar name={display} image={user.image} initials={initials} size="sm" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{display}</div>
+          {user.name?.trim() && (
+            <div className="truncate text-xs text-sidebar-foreground/50">{user.email}</div>
+          )}
+        </div>
+      </Link>
+    </div>
+  );
+}
 
 export function AppShell({
   user,
@@ -23,9 +71,7 @@ export function AppShell({
   children,
 }: {
   user: AuthedUser;
-  // The current user's permission grant — drives sidebar visibility.
   permissions: PermissionMap;
-  // Per-href badge counts shown beside the matching nav item.
   badgeCounts?: SidebarBadgeCounts;
   children: ReactNode;
 }) {
@@ -47,6 +93,7 @@ export function AppShell({
             badgeCounts={badgeCounts}
           />
         </div>
+        <SidebarUserSection user={user} />
       </aside>
 
       {/* Right column: top bar + main content */}
@@ -67,7 +114,7 @@ export function AppShell({
               >
                 <Menu />
               </SheetTrigger>
-              <SheetContent side="left" className="p-0">
+              <SheetContent side="left" className="flex flex-col gap-0 p-0">
                 <SheetHeader className="border-b border-sidebar-border">
                   <SheetTitle>ERP</SheetTitle>
                 </SheetHeader>
@@ -76,6 +123,12 @@ export function AppShell({
                     isSuperAdmin={user.isSuperAdmin}
                     permissions={permissions}
                     badgeCounts={badgeCounts}
+                    onNavigate={() => setMobileOpen(false)}
+                  />
+                </div>
+                <div className="bg-sidebar">
+                  <SidebarUserSection
+                    user={user}
                     onNavigate={() => setMobileOpen(false)}
                   />
                 </div>

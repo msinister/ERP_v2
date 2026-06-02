@@ -19,6 +19,7 @@ export type AuthedUser = {
   id: string;
   email: string;
   name: string;
+  image: string | null;
   isSuperAdmin: boolean;
   enabled: boolean;
 };
@@ -26,7 +27,7 @@ export type AuthedUser = {
 export async function getCurrentUser(): Promise<AuthedUser | null> {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return null;
-  const u = session.user as AuthedUser;
+  const u = session.user as AuthedUser & { deletedAt?: Date | null };
   // BetterAuth.api.getSession returns the user as it lives in the DB;
   // an enabled=false user can't have created the session in the first
   // place (blocked by session.create.before). The double-check here is
@@ -37,6 +38,7 @@ export async function getCurrentUser(): Promise<AuthedUser | null> {
     id: u.id,
     email: u.email,
     name: u.name,
+    image: (u as { image?: string | null }).image ?? null,
     isSuperAdmin: u.isSuperAdmin === true,
     enabled: u.enabled,
   };
