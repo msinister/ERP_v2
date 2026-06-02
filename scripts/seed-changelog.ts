@@ -1,130 +1,108 @@
-/**
- * Seed the initial v2.0.0 changelog entries.
- *
- * Idempotent — skips if any entry with version "2.0.0" already exists.
- * Requires a Super Admin to exist (run create-first-super-admin first).
- *
- * Usage:
- *   tsx --env-file=.env scripts/seed-changelog.ts
- */
+import { PrismaClient } from '../src/generated/tenant';
 
-import { PrismaClient, ChangelogEntryType, AuditAction } from '../src/generated/tenant';
-import { audit } from '../src/lib/audit/audit';
+const db = new PrismaClient();
 
-const db = new PrismaClient({
-  datasources: { db: { url: process.env.TENANT_DATABASE_URL } },
-});
-
-const PUBLISH_DATE = new Date('2025-01-01T00:00:00Z');
-
-const ENTRIES: Array<{
-  type: ChangelogEntryType;
-  title: string;
-  description: string;
-}> = [
+const entries = [
   {
-    type: ChangelogEntryType.FEATURE,
-    title: 'Sales Orders — full lifecycle',
-    description: `Complete SO workflow from DRAFT through CONFIRMED → DISPATCHED → CLOSED, with reservation, cancellation, and advisory locking. Insufficient-stock alerts surface at close time.`,
+    version: '2.0.0',
+    type: 'FEATURE' as const,
+    title: 'Multi-Store Shopify Integration',
+    description: 'Connect multiple Shopify stores with routing rules to control which products sync to which store. Support for include/exclude rules by vendor, category, or tag.',
   },
   {
-    type: ChangelogEntryType.FEATURE,
-    title: 'Purchase Orders with shipment tracking and prepay deposits',
-    description: `M:N PO ↔ Receipt model. Record prepay deposits (DR 1510 Vendor Deposits) that auto-apply at receipt time. Reverse receipts and void POs with full cascade guards.`,
+    version: '2.0.0',
+    type: 'FEATURE' as const,
+    title: 'Product Sync (Shopify → ERP)',
+    description: 'Pull product catalog, images, vendors, and tags from Shopify automatically via webhooks. Real-time sync on product create, update, and delete.',
   },
   {
-    type: ChangelogEntryType.FEATURE,
-    title: 'Invoicing and Accounts Receivable',
-    description: `Auto-invoice on SO close. FIFO credit memo apply, RMA → credit flow, AR aging (balance + per-customer buckets). Void blocked by applied payments.`,
+    version: '2.0.0',
+    type: 'FEATURE' as const,
+    title: 'Product Push (ERP → Shopify)',
+    description: 'Push ERP products to Shopify stores based on routing rules. Creates and updates product listings with images, variants, and tags.',
   },
   {
-    type: ChangelogEntryType.FEATURE,
-    title: 'Bills and Accounts Payable',
-    description: `Bill DRAFT → CONFIRMED with M:N PO/Receipt joins. Overpayment auto-VC. Vendor credits with manual application. AP aging mirrors AR. Receipt → auto-draft bill hook.`,
+    version: '2.0.0',
+    type: 'FEATURE' as const,
+    title: 'Real-Time Inventory Push',
+    description: 'Inventory levels sync from ERP to all connected Shopify stores automatically after every movement — receipts, sales, adjustments, and returns.',
   },
   {
-    type: ChangelogEntryType.FEATURE,
-    title: 'GL, FIFO costing, and automatic journal entries',
-    description: `Full general ledger with fiscal period management (soft/hard close, reopen). Every operational event auto-posts a balanced JE. Financial reports: trial balance, balance sheet, income statement, GL detail. Operational reports: sales by customer, inventory valuation, cash position.`,
+    version: '2.0.0',
+    type: 'FEATURE' as const,
+    title: 'Shopify Order Sync',
+    description: 'Import orders from Shopify into ERP as sales orders. Includes smart customer matching with a pending review workflow for ambiguous matches.',
   },
   {
-    type: ChangelogEntryType.FEATURE,
-    title: 'Multi-store Shopify integration',
-    description: `Connect multiple Shopify stores. Routing rules map store orders to ERP customers. Product sync (Shopify → ERP), inventory push (ERP → Shopify), and order sync with pending-review workflow for unmatched orders.`,
+    version: '2.0.0',
+    type: 'FEATURE' as const,
+    title: 'Sales Orders',
+    description: 'Full order lifecycle management — Draft → Confirmed → Dispatched → Closed — with invoicing, payments, credit memos, and RMA support.',
   },
   {
-    type: ChangelogEntryType.FEATURE,
-    title: 'Customer master with pricing tiers and sales reps',
-    description: `Full customer profile: types, addresses, contacts, payment terms, credit limits, tax-exempt status, resale certs. Customer-specific pricing with CSV importer. Sales rep assignment, commissions, and activity log.`,
+    version: '2.0.0',
+    type: 'FEATURE' as const,
+    title: 'Purchase Orders',
+    description: 'Full PO lifecycle with multi-shipment tracking, prepay deposits with auto-apply to bills, and receipt reversal from the PO page.',
   },
   {
-    type: ChangelogEntryType.FEATURE,
-    title: 'Vendor and Customer ledger tabs',
-    description: `Running net balance on vendor and customer detail pages. Bills/invoices debit; payments/credits/deposits credit. Applications and overpayment VCs are balance-neutral.`,
+    version: '2.0.0',
+    type: 'FEATURE' as const,
+    title: 'Multi-Entity Tagging',
+    description: 'Tag Sales Orders, Purchase Orders, Bills, Credit Memos, RMAs, Work Orders, and Vendor Credits with a shared tag pool. Filter by tags on all list pages.',
   },
   {
-    type: ChangelogEntryType.FEATURE,
-    title: 'Multi-entity tagging',
-    description: `Tag Sales Orders, Purchase Orders, Bills, Credit Memos, RMAs, Work Orders, and Vendor Credits. Filter any list by tag.`,
+    version: '2.0.0',
+    type: 'FEATURE' as const,
+    title: 'GL & FIFO Costing Engine',
+    description: 'Double-entry general ledger with automatic journal entries on all operational events. FIFO inventory costing with WAC tracking per product per warehouse.',
   },
   {
-    type: ChangelogEntryType.FEATURE,
-    title: 'My Account — profile and session management',
-    description: `Edit your profile, change your password, upload an avatar, view and revoke active sessions, and browse your recent activity. Sales reps see a commission summary for the current month.`,
+    version: '2.0.0',
+    type: 'IMPROVEMENT' as const,
+    title: 'Per-User Column Customization',
+    description: 'Customize and reorder columns on all list pages with drag-and-drop. Settings saved per user and persist across sessions.',
   },
   {
-    type: ChangelogEntryType.IMPROVEMENT,
-    title: 'Per-user column customization on all list pages',
-    description: `Toggle, reorder, and persist column visibility per table. Preferences are saved per user and survive page reloads. Reset to defaults from My Account.`,
+    version: '2.0.0',
+    type: 'IMPROVEMENT' as const,
+    title: 'Search by Name Across All Lists',
+    description: 'All list pages now search by document number AND related entity name — customer name on orders, vendor name on POs and bills, etc.',
   },
   {
-    type: ChangelogEntryType.IMPROVEMENT,
-    title: 'Pending order review workflow',
-    description: `Shopify orders that can't auto-match to an ERP customer land in a review queue. Operators confirm the match, create a new customer, or dismiss the order — with full side-by-side comparison.`,
+    version: '2.0.0',
+    type: 'IMPROVEMENT' as const,
+    title: 'Vendor & Customer Ledger Tabs',
+    description: 'Full transaction ledger with net running balance on vendor and customer detail pages. Export to CSV. Filterable by date and transaction type.',
   },
 ];
 
 async function main() {
-  const existing = await db.changelogEntry.findFirst({
-    where: { version: '2.0.0', deletedAt: null },
-  });
+  const existing = await db.changelogEntry.findFirst();
   if (existing) {
-    console.log('v2.0.0 entries already exist — skipping seed.');
+    console.log('Changelog entries already exist — skipping seed.');
     return;
   }
 
-  const superAdmin = await db.user.findFirst({
+  const superAdmin = await db.user.findFirstOrThrow({
     where: { isSuperAdmin: true, deletedAt: null, enabled: true },
     select: { id: true },
   });
-  if (!superAdmin) {
-    throw new Error('No Super Admin found. Run create-first-super-admin first.');
-  }
 
-  console.log(`Seeding ${ENTRIES.length} changelog entries as user ${superAdmin.id}…`);
+  const publishedAt = new Date();
 
-  for (const entry of ENTRIES) {
-    const row = await db.changelogEntry.create({
+  for (const entry of entries) {
+    await db.changelogEntry.create({
       data: {
-        version: '2.0.0',
-        title: entry.title,
-        description: entry.description,
-        type: entry.type,
-        publishedAt: PUBLISH_DATE,
+        ...entry,
+        publishedAt,
         createdById: superAdmin.id,
       },
-    });
-    await audit(db, {
-      action: AuditAction.CREATE,
-      entityType: 'ChangelogEntry',
-      entityId: row.id,
-      after: { version: row.version, title: row.title },
-      ctx: { userId: superAdmin.id },
     });
     console.log(`  ✓ ${entry.type.padEnd(12)} ${entry.title}`);
   }
 
-  console.log('Done.');
+  console.log(`Done — ${entries.length} entries created.`);
 }
 
 main()
