@@ -1,22 +1,14 @@
 // =============================================================================
 // Pluggable upload interface.
 //
-// Today: local-disk fallback (writes to public/uploads/, returns a
-// relative URL that Next.js serves statically). Use during dev or when
-// Spaces credentials aren't ready.
+// Backend is selected at startup:
+//   SPACES_BUCKET set  → DigitalOcean Spaces (spaces-uploader.ts)
+//   SPACES_BUCKET unset → local disk under public/uploads/ (dev only)
 //
-// Future: Spaces-backed implementation lives in spaces-uploader.ts (not
-// yet built). To swap, change the default export of this file to the
-// Spaces impl once SPACES_ENDPOINT / SPACES_BUCKET / SPACES_KEY /
-// SPACES_SECRET are populated. Consumers (API routes, services) call
-// `uploadImage(...)` — they don't know which backend is wired.
-//
-// IMPORTANT — the local-disk path writes under /public/uploads/ which
-// is served from the Next.js project root. Files persist across builds
-// (Next.js doesn't clear /public on rebuild) but DO NOT persist across
-// deploys to ephemeral hosts (App Platform spins up fresh filesystems).
-// This is acceptable for dev and pilot environments where the user
-// runs Next.js locally. Production must swap to Spaces before launch.
+// Consumers call uploader.uploadImage(...) — they don't know which
+// backend is wired. Local disk writes do NOT survive App Platform
+// deploys (ephemeral filesystem); always set Spaces env vars on staging
+// and production.
 // =============================================================================
 
 export type UploadResult = {
@@ -57,6 +49,10 @@ export function isAcceptedImageMime(mime: string): boolean {
   return (IMAGE_MIME_TYPES as readonly string[]).includes(mime);
 }
 
-// Default export — swap this line when Spaces lands.
+// Auto-select backend: Spaces when SPACES_BUCKET is set, local disk otherwise.
+// Local disk works fine for development without any Spaces credentials.
 import { localDiskUploader } from './local-disk-uploader';
-export const uploader: Uploader = localDiskUploader;
+import { spacesUploader } from './spaces-uploader';
+export const uploader: Uploader = process.env.SPACES_BUCKET
+  ? spacesUploader
+  : localDiskUploader;
