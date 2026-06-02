@@ -423,7 +423,7 @@ export async function postReceipt(
       wasOverReceived,
       affectedPurchaseOrderIds: Array.from(affectedPoIds),
     };
-  });
+  }, { timeout: 30000 });
   // Shopify inventory push — every RECEIVE bumps onHand, so push the new
   // available numbers to applicable stores after the tx commits.
   await markProductsDirtyFromVariants(
@@ -629,7 +629,7 @@ export async function cancelReceipt(
     );
 
     return { ...after, affectedPurchaseOrderIds: Array.from(affectedPoIds) };
-  });
+  }, { timeout: 30000 });
   // Shopify inventory push — RECEIVE_REVERSE drops onHand, so push the new
   // available numbers. Use `before.lines` source: result.lines may already
   // be soft-deleted, but the variantIds are the same.

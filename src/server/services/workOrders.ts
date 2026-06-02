@@ -792,7 +792,7 @@ export async function completeWorkOrder(
         ...wo.components.map((c) => c.componentVariantId),
       ],
     };
-  });
+  }, { timeout: 30000 });
   // Shopify inventory push — BUILD_CONSUME drops component onHand;
   // BUILD_PRODUCE bumps finished-good onHand. Mark both sides dirty.
   await markProductsDirtyFromVariants(db, result.affectedVariantIds);

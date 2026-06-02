@@ -476,7 +476,7 @@ export async function confirmCreditMemo(
   creditMemoId: string,
   ctx?: AuditContext,
 ): Promise<CreditMemoWithLines> {
-  return db.$transaction((tx) => confirmCreditMemoTx(tx, creditMemoId, ctx));
+  return db.$transaction((tx) => confirmCreditMemoTx(tx, creditMemoId, ctx), { timeout: 30000 });
 }
 
 // ---------------------------------------------------------------------------

@@ -722,7 +722,7 @@ export async function closeSalesOrder(
       await postCogsForInvoiceTx(tx, invoice.id, ctx);
 
       return after;
-    });
+    }, { timeout: 30000 });
     // Shopify inventory-push trigger — after the tx commits so we never
     // push numbers for a rolled-back close.
     await markProductsDirtyFromVariants(
