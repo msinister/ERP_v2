@@ -25,6 +25,10 @@ import {
   type AppliedCreditRow,
 } from './_components/applied-credits-card';
 import {
+  DepositApplicationsCard,
+  type DepositApplicationRow,
+} from './_components/deposit-applications-card';
+import {
   Card,
   CardContent,
   CardHeader,
@@ -112,6 +116,19 @@ export default async function BillDetailPage({
           },
           orderBy: { appliedAt: 'desc' },
         },
+        poPaymentApplications: {
+          include: {
+            poPayment: {
+              select: {
+                id: true,
+                number: true,
+                method: true,
+                cashAccount: { select: { code: true, name: true } },
+              },
+            },
+          },
+          orderBy: { appliedAt: 'desc' },
+        },
         tags: {
           include: { tag: { select: { id: true, name: true } } },
           orderBy: { createdAt: 'asc' },
@@ -164,7 +181,9 @@ export default async function BillDetailPage({
   // Mirror that in the UI as a disabled menu item up front (Q2 from
   // discovery).
   const hasAppliedMoney =
-    bill.amountPaid.greaterThan(0) || bill.amountCredited.greaterThan(0);
+    bill.amountPaid.greaterThan(0) ||
+    bill.amountCredited.greaterThan(0) ||
+    bill.amountDeposited.greaterThan(0);
 
   const paymentRows: PaymentRow[] = bill.payments.map((p) => ({
     id: p.id,
@@ -190,6 +209,7 @@ export default async function BillDetailPage({
   const remainingBalance = bill.total
     .minus(bill.amountPaid)
     .minus(bill.amountCredited)
+    .minus(bill.amountDeposited)
     .toString();
 
   const appliedCreditRows: AppliedCreditRow[] = bill.creditApplications.map(
@@ -204,11 +224,26 @@ export default async function BillDetailPage({
     }),
   );
 
+  const depositApplicationRows: DepositApplicationRow[] =
+    bill.poPaymentApplications.map((a) => ({
+      id: a.id,
+      poPaymentId: a.poPayment.id,
+      poPaymentNumber: a.poPayment.number,
+      method: a.poPayment.method ?? null,
+      cashAccountCode: a.poPayment.cashAccount?.code ?? null,
+      cashAccountName: a.poPayment.cashAccount?.name ?? null,
+      amount: a.amount,
+      appliedAt: a.appliedAt,
+      reversedAt: a.reversedAt,
+    }));
+
   // Hide the payments + applied-credits cards entirely for DRAFT bills
   // (no AP entry yet); show them for CONFIRMED (with the action button)
   // and for CANCELLED (read-only) when historical rows exist.
   const showPaymentsCard =
     bill.status !== 'DRAFT' || paymentRows.length > 0;
+  const showDepositsCard =
+    bill.status !== 'DRAFT' || depositApplicationRows.length > 0;
   const showAppliedCreditsCard =
     bill.status !== 'DRAFT' || appliedCreditRows.length > 0;
 
@@ -242,6 +277,12 @@ export default async function BillDetailPage({
               remainingBalance={remainingBalance}
               cashAccounts={cashAccounts}
               payments={paymentRows}
+            />
+          ) : null}
+
+          {showDepositsCard ? (
+            <DepositApplicationsCard
+              applications={depositApplicationRows}
             />
           ) : null}
 
@@ -292,6 +333,7 @@ export default async function BillDetailPage({
             total={bill.total}
             amountPaid={bill.amountPaid}
             amountCredited={bill.amountCredited}
+            amountDeposited={bill.amountDeposited}
           />
         </div>
       </div>

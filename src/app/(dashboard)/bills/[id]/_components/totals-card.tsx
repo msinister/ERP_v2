@@ -15,6 +15,7 @@ export function BillTotalsCard({
   total,
   amountPaid,
   amountCredited,
+  amountDeposited,
 }: {
   status: string;
   subtotal: Prisma.Decimal;
@@ -23,8 +24,9 @@ export function BillTotalsCard({
   total: Prisma.Decimal;
   amountPaid: Prisma.Decimal;
   amountCredited: Prisma.Decimal;
+  amountDeposited: Prisma.Decimal;
 }) {
-  const balance = total.minus(amountPaid).minus(amountCredited);
+  const balance = total.minus(amountPaid).minus(amountCredited).minus(amountDeposited);
   const isConfirmed = status === 'CONFIRMED';
 
   return (
@@ -63,6 +65,13 @@ export function BillTotalsCard({
                 <Row
                   label="Credited"
                   value={`−${formatCurrency(amountCredited)}`}
+                  tone="muted"
+                />
+              ) : null}
+              {amountDeposited.greaterThan(0) ? (
+                <Row
+                  label="PO deposits"
+                  value={`−${formatCurrency(amountDeposited)}`}
                   tone="muted"
                 />
               ) : null}
