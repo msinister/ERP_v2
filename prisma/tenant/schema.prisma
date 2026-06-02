@@ -923,11 +923,13 @@ model User {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  warehouse Warehouse? @relation(fields: [warehouseId], references: [id])
-  salesRep  SalesRep?  @relation(fields: [salesRepId], references: [id])
-  role      Role?      @relation(fields: [roleId], references: [id])
-  sessions  Session[]
-  accounts  Account[]
+  warehouse        Warehouse?          @relation(fields: [warehouseId], references: [id])
+  salesRep         SalesRep?           @relation(fields: [salesRepId], references: [id])
+  role             Role?               @relation(fields: [roleId], references: [id])
+  sessions         Session[]
+  accounts         Account[]
+  changelogEntries ChangelogEntry[]
+  changelogReads   UserChangelogRead[]
 
   @@index([enabled, deletedAt])
   @@index([warehouseId])
@@ -3152,4 +3154,48 @@ model PendingOrderReview {
   @@index([shopifyStoreId, shopifyOrderId])
   @@index([status, createdAt])
   @@index([matchedCustomerId])
+}
+
+// =============================================================================
+// Changelog / version tracking
+// =============================================================================
+
+enum ChangelogEntryType {
+  FEATURE
+  IMPROVEMENT
+  BUGFIX
+  SECURITY
+}
+
+model ChangelogEntry {
+  id          String             @id @default(cuid())
+  version     String             // semver string, e.g. "2.0.1"
+  title       String
+  description String             // Markdown; rendered server-side on display
+  type        ChangelogEntryType
+  // null = draft (not visible to users); past/present = published
+  publishedAt DateTime?
+  createdById String
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  deletedAt   DateTime?
+
+  createdBy User               @relation(fields: [createdById], references: [id])
+  readBy    UserChangelogRead[]
+
+  @@index([publishedAt, createdAt])
+  @@index([deletedAt])
+  @@index([createdById])
+}
+
+model UserChangelogRead {
+  userId           String
+  changelogEntryId String
+  readAt           DateTime @default(now())
+
+  user  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entry ChangelogEntry @relation(fields: [changelogEntryId], references: [id], onDelete: Cascade)
+
+  @@id([userId, changelogEntryId])
+  @@index([userId])
 }

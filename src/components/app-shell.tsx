@@ -18,6 +18,7 @@ import type { AuthedUser } from '@/lib/auth/getCurrentUser';
 import type { PermissionMap } from '@/lib/permissions/constants';
 import { cn } from '@/lib/utils';
 import { usePathname } from 'next/navigation';
+import { APP_VERSION } from '@/lib/version';
 
 function getInitials(name: string, email: string): string {
   const trimmed = name?.trim();
@@ -82,9 +83,12 @@ export function AppShell({
       {/* Desktop sidebar — fixed 256px column on md+ */}
       <aside className="hidden w-64 shrink-0 border-r border-sidebar-border bg-sidebar md:flex md:flex-col">
         <div className="flex h-14 items-center border-b border-sidebar-border px-4">
-          <span className="text-sm font-semibold tracking-tight text-sidebar-foreground">
-            ERP
-          </span>
+          <div className="flex flex-col leading-tight">
+            <span className="text-sm font-semibold tracking-tight text-sidebar-foreground">
+              ERP
+            </span>
+            <span className="text-[10px] text-sidebar-foreground/40">v{APP_VERSION}</span>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
           <SidebarNav

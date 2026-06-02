@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
+  Sparkles,
   Users,
   ShoppingCart,
   ClipboardList,
@@ -39,10 +40,13 @@ type NavItem = {
   // `${module}.*` key — view OR create/edit/etc.). Omit (Dashboard) =
   // always visible. Super Admin sees every item regardless.
   module?: PermissionModuleId;
+  // Render a small dot instead of a numbered count badge.
+  dotBadge?: boolean;
 };
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { label: "What's New", href: '/whats-new', icon: Sparkles, dotBadge: true },
   { label: 'Customers', href: '/customers', icon: Users, module: 'customers' },
   {
     label: 'Sales Orders',
@@ -180,12 +184,19 @@ export function SidebarNav({
             <Icon className="size-4 shrink-0" />
             <span className="flex-1 truncate">{item.label}</span>
             {badge > 0 ? (
-              <span
-                aria-label={`${badge} pending`}
-                className="ml-auto inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-destructive px-1.5 text-[10px] font-semibold leading-none text-destructive-foreground tabular-nums"
-              >
-                {badge > 99 ? '99+' : badge}
-              </span>
+              item.dotBadge ? (
+                <span
+                  className="ml-auto size-2 shrink-0 rounded-full bg-destructive"
+                  aria-label="New updates"
+                />
+              ) : (
+                <span
+                  aria-label={`${badge} pending`}
+                  className="ml-auto inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-destructive px-1.5 text-[10px] font-semibold leading-none text-destructive-foreground tabular-nums"
+                >
+                  {badge > 99 ? '99+' : badge}
+                </span>
+              )
             ) : null}
           </Link>
         );

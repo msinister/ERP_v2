@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   BadgeDollarSign,
   ShoppingBag,
+  Newspaper,
   type LucideIcon,
 } from 'lucide-react';
 import { requirePageAnyPermissionInModule } from '@/lib/permissions/requirePagePermission';
@@ -90,6 +91,12 @@ const TILES: AdminTile[] = [
     description:
       'Store URL, access token, webhook secret. Manual full sync + register webhooks.',
     icon: ShoppingBag,
+  },
+  {
+    href: '/admin/changelog',
+    title: 'Changelog',
+    description: "Manage What's New entries — publish features, fixes, and security updates.",
+    icon: Newspaper,
   },
 ];
 

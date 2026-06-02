@@ -1,15 +1,18 @@
 import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
+import { marked } from 'marked';
 import { db } from '@/lib/db';
 import { getActor } from '@/lib/permissions/getActor';
 import { hasPermission } from '@/lib/permissions/actor';
 import { auth } from '@/lib/auth/auth';
+import { listPublishedEntries } from '@/server/services/changelog';
 import { ProfileCard } from './_components/profile-card';
 import { ChangePasswordCard } from './_components/change-password-card';
 import { SessionsCard } from './_components/sessions-card';
 import { TablePreferencesCard } from './_components/table-preferences-card';
 import { ActivityCard } from './_components/activity-card';
 import { CommissionCard } from './_components/commission-card';
+import { WhatsNewCard } from './_components/whats-new-card';
 import { AuditAction } from '@/generated/tenant';
 
 export const revalidate = 0;
@@ -28,7 +31,7 @@ export default async function AccountPage() {
   const showCommissions =
     !!actor.salesRepId && hasPermission(actor, 'commissions.view_own');
 
-  const [profile, sessions, recentActivity, prefCount, commissionData] = await Promise.all([
+  const [profile, sessions, recentActivity, prefCount, commissionData, changelogEntries, changelogReads] = await Promise.all([
     db.user.findUniqueOrThrow({
       where: { id: actor.id },
       select: {
@@ -81,6 +84,11 @@ export default async function AccountPage() {
           orderBy: { accruedAt: 'desc' },
         })
       : Promise.resolve(null),
+    listPublishedEntries(db),
+    db.userChangelogRead.findMany({
+      where: { userId: actor.id },
+      select: { changelogEntryId: true },
+    }),
   ]);
 
   // Serialize Decimal fields for client components (JSON can't carry Prisma Decimal)
@@ -140,6 +148,17 @@ export default async function AccountPage() {
     };
   }
 
+  const changelogReadSet = new Set(changelogReads.map((r) => r.changelogEntryId));
+  const serializedChangelog = changelogEntries.map((e) => ({
+    id: e.id,
+    version: e.version,
+    title: e.title,
+    descriptionHtml: marked.parse(e.description) as string,
+    type: e.type,
+    publishedAt: e.publishedAt!.toISOString(),
+    isRead: changelogReadSet.has(e.id),
+  }));
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
@@ -148,6 +167,8 @@ export default async function AccountPage() {
           Manage your profile, security, and preferences.
         </p>
       </div>
+
+      <WhatsNewCard entries={serializedChangelog} />
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Left column */}

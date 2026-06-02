@@ -5,6 +5,7 @@ import { getCurrentUser } from '@/lib/auth/getCurrentUser';
 import { loadActor } from '@/lib/permissions/actor';
 import { AppShell } from '@/components/app-shell';
 import { pendingReviewCount } from '@/server/services/pendingOrderReviews';
+import { getUnreadCount } from '@/server/services/changelog';
 
 // Auth-gated layout for the authenticated dashboard. Middleware
 // short-circuits unauthenticated requests at the edge via cookie
@@ -32,8 +33,14 @@ export default async function DashboardLayout({
   // dashboard sees the same number without each having to query. Pending
   // review count drives the badge next to "Pending Orders". Cheap
   // count() — fine to run on every navigation; no caching needed.
-  const pendingOrders = await pendingReviewCount(db);
-  const badgeCounts = { '/admin/pending-orders': pendingOrders };
+  const [pendingOrders, changelogUnread] = await Promise.all([
+    pendingReviewCount(db),
+    getUnreadCount(db, user.id),
+  ]);
+  const badgeCounts = {
+    '/admin/pending-orders': pendingOrders,
+    '/whats-new': changelogUnread,
+  };
 
   return (
     <AppShell
