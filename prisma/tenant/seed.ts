@@ -20,7 +20,24 @@ const DEFAULT_PAYMENT_TERMS: ReadonlyArray<{ code: string; label: string; netDay
   { code: 'BILLNET30', label: 'Bill later (Net 30)', netDays: 30 },
 ];
 
+// GL accounts that must exist on every tenant instance. Upsert so the seed
+// is safe to re-run — code is the stable unique identifier.
+const GL_ACCOUNTS: ReadonlyArray<{ code: string; name: string; type: string }> = [
+  { code: '1410', name: 'Vendor Credits',                 type: 'ASSET' },
+  { code: '1510', name: 'Vendor Deposits',                type: 'ASSET' },
+  { code: '5150', name: 'Purchase Returns & Allowances',  type: 'EXPENSE' },
+];
+
 async function main() {
+  for (const acct of GL_ACCOUNTS) {
+    await db.glAccount.upsert({
+      where: { code: acct.code },
+      create: { code: acct.code, name: acct.name, type: acct.type as 'ASSET' | 'EXPENSE', active: true },
+      update: { name: acct.name, type: acct.type as 'ASSET' | 'EXPENSE', active: true, deletedAt: null },
+    });
+    console.log(`  GL ${acct.code} — ${acct.name}`);
+  }
+
   const warehouse = await db.warehouse.upsert({
     where: { code: 'WH-MAIN' },
     create: { code: 'WH-MAIN', name: 'Main Warehouse' },
