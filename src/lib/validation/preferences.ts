@@ -18,8 +18,17 @@ export const tableViewPrefSchema = z.object({
 });
 export type TableViewPref = z.infer<typeof tableViewPrefSchema>;
 
+// Dashboard widget layout: display order + soft-hidden set. The registry
+// reconciles unknown IDs at read time, so saved orders survive widget renames.
+export const dashboardWidgetsPrefSchema = z.object({
+  order: z.array(z.string()).optional(),
+  hidden: z.array(z.string()).optional(),
+});
+export type DashboardWidgetsPref = z.infer<typeof dashboardWidgetsPrefSchema>;
+
 // Registry of known preference keys → value schema.
 export const PREFERENCE_SCHEMAS = {
+  'dashboard.widgets': dashboardWidgetsPrefSchema,
   'table.products': tableViewPrefSchema,
   'table.salesOrders': tableViewPrefSchema,
   'table.purchaseOrders': tableViewPrefSchema,
