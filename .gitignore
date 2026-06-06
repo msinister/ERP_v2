@@ -34,5 +34,11 @@ public/uploads/*
 # Local dev tunnel + scratch tooling — not part of the app.
 cloudflared.exe
 start-tunnel.bat
-check-bundle.mjs
 SHOPIFY_JUNCTION_PROMPT.md
+
+# Scratch / one-off debug & setup scripts
+/capture-token.js
+/check-bundle.mjs
+*.scratch.js
+*.scratch.mjs
+/scripts/scratch/
