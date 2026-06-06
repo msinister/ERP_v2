@@ -280,6 +280,23 @@ export const createDocumentInputSchema = z.discriminatedUnion('kind', [
   fileDocInput.extend({ kind: z.literal('OTHER') }),
 ]);
 
+// Partial update for an existing document. All fields are optional; only
+// supplied fields are applied. Kind cannot be changed after creation.
+//
+// - cleartextValue: only valid for sensitive kinds (EIN/SSN/DRIVERS_LICENSE);
+//   the service re-encrypts it. Passing this for a file kind is an error.
+// - storageKey/fileName/contentType: only valid for file kinds; used by the
+//   replace-file endpoint. Passing these for a sensitive kind is an error.
+// - expiresOn + notes: valid for any kind.
+export const updateDocumentInputSchema = z.object({
+  expiresOn: z.coerce.date().nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  cleartextValue: z.string().min(1).max(512).optional(),
+  storageKey: z.string().min(1).max(512).optional(),
+  fileName: z.string().min(1).max(512).optional(),
+  contentType: z.string().min(1).max(255).optional(),
+});
+
 // =============================================================================
 // Activity log (manual entries — AUTO entries are written by services)
 // =============================================================================
@@ -332,6 +349,7 @@ export type CreatePaymentMethodInput = z.infer<typeof createPaymentMethodInputSc
 export type UpdatePaymentMethodInput = z.infer<typeof updatePaymentMethodInputSchema>;
 
 export type CreateDocumentInput = z.infer<typeof createDocumentInputSchema>;
+export type UpdateDocumentInput = z.infer<typeof updateDocumentInputSchema>;
 
 export type CreateActivityInput = z.infer<typeof createActivityInputSchema>;
 

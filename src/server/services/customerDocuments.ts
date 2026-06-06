@@ -2,6 +2,7 @@ import {
   AuditAction,
   CustomerActivityKind,
   CustomerDocumentKind,
+  Prisma,
 } from '@/generated/tenant';
 import type {
   CustomerDocument,
@@ -11,7 +12,9 @@ import { audit, type AuditContext } from '@/lib/audit/audit';
 import { decrypt, encrypt } from '@/lib/crypto';
 import {
   createDocumentInputSchema,
+  updateDocumentInputSchema,
   type CreateDocumentInput,
+  type UpdateDocumentInput,
 } from '@/lib/validation/customers';
 
 // =============================================================================
@@ -127,6 +130,87 @@ export async function createDocument(
       },
     });
     return created;
+  });
+}
+
+/**
+ * In-place update of a document record. Kind cannot change.
+ *
+ * - Sensitive kinds: supply `cleartextValue` to re-encrypt the stored value.
+ *   The new ciphertext replaces the old; the old cleartext is never logged.
+ * - File kinds: supply `storageKey/fileName/contentType` to swap the stored
+ *   file reference (used by the replace-file endpoint after uploading to Spaces).
+ * - Any kind: `expiresOn` and `notes` can be updated independently.
+ *
+ * SECURITY: same rules as createDocument — cleartext never appears in audit rows.
+ */
+export async function updateDocument(
+  db: PrismaClient,
+  id: string,
+  input: UpdateDocumentInput,
+  ctx?: AuditContext,
+): Promise<CustomerDocument> {
+  const data = updateDocumentInputSchema.parse(input);
+
+  const before = await db.customerDocument.findFirst({
+    where: { id, deletedAt: null },
+  });
+  if (!before) throw new Error(`CustomerDocument not found: ${id}`);
+
+  // Enforce kind-compatibility of the supplied fields.
+  if (data.cleartextValue !== undefined && !isSensitiveKind(before.kind)) {
+    throw new Error(
+      `cleartextValue is only valid for sensitive document kinds (EIN/SSN/DRIVERS_LICENSE), got ${before.kind}`,
+    );
+  }
+  if (
+    (data.storageKey !== undefined ||
+      data.fileName !== undefined ||
+      data.contentType !== undefined) &&
+    isSensitiveKind(before.kind)
+  ) {
+    throw new Error(
+      `storageKey/fileName/contentType cannot be set on sensitive document kind ${before.kind}`,
+    );
+  }
+
+  // Encrypt outside the transaction for the same reasons as createDocument.
+  let newEncryptedValue: string | undefined;
+  let newEncryptedValueIv: string | undefined;
+  if (data.cleartextValue !== undefined) {
+    const enc = encrypt(data.cleartextValue);
+    newEncryptedValue = enc.ciphertext;
+    newEncryptedValueIv = enc.iv;
+  }
+
+  return db.$transaction(async (tx) => {
+    const updateData: Prisma.CustomerDocumentUpdateInput = {};
+
+    // Apply only the fields that were explicitly supplied.
+    if ('expiresOn' in data) updateData.expiresOn = data.expiresOn ?? null;
+    if ('notes' in data) updateData.notes = data.notes ?? null;
+    if (newEncryptedValue !== undefined) {
+      updateData.encryptedValue = newEncryptedValue;
+      updateData.encryptedValueIv = newEncryptedValueIv!;
+    }
+    if (data.storageKey !== undefined) updateData.storageKey = data.storageKey;
+    if (data.fileName !== undefined) updateData.fileName = data.fileName;
+    if (data.contentType !== undefined) updateData.contentType = data.contentType;
+
+    const after = await tx.customerDocument.update({
+      where: { id },
+      data: updateData,
+    });
+
+    await audit(tx, {
+      action: AuditAction.UPDATE,
+      entityType: 'CustomerDocument',
+      entityId: id,
+      before: redactForAudit(before),
+      after: redactForAudit(after),
+      ctx,
+    });
+    return after;
   });
 }
 
