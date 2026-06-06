@@ -1,60 +1,99 @@
+import Link from 'next/link';
 import { db } from '@/lib/db';
 import { Badge } from '@/components/ui/badge';
-import { listActivity } from '@/server/services/customerActivities';
+import { getCustomerTimeline } from '@/server/services/customerTimeline';
 import { TabShell, TabEmpty } from './tab-shell';
+import { AddNoteForm } from '../_components/add-note-form';
 
-// Each entry renders as a timeline row: timestamp + kind badge +
-// summary + optional structured detail (for AUTO entries that record
-// a field change with { field, from, to }).
+// Dashboard always reflects live data — revalidate=0 is set on the parent
+// page; the tab inherits it. No separate cache directive needed here.
 
-export async function ActivityTab({ customerId }: { customerId: string }) {
-  const entries = await listActivity(db, customerId, { take: 100 });
+const PAGE_SIZE = 100;
 
-  if (entries.length === 0) {
-    return (
-      <TabShell>
-        <TabEmpty message="No activity yet." />
-      </TabShell>
-    );
-  }
+export async function ActivityTab({
+  customerId,
+  searchParams,
+}: {
+  customerId: string;
+  searchParams?: Record<string, string | string[] | undefined>;
+}) {
+  const skip = Math.max(0, Number(searchParams?.activitySkip ?? 0) || 0);
+  const { entries, hasMore } = await getCustomerTimeline(db, customerId, {
+    skip,
+    take: PAGE_SIZE,
+  });
 
   return (
     <TabShell>
-      <ol className="space-y-3">
-        {entries.map((e) => {
-          const detail = parseFieldChange(e.detailJson);
-          return (
+      {/* Manual note entry — renders as a client component */}
+      <AddNoteForm customerId={customerId} />
+
+      {entries.length === 0 && skip === 0 ? (
+        <TabEmpty message="No activity yet." />
+      ) : (
+        <ol className="space-y-2">
+          {entries.map((e) => (
             <li
               key={e.id}
               className="flex gap-3 rounded-lg border border-border p-3 text-sm"
             >
+              {/* Timestamp column */}
               <div className="w-32 shrink-0 text-xs text-muted-foreground tabular-nums">
-                {formatTimestamp(e.createdAt)}
+                {formatTimestamp(e.ts)}
               </div>
-              <div className="flex-1 space-y-1">
-                <div className="flex items-center gap-2">
-                  <Badge
-                    variant={e.kind === 'AUTO' ? 'outline' : 'secondary'}
-                    className="text-[10px] uppercase"
-                  >
-                    {e.kind}
-                  </Badge>
-                  <span className="font-medium">
-                    {humanizeSummary(e.summary)}
-                  </span>
-                </div>
-                {detail ? (
-                  <div className="text-xs text-muted-foreground">
-                    <span className="font-mono">{detail.field}</span>:{' '}
-                    <span className="line-through">{stringify(detail.from)}</span>{' '}
-                    → <span className="text-foreground">{stringify(detail.to)}</span>
+
+              {/* Content column */}
+              <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
+                <div className="min-w-0 space-y-0.5">
+                  {/* Actor badge */}
+                  <div className="flex items-center gap-1.5">
+                    {e.actorName ? (
+                      <span className="text-xs font-medium">{e.actorName}</span>
+                    ) : (
+                      <Badge variant="outline" className="text-[10px] uppercase">
+                        AUTO
+                      </Badge>
+                    )}
                   </div>
-                ) : null}
+                  {/* Label — optionally linked */}
+                  {e.href ? (
+                    <Link
+                      href={e.href}
+                      className="block truncate font-medium hover:underline"
+                    >
+                      {e.label}
+                    </Link>
+                  ) : (
+                    <p className="truncate font-medium">{e.label}</p>
+                  )}
+                </div>
               </div>
             </li>
-          );
-        })}
-      </ol>
+          ))}
+        </ol>
+      )}
+
+      {/* Pagination */}
+      <div className="flex items-center justify-between pt-1">
+        {skip > 0 ? (
+          <Link
+            href={`?activitySkip=${Math.max(0, skip - PAGE_SIZE)}`}
+            className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+          >
+            ← Newer
+          </Link>
+        ) : (
+          <span />
+        )}
+        {hasMore ? (
+          <Link
+            href={`?activitySkip=${skip + PAGE_SIZE}`}
+            className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+          >
+            Show more →
+          </Link>
+        ) : null}
+      </div>
     </TabShell>
   );
 }
@@ -67,30 +106,4 @@ function formatTimestamp(d: Date): string {
     hour: 'numeric',
     minute: '2-digit',
   });
-}
-
-function humanizeSummary(s: string): string {
-  // service writes things like 'creditLimit_changed' / 'customer_created'
-  if (s === 'customer_created') return 'Customer created';
-  if (s.endsWith('_changed')) {
-    const field = s.slice(0, -'_changed'.length);
-    return `${field} changed`;
-  }
-  return s;
-}
-
-type FieldChange = { field: string; from: unknown; to: unknown };
-
-function parseFieldChange(json: unknown): FieldChange | null {
-  if (!json || typeof json !== 'object') return null;
-  const obj = json as Record<string, unknown>;
-  if (typeof obj.field !== 'string') return null;
-  return { field: obj.field, from: obj.from, to: obj.to };
-}
-
-function stringify(v: unknown): string {
-  if (v == null) return '∅';
-  if (typeof v === 'boolean') return v ? 'true' : 'false';
-  if (typeof v === 'string' || typeof v === 'number') return String(v);
-  return JSON.stringify(v);
 }

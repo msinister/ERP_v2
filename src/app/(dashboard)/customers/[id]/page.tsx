@@ -93,7 +93,7 @@ export default async function CustomerDetailPage({
         </TabsContent>
         <TabsContent value="activity">
           <Suspense fallback={<TabSkeleton rows={5} />}>
-            <ActivityTab customerId={customer.id} />
+            <ActivityTab customerId={customer.id} searchParams={sp} />
           </Suspense>
         </TabsContent>
         <TabsContent value="ar">
